@@ -188,3 +188,6 @@ venv/
 
 #DS Store files
 .DS_Store
+
+#FOLDERS
+data/

@@ -1,4 +1,6 @@
 import requests
+import json
+from datetime import date
 
 def get_sleeper_user(username):
     url = f"https://api.sleeper.app/v1/user/{username}"
@@ -20,6 +22,19 @@ def get_sleeper_roster(league_id):
     roster_json = r.json()
     return roster_json
 
+def get_players():
+    r = requests.get('https://api.sleeper.app/v1/players/nfl')
+    roster_json = r.json()
+
+    data = {
+    "updated_at": str(date.today()),
+    "players": roster_json
+    }
+    
+    with open('data/players.json', 'w') as f:
+        json.dump(data, f, indent=4)
+    return data
+
 
 if __name__ == "__main__":
     user = get_sleeper_user("spectraltoast1")
@@ -32,6 +47,4 @@ if __name__ == "__main__":
     rosters = get_sleeper_roster(league_id)
 
     # test block
-    print(user)
-    print(leagues)
-    print(rosters)
+    get_players()
