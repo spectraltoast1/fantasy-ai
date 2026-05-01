@@ -37,6 +37,23 @@ def get_players():
     return data
 
 
+def get_league(league_id):
+    url = f"https://api.sleeper.app/v1/league/{league_id}"
+    r = requests.get(url)
+    return r.json()
+
+
+def get_nfl_state():
+    r = requests.get("https://api.sleeper.app/v1/state/nfl")
+    return r.json()
+
+
+def get_matchups(league_id, week):
+    url = f"https://api.sleeper.app/v1/league/{league_id}/matchups/{week}"
+    r = requests.get(url)
+    return r.json()
+
+
 if __name__ == "__main__":
     user = get_sleeper_user(SLEEPER_USERNAME)
     user_id = user["user_id"]
