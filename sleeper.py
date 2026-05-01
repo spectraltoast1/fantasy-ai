@@ -1,6 +1,7 @@
 import requests
 import json
 from datetime import date
+from config import SLEEPER_USERNAME
 
 def get_sleeper_user(username):
     url = f"https://api.sleeper.app/v1/user/{username}"
@@ -37,7 +38,7 @@ def get_players():
 
 
 if __name__ == "__main__":
-    user = get_sleeper_user("spectraltoast1")
+    user = get_sleeper_user(SLEEPER_USERNAME)
     user_id = user["user_id"]
     
     leagues = get_sleeper_league(user_id)
@@ -47,4 +48,4 @@ if __name__ == "__main__":
     rosters = get_sleeper_roster(league_id)
 
     # test block
-    get_players()
+    #get_players()

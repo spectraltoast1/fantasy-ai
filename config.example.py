@@ -1,7 +1,7 @@
 # Sleeper
-sleeper_username = "your_sleeper_username"
+SLEEPER_USERNAME = "your_sleeper_username"
 
 # Anthropic
-anthropic_api_key = "your-key-here"
+ANTHROPIC_API_KEY = "your-key-here"
 
 # League IDs
