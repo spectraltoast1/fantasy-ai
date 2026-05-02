@@ -189,5 +189,6 @@ venv/
 #DS Store files
 .DS_Store
 
-#FOLDERS
+#FOLDERS & Files to ignore
 data/
+data_sources.txt
