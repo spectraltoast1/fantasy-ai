@@ -11,11 +11,19 @@ def get_sleeper_user(username):
 
 
 def get_sleeper_league(user_id):
+    try:
+        from config import EXCLUDED_LEAGUES
+    except ImportError:
+        EXCLUDED_LEAGUES = set()
+
     state = get_nfl_state()
     season = state.get("league_season") or state.get("season")
     url = f"https://api.sleeper.app/v1/user/{user_id}/leagues/nfl/{season}"
     r = requests.get(url)
-    return r.json()
+    leagues = r.json()
+    if EXCLUDED_LEAGUES:
+        leagues = [l for l in leagues if l["league_id"] not in EXCLUDED_LEAGUES]
+    return leagues
 
 
 def get_sleeper_roster(league_id):
