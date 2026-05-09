@@ -191,4 +191,5 @@ venv/
 
 #FOLDERS & Files to ignore
 data/
-data_sources.txt
+application/data_sources.txt
+transcripts/temp_work

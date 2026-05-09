@@ -1,0 +1,273 @@
+# Data Sources Reference
+
+Last reviewed: 2026-05-08
+Pipeline role: Inputs to the Python orchestrator that fetches data and assembles context for the advisor LLM.
+
+================================================================
+## STATE & CURRENT-WEEK INFO
+================================================================
+
+### LeagueLogs API
+Base URL: https://developer.leaguelogs.com
+Auth: None
+Rate limit: ~2,000 requests per 5 minutes per IP
+CORS: Enabled (browser clients can call directly)
+Attribution required: "Powered by LeagueLogs API" must be visible
+
+Endpoints:
+  /v1/nfl-state       — current season, week, seasonType (pre/regular/post/off)
+                        Refresh: every 10 minutes
+  /v1/market          — list of available league profiles (5 fixed)
+  /v1/market/{key}    — full market snapshot for one profile (~600 players + ~80 picks on dynasty)
+                        Refresh: every 6 hours
+                        Profiles: redraft-1qb-12t-ppr1, redraft-1qb-12t-ppr0_5,
+                                  redraft-2qb-12t-ppr1, dynasty-1qb-12t-ppr1, dynasty-2qb-12t-ppr1
+  /v1/players         — every NFL skill-position player metadata
+                        Refresh: every 24 hours
+  /v1/players/{id}/values  — one player's market value across every profile
+  /v1/players/{id}/blurb   — 1-3 sentence LLM-generated status note (404 if no recent material)
+                              Signals: injury | transaction | depth-chart | returning | inactive
+
+Coverage scope: Skill positions ONLY (QB/RB/WR/TE). NO K, NO DEF.
+Pick rows: dynasty profiles include rookie pick values with time-discounting
+           (2027 × 0.85, 2028 × 0.70, 2029 × 0.55)
+Join key: sleeperPlayerId (matches Sleeper API)
+
+Methodology (from creator's reddit post r/fantasyfootballcoding):
+  - Values anchored on CONSENSUS ADP across major scoring formats
+    (PPR, Half-PPR, Standard, 2QB) and dynasty equivalents
+  - Multi-source aggregation, not single-opinion — validated against other
+    popular rankings with "really high correlation"
+  - Normalized to a 0–100 curve consistent across snapshots
+    (90+ = elite, 20s = bench depth)
+  - Deep-roster fallback (past ADP coverage, ~150+ overall): projection-derived
+    rather than consensus-derived; lower reliability for waiver-tier decisions
+  - Rookie picks anchored on real rookie ADP; future picks averaged within
+    early/mid/late buckets and time-discounted
+
+⚠️ Known gap: trend fields (rising/falling) are stubbed at zero in current API.
+   To capture market value trend, snapshot values locally over time and derive
+   the diff Python-side. The 6-hour refresh cadence makes this trivial to
+   implement as part of the fetcher.
+
+### Sleeper API
+Base URL: api.sleeper.app
+Auth: None
+Use cases:
+  - League settings (scoring, roster positions, team count)
+  - Full rosters with player metadata (name, position, NFL team, injury status, depth chart order)
+  - Weekly matchups and opponent rosters
+  - League standings (wins, losses, points scored)
+  - Waiver wire / free agent pool
+  - Weekly projections via /projections/nfl/{season}/{week}
+Join key: player_id (matches LeagueLogs sleeperPlayerId)
+
+================================================================
+## PRODUCTION DATA & ADVANCED METRICS
+================================================================
+
+### nfl_data_py (nflverse Python wrapper)
+Auth: None (open-source data via GitHub releases / Parquet)
+Use cases:
+  - Weekly snap counts (raw and as percentage of team snaps)
+  - Target share (as percentage of team targets)
+  - Route participation rate
+  - Rush attempt share
+  - 4-week rolling averages and season averages for all participation metrics
+  - Player ID / roster mapping file for cross-source joins
+  - Play-by-play (nflfastR via nfl.import_pbp_data)
+  - Next Gen Stats (separation, time to throw, completion % above expected, intended air yards)
+
+Limitations:
+  - Publishes data ~1-2 months after season ends; falls back to prior year until available
+  - No coverage type tagging (man/zone) — that data is PFF-paywalled
+  - No reliable route concept charting
+
+Join key: gsis_id (use import_ids() to map to other sources)
+
+================================================================
+## VEGAS & BETTING MARKETS
+================================================================
+
+### The Odds API
+Base URL: https://api.the-odds-api.com/v4/sports/americanfootball_nfl/
+Auth: x-api-key header
+Budget: 500 credits/month free tier
+Refresh strategy: once per week during season; off-season skipped
+
+Free tier (2 credits per call, 1 region × spreads + totals):
+  - Game lines (spread, moneyline)
+  - Game over/unders (total)
+  - Implied team totals derived from spread + over/under
+
+Paid tier (on-demand only, monitor budget):
+  - Player props: receiving yards, rushing yards, touchdown odds
+
+================================================================
+## PROJECTIONS & NEWS
+================================================================
+
+### FantasyPros API
+Base URL: https://api.fantasypros.com/public/v2/json/nfl/
+Auth: x-api-key header
+Use cases:
+  - NFL news with fantasy impact notes (cached at data/news.json, pruned at 14 days)
+  - Weekly projected fantasy points by position (QB, RB, WR, TE, K, DST)
+  - Projections include PPR, half-PPR, and standard scoring
+  - Rec yards, TDs, rush stats
+Cache scope: per season + week
+Join key: fpid maps to fantasypros_id in nfl_data_py import_ids()
+
+================================================================
+## OFFICIAL NFL DATA
+================================================================
+
+### NFL Next Gen Stats / NFL official
+Use cases:
+  - Practice participation reports (Wednesday, Thursday, Friday)
+  - Official injury designations (Questionable, Doubtful, Out)
+  - Game-day inactives
+
+Note: distinct from Sleeper's injury_status and LeagueLogs blurbs.
+      Practice participation is a leading indicator before formal designation.
+
+================================================================
+## WEATHER
+================================================================
+
+### Stadium location lookup (extracted from datawithbliss)
+Source: github.com/ThompsonJamesBliss/WeatherData (one-time extraction)
+Cached locally as data/stadiums.json
+Use cases:
+  - Stadium lat/lng (seeds NWS forecast lookups)
+  - Roof type (Outdoor / Indoor / Retractable) — short-circuits forecast for indoor games
+  - Timezone (for game-time forecast alignment)
+Schema:
+  {
+    "team_abbr": {
+      "lat": float,
+      "lng": float,
+      "roof_type": "outdoor" | "indoor" | "retractable",
+      "timezone": "America/New_York"
+    }
+  }
+
+Important: datawithbliss's stadium list reflects historical venues. Maintain a static
+override layer (current_stadiums.json) for teams that have moved (Rams → SoFi,
+Raiders → Allegiant, Chargers → SoFi, etc.). The override merges over the extracted
+data. Refresh once per season or when teams relocate.
+
+### Forecast: NWS API (api.weather.gov)
+Auth: None (US-only, no signup)
+Use cases:
+  - Game-day temperature, wind speed, precipitation forecast
+  - Lookup keyed on stadium lat/lng (from stadium location lookup above)
+  - Skip lookup entirely when roof_type ≠ "outdoor"
+
+Recommended fetch flow:
+  1. Get NFL state (current week) from LeagueLogs
+  2. Get schedule from nfl_data_py for that week
+  3. For each outdoor game, fetch NWS forecast 24-72 hours before kickoff
+  4. Cache forecast at 6-hour TTL
+
+Historical weather records are NOT cached or used. Past weather doesn't inform forward
+advisor decisions; only forecasts do.
+
+================================================================
+## STATIC / STRATEGY LAYER (manual / curated)
+================================================================
+
+### Strategy docs (output of Pass 1-3 pipeline)
+  - docs/strategy_redraft.md         (synthesized + tagged from Flock/FSE redraft transcripts)
+  - docs/strategy_dynasty.md         (synthesized + tagged from Flock/FSE dynasty transcripts)
+  - docs/strategy_salary_cap.md      (separate synthesis if/when needed)
+
+### Coaching tendency notes
+  - Manually maintained
+  - Format: per-coach play-call tendencies, situational patterns
+  - Updated mid-season as coordinator changes occur
+
+### Stadium configuration overrides
+  - Needed because datawithbliss historical data may reflect prior venues
+  - Manually maintained as current_stadiums.json (merges over extracted stadium data)
+
+### K/DEF strategy assumptions (documented decision, not data)
+  - K/DEF have intentionally thin data coverage in this stack
+  - Streaming logic primarily based on:
+      * vegas_implied_total + vegas_spread (Odds API)
+      * weather_indoor / weather_wind_mph for kickers
+      * def_rank_vs_pos for DEF streaming
+  - Strategy file rules pertaining to K/DEF should be tagged with [unavailable] data
+    requirements where they reference complex matchups or coaching tendencies
+  - The advisor LLM should hedge K/DEF calls with weak-confidence notes when applying
+
+================================================================
+## DATA AVAILABILITY MATRIX (for Pass 3 vocabulary)
+================================================================
+
+Available, weekly cadence:
+  snap_pct, target_share, air_yards_share, route_participation, redzone_targets,
+  redzone_carries, adot, team_pass_rate, team_rush_rate, ngs_separation, ngs_cpoe,
+  ngs_time_to_throw, ngs_intended_air_yards, ypc, epa_per_play, success_rate,
+  def_rank_vs_pos, def_epa_per_play_allowed, def_pressure_rate
+
+Available, real-time:
+  vegas_spread, vegas_total, vegas_implied_total, injury_status, qb_status,
+  depth_chart_position, market_value, market_value_trend, blurb, nfl_state
+
+Available, weekly preseason / static:
+  market_adp, consensus_ranking_pos, league_format, league_scoring, league_size,
+  league_starters, user_roster, nfl_draft_capital, combine_ras, combine_forty,
+  player_age, player_height_weight, player_position, player_team
+
+Available, with budget guard:
+  player_prop_rec_yards, player_prop_rush_yards, player_prop_anytime_td  [Odds API paid tier]
+
+Available via FantasyPros:
+  fp_projection_ppr, fp_projection_half, fp_projection_standard, fp_news_recent
+
+Available via Sleeper:
+  sleeper_projection_ppr, sleeper_roster_status, sleeper_waiver_pool
+
+GAP — needs implementation (low effort):
+  weather_forecast (NWS API — keyed off stadium lat/lng from extracted datawithbliss data)
+
+PAYWALLED — not in current stack:
+  def_coverage_man_pct, def_coverage_zone_pct, wr_man_success_rate,
+  wr_vs_cb_grade, route_concept_chart, o_line_grades
+
+UNAVAILABLE — no acceptable source:
+  none currently identified beyond paywalled list
+
+================================================================
+## CACHING STRATEGY
+================================================================
+
+Per-source recommended TTL:
+  LeagueLogs nfl-state          10 min
+  LeagueLogs market values      6 hours
+  LeagueLogs player blurbs      6 hours (since refreshed every 24h, mid-day cache fine)
+  Sleeper projections           24 hours during regular season
+  Sleeper league/roster data    1 hour (low volatility but transactions)
+  nfl_data_py weekly stats      24 hours (data updates weekly)
+  Odds API game lines           24 hours (refresh once per week to preserve budget)
+  FantasyPros projections       24 hours per season+week
+  FantasyPros news              6 hours (more time-sensitive)
+  Weather forecast              6 hours (re-fetch close to gametime)
+  NFL practice reports          24 hours during practice days
+
+================================================================
+## JOIN KEYS REFERENCE
+================================================================
+
+Primary key: sleeperPlayerId (string)
+  - Used by: LeagueLogs, Sleeper, internal player lookup
+
+Cross-reference keys (via nfl_data_py import_ids()):
+  gsis_id          ← nflverse, NFL official
+  espn_id          ← ESPN, LeagueLogs (via espnId field)
+  fantasypros_id   ← FantasyPros (fpid)
+  pfr_id           ← Pro-Football-Reference
+
+Recommendation: Maintain a single canonical player table keyed by sleeperPlayerId
+with columns for each cross-reference key. Refresh weekly.
