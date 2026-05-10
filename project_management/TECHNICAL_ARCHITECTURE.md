@@ -135,7 +135,7 @@ Full reference: `data_sources.txt`
 |---|---|---|---|
 | LeagueLogs | Market values, blurbs, NFL state | None | Skill positions only; trend fields stubbed at zero — derive locally from snapshots |
 | Sleeper | League/roster/matchups, projections | None | Currently the primary fetcher — works |
-| nfl_data_py | Production stats, snap %, target share, NGS, EPA | None | Python interface to nflverse |
+| nflreadpy | Production stats, snap %, target share, NGS, EPA | None | Python interface to nflverse |
 | The Odds API | Vegas lines (free) + player props (paid) | API key | 500 credits/mo budget |
 | FantasyPros | Projections + news | API key | Plan-dependent |
 | NFL official | Practice participation, inactives | None | Not currently fetched |
