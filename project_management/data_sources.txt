@@ -66,8 +66,8 @@ Join key: player_id (matches LeagueLogs sleeperPlayerId)
 ## PRODUCTION DATA & ADVANCED METRICS
 ================================================================
 
-### nfl_data_py (nflverse Python wrapper)
-Auth: None (open-source data via GitHub releases / Parquet)
+### nflreadpy (nflverse Python wrapper)
+Auth: None (https://github.com/nflverse/nflreadpy)
 Use cases:
   - Weekly snap counts (raw and as percentage of team snaps)
   - Target share (as percentage of team targets)
