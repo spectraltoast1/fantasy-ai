@@ -2,69 +2,72 @@
 
 > What's next, in what order, and what's deferred. Constitution document — refer here to find the current phase, the gates between phases, and the open decisions ahead.
 
-**Last reviewed:** 2026-05-08
+**Last reviewed:** 2026-05-09
+
+**Target ship:** NFL kickoff, early September 2026.
 
 ---
 
 ## Current Phase
 
-**Phase 1 — Strategy Mind Synthesis**
+**Phase 1 — Strategy Document via Interview**
 
-The three-pass synthesis pipeline (Pass 1 → Pass 2 → Merge → Pass 3) is designed and prompts are written. Token vocabulary is templated. No transcripts have been synthesized with v2 prompts yet. The four existing strategy MD outputs from v1 are baseline-only.
+The strategy doc has been the bottleneck. Earlier work attempted to synthesize it from curated YouTube transcripts (now frozen in `_deferred/synthesis_pipeline/`); v1 instead derives the strategy doc from a structured Claude-driven interview with the user.
 
-**Active gate:** Token vocabulary must be locked against actual planned Python fetcher names before Pass 3 runs.
+**Active gate:** Strategy interview must produce `application/strategy/strategy_redraft.md` before advisor wiring can complete.
 
 ---
 
 ## V1 Phasing
 
-### Phase 1 — Strategy Mind (in progress)
+### Phase 1 — Strategy Document (in progress)
 
-Sub-phases, in order:
+Run a structured Claude interview covering every position (QB, RB, WR, TE, K, DEF) and every decision type (drafting, start/sit, waivers, trades, bye weeks, season-context calls). Output: `application/strategy/strategy_redraft.md`.
 
-1. **1a. Lock token vocabulary** against actual Python fetcher function names. Update DATA_TOKEN_VOCABULARY_TEMPLATE.md to match implementation plan exactly. *Gate to all of Phase 1c onward.*
-2. **1b. Test Pass 1 on one transcript.** Validate v2 prompt quality on a representative transcript before bulk execution. Cheap sanity check.
-3. **1c. Run Pass 1 on FSE redraft batch** (55 transcripts, the largest and last remaining batch).
-4. **1d. (Decision point)** Re-run Pass 1 on the three earlier batches (flock_dynasty, flock_redraft, fse_dynasty) with v2 prompts? Or accept v1 baseline?
-5. **1e. Run Pass 2** three times at temperature 0.3–0.5 per batch, then run Merge.
-6. **1f. Run Pass 3** to add data-dependency tags to each merged strategy MD.
+**Phase 1 exit criteria:** `strategy_redraft.md` exists, the user has read and edited it, and it covers every decision type the advisor is meant to handle.
 
-**Phase 1 exit criteria:** All four strategy MD files exist as v2 outputs, each with applicability tags + data-dependency tags + variance audit completed.
+### Phase 2 — Data Layer Hardening
 
-### Phase 2 — Data Orchestrator
+The current fetchers (Sleeper, nfl_data_py, Odds API, FantasyPros, weather) work. What's missing for v1:
 
-Build Python fetchers for every `available` token. Implement caching per the data_sources.txt cadences. Mock or fallback for `gap` and `paywalled` tokens with documented behavior.
+- **Time-series snapshots** for the data that supports the dashboard's trend views (LeagueLogs market values weekly, projection history, etc.) — currently fetchers overwrite their cache and lose history
+- **Advisor output log** at `application/data/advisor_log/` — every advisor call writes `{timestamp, question, input_snapshot, response}` for retrospective review and dashboard surfacing
+- **NWS forecast integration** stub or full implementation (decision below)
 
-**Phase 2 entry gate:** Phase 1 complete (token vocabulary stable).
-**Phase 2 exit criteria:** Every token in the vocabulary has either a working fetcher or a documented fallback.
+**Phase 2 entry gate:** Phase 1 complete (strategy doc exists).
+**Phase 2 exit criteria:** Snapshots persist on the configured cadence; advisor log writes on every call; weather behavior is decided and either stubbed or implemented.
 
-### Phase 3 — Advisor APIs
+### Phase 3 — Advisor Wiring
 
-Implement the four output types end-to-end:
-- Start/sit advisor
-- Waiver advisor
-- Trade advisor
-- Ad hoc prompt generator
+Currently `application/advisor.py` does a context-dump-then-ask pattern with no strategy doc loaded. V1 changes:
 
-Each fixed advisor: parse question → filter strategy rules by tags → assemble pre-filtered data context per `{needs: ...}` blocks → API call → structured response.
+1. Load the appropriate strategy doc via `application/shared/leagues.py` (already detects redraft / dynasty / salary_cap)
+2. Implement at least one specialized advisor type — **start/sit** is the v1 minimum
+3. Pre-filter context per the strategy doc's needs rather than dumping everything
+4. Write to the advisor output log on every call
+5. Return structured output (not just free-form text)
 
-Ad hoc generator: question → API call returns `(data_plan, prompt)` → Python packages data per plan → user gets two artifacts to use in separate Claude session.
+Waiver, trade, and ad hoc generator advisor types may follow if time allows but are NOT Phase 3 gates.
 
-**Phase 3 exit criteria:** All four output types tested against 5+ historical scenarios each.
+**Phase 3 exit criteria:** Start/sit advisor runs end-to-end against current week's matchup, references rules from the strategy doc by name in its output, logs the call.
 
 ### Phase 4 — Dashboard
 
-Streamlit + Altair limited-interactive dashboard with:
-- Current roster status
-- Last week's matchup
-- Recent advisor outputs (timestamped with input snapshot)
-- One data-driven chart that proves valuable
+Streamlit + Altair dashboard with at minimum:
 
-**Phase 4 exit criteria:** Dashboard renders without errors, all four panels populated, theme tuned beyond Streamlit defaults.
+- Roster status panel (starters, bench, injuries, depth chart positions)
+- Last week's matchup result + win/loss
+- Market value trend chart for roster players (uses the snapshots from Phase 2)
+- Recent advisor outputs (uses the log from Phase 2)
+- One analytical view that does its own work (candidates: waiver-target ranking, bye-week stack analysis, projected season trajectory)
+
+The dashboard is a peer product to the advisor, not a viewer for it. At least one panel must surface analytics that don't depend on any advisor call.
+
+**Phase 4 exit criteria:** All panels render with real data; one analytical panel works without invoking the advisor.
 
 ### Phase 5 — V1 Validation
 
-Run the full advisor pipeline against historical test cases. Document API cost per output type. Confirm V1 success criteria from PROJECT_OVERVIEW.md.
+Run the advisor against 3-5 historical scenarios from a prior season where the outcome is known. Document API cost per advisor call. Confirm V1 success criteria from `PROJECT_OVERVIEW.md`.
 
 **Phase 5 exit criteria:** All six PROJECT_OVERVIEW V1 success criteria objectively true.
 
@@ -75,9 +78,10 @@ Run the full advisor pipeline against historical test cases. Document API cost p
 V2 begins with the start of next NFL regular season, when live signal becomes available.
 
 - **Live feedback loop.** Log every advisor recommendation alongside the actual outcome. Surface patterns where advice was wrong.
-- **Periodic strategy re-synthesis.** Schedule the three-pass pipeline to re-run on a cadence as new creator content emerges. Patch corrections back into the strategy mind.
-- **Local trend derivation.** Build the trend metric for `market_value_trend` from accumulated LeagueLogs snapshots (their trend fields are stubbed at zero).
-- **NWS weather forecast integration** if it didn't ship in V1.
+- **Transcript synthesis pipeline.** Reactivate `_deferred/synthesis_pipeline/`. Run Pass 1 on one transcript first to validate the v2 prompt; then bulk extract; then Pass 2 + Merge + Pass 3. Diff against v1 interview-derived strategy doc; reconcile.
+- **Token vocabulary contract.** Lock against `application/data/fetchers/*` after v1 fetchers stabilize.
+- **Specialized advisor types** beyond start/sit: waiver, trade, ad hoc prompt generator.
+- **NWS weather forecast integration** if not in v1.
 - **Recommendation correctness scoring.** Once feedback exists, build a metric that grades the advisor against actual high scorers.
 
 ---
@@ -86,13 +90,12 @@ V2 begins with the start of next NFL regular season, when live signal becomes av
 
 Tracked but not committed. Move to V2 only if they earn their place against more pressing work.
 
-- **Monte Carlo simulations.** Lineup MC (best lineup given projection variance), playoff odds MC (rest-of-season probability), trade impact MC (playoff probability with vs. without a trade). ~100-200 lines of numpy each. Great dashboard features.
-- **PFF coverage data integration** if it becomes affordable. Re-run Pass 3 only; ~5-10% of currently-flagged rules become evaluable.
-- **Multi-league support.** Generalize roster/league context tokens.
-- **Auction draft / salary cap formats.**
+- **Monte Carlo simulations.** Lineup MC, playoff odds MC, trade impact MC. ~100-200 lines of numpy each. Great dashboard features.
+- **PFF coverage data integration** if it becomes affordable.
+- **Multi-league rollup view** in dashboard (user owns multiple leagues; v1 focuses on one).
+- **Auction draft / salary cap format-specific advisors.**
 - **Off-season trade evaluation tool** standalone for dynasty managers.
-- **Coordinator/coaching tendency surfacing** — currently in static layer; could be dynamic.
-- **In-game live decision support** (partial-game start/sit tweaks, swap suggestions). Unclear if this is wanted; logged for future consideration.
+- **In-game live decision support.**
 
 ---
 
@@ -100,48 +103,44 @@ Tracked but not committed. Move to V2 only if they earn their place against more
 
 | Gate | Required Before |
 |---|---|
-| Token vocabulary locked | Phase 1c (bulk Pass 1 execution) |
-| All Phase 1 batches tagged | Phase 2 (data orchestrator build) |
-| All fetchers + fallbacks implemented | Phase 3 (advisor API build) |
-| All four advisors tested | Phase 4 (dashboard build) |
-| Dashboard renders + V1 criteria met | V1 ship |
+| Strategy doc exists | Phase 3 (advisor wiring) |
+| Snapshots + advisor log | Phase 4 (dashboard) |
+| Start/sit advisor end-to-end | Phase 5 (validation) |
+| All panels render | V1 ship |
 
 ---
 
 ## Risks (Tracked)
 
-1. **Strategy mind quality is the leverage point.** Generic synthesis produces generic advisors. Mitigation: v2 prompts, three-run merge, variance audit.
-2. **Out-of-season validation is necessarily synthetic.** No live signal until next season. Mitigation: historical test cases. Accept this as a real constraint, not a defect.
-3. **API cost overshoot.** Pass 2 + merge across 4 batches at Opus rates is ~$70-100. Runtime cost TBD. Mitigation: track costs from day one, shift to Sonnet if budgets tighten.
-4. **Token vocabulary churn.** Renaming tokens mid-build invalidates Pass 3 outputs. Mitigation: lock vocabulary BEFORE Pass 3 runs.
-5. **Scope creep.** Enthusiastic-builder failure mode. Mitigation: V1 non-goals list in PROJECT_OVERVIEW.md, updated whenever new tempting features appear.
-6. **Cross-session context loss.** Mitigation: this doc + journal entries. Future LLM sessions read PROJECT_OVERVIEW + this + recent journal entries to cold-start.
+1. **Strategy doc quality is the leverage point.** A vague doc produces a vague advisor. Mitigation: dedicated interview time, user reads + edits before it's considered done.
+2. **Out-of-season validation is necessarily synthetic.** No live signal until next season. Mitigation: 3-5 historical test cases. Accept this as a real constraint, not a defect.
+3. **Dashboard scope creep.** "One analytical view" can stretch to four. Mitigation: pick one and ship it before adding more.
+4. **Advisor still using context-dump pattern past Phase 3.** Easy to leave the existing JSON-dump path in place. Mitigation: explicit Phase 3 exit criterion that pre-filtering happens.
+5. **Code reorganization not yet executed.** Doc target structure (`application/ai/`, `application/dashboard/`, `application/data/fetchers/`, etc.) does not match the current flat layout in `application/`. Mitigation: structural reorg is a near-term task; treat docs as forward-pointing during the gap.
 
 ---
 
-## Open Questions (To Resolve in Order)
+## Open Questions
 
-These are the active decisions blocking forward progress. Resolve top-down. Items in **Block 1** are critical and gate the next concrete work; items in **Block 2** are important but defer-able by 1-2 sessions.
+These are the active decisions blocking forward progress.
 
-### Block 1 — Critical (resolve before any Phase 1c+ work)
+### To resolve before Phase 2 starts
 
-1. **What is the user's actual fantasy league configuration?** PPR / Half / Standard? 1QB or Superflex? League size? This drives LeagueLogs profile selection (one of: redraft-1qb-12t-ppr1, redraft-1qb-12t-ppr0_5, redraft-2qb-12t-ppr1, dynasty-1qb-12t-ppr1, dynasty-2qb-12t-ppr1) and scoring assumptions for projections. **Without this, the orchestrator cannot fetch correct data.**
-2. **Sleeper league_id + user_id.** Required for the orchestrator to know "your roster" vs other teams. Captured where? Suggested: a `config.local.json` file at project root, gitignored.
-3. **API keys + accounts status:** Anthropic API key (assumed exists), FantasyPros API access (paid plan? key in hand?), Odds API key (free tier signed up?). Needed for Phase 2.
-4. **Lock the data token vocabulary.** DATA_TOKEN_VOCABULARY_TEMPLATE.md is currently populated as a draft. Walk through token-by-token, decide which Python function each maps to, rename for consistency, then declare it locked. **This is the gate to all Pass 3 work.**
-5. **Single redraft strategy file at runtime, or per-batch?** We have 4 batch files (flock_dynasty, flock_redraft, fse_dynasty, fse_redraft). At runtime the orchestrator queries by league format — so it needs ONE redraft strategy file and ONE dynasty file, not two each. Decision: do we add a fifth synthesis step that merges per-format batch files into a single canonical file? Or does the orchestrator query both batch files at runtime and reconcile? **TECHNICAL_ARCHITECTURE.md and PRODUCT_ROADMAP.md currently reference "four strategy MD files" without resolving this.**
+1. **Is NWS weather forecast integration in V1 scope or V2?** Currently the design says yes; the code has a placeholder. Decide: implement fully, stub-only, or strip from v1.
+2. **What specific time-series cadences and retention windows are needed?** LeagueLogs market values every 6h kept for 12 weeks? Projections weekly kept indefinitely? Decide before snapshot code is written.
+3. **Where does the strategy doc go for non-redraft formats?** v1 focuses on redraft, but `shared/leagues.py` already detects dynasty and salary_cap. Acceptable to ship v1 with only `strategy_redraft.md` and have the dynasty/salary_cap leagues fall through to a generic strategy or refuse to advise? Pick one.
 
-### Block 2 — Important (resolve in early Phase 2 work)
+### To resolve before Phase 3
 
-6. **Is NWS forecast integration in V1 scope or V2?** Decision needed before Phase 2 build.
-7. **Re-extract earlier 3 batches with v2 prompts, or accept v1 baseline?** Cost: ~$3-5 Sonnet. Benefit: consistency across all four strategy mind files.
-8. **What specific historical test cases will V1 be validated against?** Suggestion: pick 5 specific Week N decisions from a prior season with retrospective ground truth.
-9. **What's the cost ceiling for Pass 2 + merge on Opus across 4 batches?** Currently estimated $70-100. If too high, fallback: Sonnet for runs + Opus only for merge (~$30-40).
-10. **What's the one specific data-driven chart for the dashboard's V1?** Suggestion: market value trend per roster player over recent snapshots.
+4. **Beyond start/sit, which other advisor types ship in v1?** Default: only start/sit. Document anything that gets added.
+5. **Structured output schema for the advisor.** What does start/sit return? Decision + confidence + rules invoked + data referenced? Define before implementation.
 
-### Block 3 — Defer-able (decide when reaching Phase 4 or later)
+### To resolve before Phase 4
 
-11. **Repository / project structure.** Where does Python code live (top-level `src/`? sibling `code/` folder? inside `fse2024/`?). Where do strategy MD files live at runtime (`strategy/` subfolder?). Where do JSON caches live (`caches/`?). **No future LLM can write code without this decision.**
-12. **Secrets management plan.** API keys for Anthropic, FantasyPros, Odds API need a `.env` file (gitignored) or similar. Critical to decide before any code is committed to git, otherwise keys leak.
-13. **Git / version control.** Is this a git repo? Is there a `.gitignore` covering `.archive/`, `caches/`, `.env`, `*.parquet`?
-14. **Dashboard hosting.** Local Streamlit run-on-demand? Always-on background process? Cron-triggered cache refresh + manual UI launch?
+6. **Which one analytical view ships first?** Suggestion: market value trend chart for roster players (already implied by Phase 2 snapshots).
+7. **How is the dashboard run?** Always-on local Streamlit? Manual launch? Cron-triggered cache refresh + manual UI launch?
+
+### To resolve when convenient
+
+8. **Code reorganization timing.** The proposed `application/{ai,dashboard,data/fetchers,strategy,shared}/` structure is documented but not executed. Schedule the import refactor.
+9. **Secrets management beyond `config.py`.** Currently API keys in a gitignored config.py. Consider `.env` + python-dotenv if more keys accumulate.

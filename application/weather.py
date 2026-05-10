@@ -1,17 +1,28 @@
+"""
+Stadium location data + NWS forecast stub.
+
+The historical-weather download from datawithbliss has been removed — past weather
+doesn't inform forward advisor decisions, only forecasts do. This module now does
+two things:
+
+  1. refresh_stadiums()  — one-time extract of stadium lat/lng + roof type from
+                           datawithbliss's stadium_coordinates.csv (used as seed for
+                           future NWS forecast lookups, and to short-circuit indoor
+                           games where weather is irrelevant).
+  2. refresh_forecast()  — STUB. NWS integration is a Phase 2 open question.
+"""
+
 import csv
 import io
 import json
 import requests
 from datetime import date
-from collections import defaultdict
 
 GITHUB_BASE = "https://raw.githubusercontent.com/ThompsonJamesBliss/WeatherData/master/data"
 STADIUMS_URL = f"{GITHUB_BASE}/stadium_coordinates.csv"
-GAMES_URL = f"{GITHUB_BASE}/games.csv"
-GAME_WEATHER_URL = f"{GITHUB_BASE}/games_weather.csv"
 
 STADIUMS_CACHE = "data/stadiums.json"
-GAME_WEATHER_CACHE = "data/game_weather.json"
+FORECAST_CACHE = "data/weather_forecast.json"
 
 # Roof types that mean weather doesn't affect play
 INDOOR_ROOF_TYPES = {"Indoor", "Dome"}
@@ -53,62 +64,20 @@ def refresh_stadiums():
     return cache
 
 
-def refresh_game_weather():
-    """Download games.csv and games_weather.csv, aggregate weather per game, and cache."""
-    print("Fetching game index from datawithbliss...")
-    games_rows = _fetch_csv(GAMES_URL)
-    print("Fetching game weather records (this may take a moment)...")
-    weather_rows = _fetch_csv(GAME_WEATHER_URL)
+def refresh_forecast():
+    """STUB — NWS forecast integration deferred.
 
-    # Build game_id → stadium map
-    game_stadium = {
-        row["game_id"]: row.get("StadiumName", "").strip()
-        for row in games_rows if row.get("game_id")
-    }
+    Intended flow when implemented:
+      1. Read current NFL state (week + season).
+      2. Fetch the week's schedule (nfl_data_py).
+      3. For each outdoor game (skip indoor/sheltered roofs), call NWS at the
+         stadium's lat/lng, 24–72 hours before kickoff.
+      4. Cache result at FORECAST_CACHE with 6h TTL.
 
-    # Aggregate weather measurements per game (average across all readings in the window)
-    game_temps = defaultdict(list)
-    game_wind = defaultdict(list)
-    game_precip = defaultdict(list)
-    game_humidity = defaultdict(list)
-
-    for row in weather_rows:
-        gid = row.get("game_id")
-        if not gid:
-            continue
-        try:
-            if row.get("Temperature"):
-                game_temps[gid].append(float(row["Temperature"]))
-            if row.get("WindSpeed"):
-                game_wind[gid].append(float(row["WindSpeed"]))
-            if row.get("Precipitation"):
-                game_precip[gid].append(float(row["Precipitation"]))
-            if row.get("Humidity"):
-                game_humidity[gid].append(float(row["Humidity"]))
-        except (ValueError, TypeError):
-            continue
-
-    def _avg(lst):
-        return round(sum(lst) / len(lst), 1) if lst else None
-
-    def _total(lst):
-        return round(sum(lst), 2) if lst else None
-
-    games = {}
-    for gid in game_stadium:
-        games[gid] = {
-            "stadium": game_stadium[gid],
-            "temp_f": _avg(game_temps[gid]),
-            "wind_mph": _avg(game_wind[gid]),
-            "precip_in": _total(game_precip[gid]),
-            "humidity_pct": _avg(game_humidity[gid]),
-        }
-
-    cache = {"updated_at": str(date.today()), "games": games}
-    with open(GAME_WEATHER_CACHE, "w") as f:
-        json.dump(cache, f)
-    print(f"  Cached weather for {len(games)} games to {GAME_WEATHER_CACHE}")
-    return cache
+    See PRODUCT_ROADMAP.md "Open Questions" for the V1-vs-V2 decision.
+    """
+    print("refresh_forecast: NWS integration not yet implemented (stub).")
+    return None
 
 
 def load_stadiums():
@@ -119,37 +88,16 @@ def load_stadiums():
         return {}
 
 
-def load_game_weather():
-    try:
-        with open(GAME_WEATHER_CACHE) as f:
-            return json.load(f).get("games", {})
-    except FileNotFoundError:
-        return {}
-
-
 def get_stadium_info(team_abbr):
     """Look up a team's stadium and weather exposure. Returns None if not found."""
     return load_stadiums().get(team_abbr)
 
 
-def get_game_weather(game_id):
-    """Look up historical weather for a specific game_id. Returns None if not found."""
-    return load_game_weather().get(str(game_id))
-
-
 if __name__ == "__main__":
-    import sys
-
-    if "--game-weather" in sys.argv:
-        cache = refresh_game_weather()
-        sample_id = next(iter(cache["games"]))
-        print(f"\nSample game ({sample_id}):")
-        print(json.dumps(cache["games"][sample_id], indent=2))
-    else:
-        cache = refresh_stadiums()
-        print("\nSample stadiums:")
-        for team in ["DAL", "BUF", "MIN", "LV", "SF"]:
-            info = cache["stadiums"].get(team)
-            if info:
-                label = "indoor" if info["is_indoor"] else ("sheltered" if info["is_sheltered"] else "outdoor")
-                print(f"  {team}: {info['stadium']} ({info['roof_type']} — {label})")
+    cache = refresh_stadiums()
+    print("\nSample stadiums:")
+    for team in ["DAL", "BUF", "MIN", "LV", "SF"]:
+        info = cache["stadiums"].get(team)
+        if info:
+            label = "indoor" if info["is_indoor"] else ("sheltered" if info["is_sheltered"] else "outdoor")
+            print(f"  {team}: {info['stadium']} ({info['roof_type']} — {label})")

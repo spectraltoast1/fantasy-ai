@@ -10,6 +10,10 @@ For LLM cold-start: read this file, then the most recent 1-2 full entries. Combi
 
 ## 2026
 
+### 2026-05-09
+
+- **2026-05-09-reorg** — Resolved the planned-vs-built architecture gap. V1 redirected from transcript-synthesis to interview-derived strategy doc. Synthesis pipeline frozen at `_deferred/synthesis_pipeline/`. Constitution docs rewritten. STATUS.md added. Code restructure deferred to a dedicated session.
+
 ### 2026-05-08
 
 - **2026-05-08-final-sweep** — Final sweep before extended break. Reorganized PRODUCT_ROADMAP open questions into priority blocks. Added "Known Architectural Gaps" section to TECHNICAL_ARCHITECTURE. Captured 10 things future LLMs need to know that aren't obvious from cold-reading the docs.

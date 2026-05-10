@@ -1,7 +1,7 @@
 # Data Sources Reference
 
-Last reviewed: 2026-05-08
-Pipeline role: Inputs to the Python orchestrator that fetches data and assembles context for the advisor LLM.
+Last reviewed: 2026-05-09
+Pipeline role: Inputs to the Python data layer that feeds both the AI advisor and the analytics dashboard.
 
 ================================================================
 ## STATE & CURRENT-WEEK INFO
@@ -135,43 +135,37 @@ Note: distinct from Sleeper's injury_status and LeagueLogs blurbs.
 ## WEATHER
 ================================================================
 
-### Stadium location lookup (extracted from datawithbliss)
+### Stadium location lookup (extracted once from datawithbliss)
 Source: github.com/ThompsonJamesBliss/WeatherData (one-time extraction)
 Cached locally as data/stadiums.json
 Use cases:
   - Stadium lat/lng (seeds NWS forecast lookups)
   - Roof type (Outdoor / Indoor / Retractable) — short-circuits forecast for indoor games
-  - Timezone (for game-time forecast alignment)
-Schema:
-  {
-    "team_abbr": {
-      "lat": float,
-      "lng": float,
-      "roof_type": "outdoor" | "indoor" | "retractable",
-      "timezone": "America/New_York"
-    }
-  }
 
 Important: datawithbliss's stadium list reflects historical venues. Maintain a static
 override layer (current_stadiums.json) for teams that have moved (Rams → SoFi,
 Raiders → Allegiant, Chargers → SoFi, etc.). The override merges over the extracted
 data. Refresh once per season or when teams relocate.
 
-### Forecast: NWS API (api.weather.gov)
+Note: Only the stadium-location data is used. The historical-weather portion of the
+datawithbliss dataset is NOT used — past weather doesn't inform forward advisor
+decisions; only forecasts do.
+
+### Forecast: NWS API (api.weather.gov) — STUB IN V1
 Auth: None (US-only, no signup)
-Use cases:
+Status in v1: stub function in application/weather.py; real integration is a Phase 2
+open question (implement vs. defer to v2 vs. ship without).
+
+Intended use cases:
   - Game-day temperature, wind speed, precipitation forecast
   - Lookup keyed on stadium lat/lng (from stadium location lookup above)
   - Skip lookup entirely when roof_type ≠ "outdoor"
 
-Recommended fetch flow:
-  1. Get NFL state (current week) from LeagueLogs
+Recommended fetch flow (when implemented):
+  1. Get NFL state (current week)
   2. Get schedule from nfl_data_py for that week
   3. For each outdoor game, fetch NWS forecast 24-72 hours before kickoff
   4. Cache forecast at 6-hour TTL
-
-Historical weather records are NOT cached or used. Past weather doesn't inform forward
-advisor decisions; only forecasts do.
 
 ================================================================
 ## STATIC / STRATEGY LAYER (manual / curated)
@@ -202,7 +196,7 @@ advisor decisions; only forecasts do.
   - The advisor LLM should hedge K/DEF calls with weak-confidence notes when applying
 
 ================================================================
-## DATA AVAILABILITY MATRIX (for Pass 3 vocabulary)
+## DATA AVAILABILITY MATRIX
 ================================================================
 
 Available, weekly cadence:
