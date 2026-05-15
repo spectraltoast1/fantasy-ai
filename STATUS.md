@@ -1,39 +1,30 @@
 # STATUS
 
-**Last updated:** 2026-05-09
-**Target ship:** NFL kickoff, early September 2026
+**Last updated:** 2026-05-15
+**Target ship:** NFL kickoff, mid August 2026
 
 ---
 
-## Today (what works)
+## Project Overview (what are we working toward)
 
-The `application/` folder has a working prototype advisor (`advisor.py`) that pulls Sleeper league + roster + matchup context, dumps it as JSON to a Sonnet API call, and returns a free-form recommendation. Data fetchers exist for Sleeper, nfl_data_py, The Odds API, FantasyPros, and stadium location (with NWS forecast as a stub). A scheduler refreshes them on a configured cadence. League type detection (redraft / dynasty / salary cap) is implemented. League config including Sleeper IDs and API keys is in `application/config.py` (gitignored).
+A challenge with managing a fantasy football team is making consistent, data-driven decisions. I often make decisions that are based on emotion or viral consensus, and will make decisions that are inconsistent with a unified strategy. This project aims to gather, package, analyze, and visualize relevant, curated data from reliable sources, so consistent, data-driven decisions are easier to execute.
 
-## V1 (what's missing)
+The project will do this in two ways: a dashboard for user-driven insight and an AI layer for interpretation and decision suggestions. The AI layer is not meant to run the team - it's a consultation, putting data-driven suggestions alongside the user's own analysis to produce better decisions.
 
-1. **Strategy document** — `application/strategy/strategy_redraft.md` does not yet exist. Will be produced via a Claude-driven interview with the user.
-2. **Strategy doc not wired into advisor** — `advisor.py` ignores `leagues.py`'s `load_strategy_doc()`. Phase 3 fixes this.
-3. **Pre-filtered context** — current advisor dumps full JSON. Phase 3 changes this to a per-question pre-filter.
-4. **Specialized advisor types** — start/sit is the v1 minimum. Others (waiver, trade, ad hoc generator) are nice-to-haves.
-5. **Time-series snapshots** — fetchers currently overwrite caches; no historical persistence. Phase 2 adds this for the dashboard's trend views.
-6. **Advisor output log** — `advisor.py` prints to stdout. Phase 2 adds JSONL logging at `application/data/advisor_log/` for retrospective review and dashboard surfacing.
-7. **Dashboard** — Streamlit + Altair, peer product to the AI. Phase 4. Five panels minimum, at least one analytical view that runs without the advisor.
-8. **NWS forecast integration** — currently a stub in `weather.py`. Decide V1 vs V2 in Phase 2.
-9. **Code reorganization** — target layout is `application/{ai,dashboard,data/fetchers,strategy,shared}/`; current layout is flat. Reorg pending; until done, docs forward-reference the target layout.
+## Today (the current status)
 
-## Deferred to V2
+Data fetchers exist for Sleeper, nfl_data_py, The Odds API, and FantasyPros. They are untested and likely need editing, but the code exists as a starting point. A weather fetcher exists but needs to be rebuilt - the current data source is historical only and cannot support forecasting. Stadium location data in the current weather fetcher could be preserved, but isn't the only way to get it. A LeagueLogs fetcher does not exist yet.
 
-- **Transcript synthesis pipeline** — frozen at `_deferred/synthesis_pipeline/`. The four pass prompts, the token vocabulary contract, the raw transcripts, and the v1 truncated strategy MDs are all preserved there. See that folder's `README.md` for resume instructions.
-- **Live in-season feedback loop, recommendation correctness scoring, multi-league rollup, Monte Carlo views** — all V2+ per `PRODUCT_ROADMAP.md`.
+Everything else - a scheduler, a context compiler, and a prototype advisor - exists as extremely rough, barely-started code. These are not considered active work. The fetchers are the only scripts being carried forward as a foundation.
+
+No dashboard exists.
+
+A deferred folder contains earlier work on transcript synthesis. This is intentionally parked.
+
+## V1 (the project segment we're currently working toward)
+
+A working dashboard for redraft fantasy football that pulls from reliable data fetchers and visualizes relevant data to support better in-season decisions. No AI component. No other league formats.
 
 ## Next single highest-leverage move
 
-Run the strategy interview. Block off a weekend. Output: `application/strategy/strategy_redraft.md`. This is the bottleneck for Phase 3 advisor wiring.
-
-## Reading order for new sessions
-
-1. This file
-2. `project_management/PROJECT_OVERVIEW.md`
-3. `project_management/PRODUCT_ROADMAP.md`
-4. `project_management/TECHNICAL_ARCHITECTURE.md`
-5. The two most recent entries in `project_management/journal/`
+Pull 2025 season data from nfl_data_py (no API keys required, fully historical) and explore it to identify which metrics are worth tracking and visualizing. This is the foundation for building dashboard panels before live fetchers are needed.
