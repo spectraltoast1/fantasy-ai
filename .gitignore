@@ -190,6 +190,12 @@ venv/
 .DS_Store
 
 #FOLDERS & Files to ignore
-data/
+data/cache/
+data/snapshots/
 application/data_sources.txt
-transcripts/temp_work
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+*.log
+logs/

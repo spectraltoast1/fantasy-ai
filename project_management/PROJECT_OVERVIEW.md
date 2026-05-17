@@ -10,7 +10,10 @@ The dashboard pulls from multiple data sources to surface relevant metrics in on
 The AI advisor applies a strategy document to generate recommendations against the same data the dashboard displays. The strategy document captures the user's fantasy football philosophy in a structured, reusable format. The advisor is a consultation, not automation - the user analyzes the same data, forms their own view, and makes the final call.
 
 ## Data Layer
-Both components read from the same fetchers and cached data. Sources include Sleeper (league, roster, matchups), nfl_data_py (production stats, snap counts, target share, advanced metrics), The Odds API (Vegas lines, player props), FantasyPros (projections, news), and LeagueLogs (market values). Time-series snapshots enable trend views during the active season.
+Both components read from the same fetchers and cached data. Sources include Sleeper (league, roster, matchups), nflreadpy (production stats, snap counts, target share, advanced metrics, NOTE: uses polars DataFrames, not pandas), The Odds API (Vegas lines, player props), FantasyPros (projections, news), and LeagueLogs (market values). Time-series snapshots enable trend views during the active season.
+
+Pimary data sources: nflreadpy, Sleeper, LeagueLogs
+Overlay data sources: The Odds, FantasyPros, weather, NFL NextGen Stats
 
 ## Versioning
 V1: Redraft only. Dashboard is the primary deliverable - working and useful before NFL kickoff September 2026. AI advisor is a stretch goal.
