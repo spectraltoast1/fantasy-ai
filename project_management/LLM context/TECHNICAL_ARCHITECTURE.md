@@ -28,27 +28,31 @@ A fantasy football analytics dashboard (v1) and AI advisor (v2+). V1 is a pure a
 
 ```
 fantasy-ai/
-├── STATUS.md
 ├── project_management/
 │   ├── TECHNICAL_ARCHITECTURE.md   (this file)
+    ├── STATUS.md
+    ├── PRODUCT_ROADMAP.md
+    ├── PROJECT_OVERVIEW.md
 │   ├── data_sources.txt
 │   └── journal/
-├── application/
-    ├── ai/                    # advisor + context + prompts (future)
-    ├── dashboard/             # Streamlit app (not yet built)
+├── _deprecated/                    # old flat fetchers, do not modify
+├── _deferred/                      # synthesis pipeline, parked for v2
+└── application/
+    ├── dashboard/                  # Streamlit app (not yet built)
     ├── data/
-    │   ├── fetchers/          # one Python script per data source (tracked in git)
-    │   ├── cache/             # current state JSON (gitignored)
-    │   ├── snapshots/         # time-series parquet (gitignored)
-    │   └── advisor_log/       # JSONL advisor call log (future, gitignored)
-    ├── strategy/              # strategy_redraft.md (future)
-    ├── shared/                # league detection, config loaders
-    ├── scheduler.py
+    │   ├── fetchers/               # one Python script per source (tracked in git)
+    │   │   └── nfl_stats.py        # ✅ built
+    │   ├── cache/                  # current state (gitignored)
+    │   │   └── player_id_map.parquet  # gsis_id → sleeperPlayerId mapping
+    │   └── snapshots/              # time-series parquet (gitignored)
+    │       └── nflreadpy/
+    │           └── nfl_stats_2025.parquet  # 18,539 rows × 121 cols, weeks 1-18
+    ├── shared/                     # league detection, config loaders
     ├── config.example.py
     └── requirements.txt
 ```
 
-Note: The codebase is currently flat (pre-reorg). The structure above is the target state. Do not move existing files - leave them where they are. Write new files to the target locations above.
+Note: The codebase is currently flat (pre-reorg). The structure above is the target state. Do not move existing files - leave them where they are. Write new files to the target locations above. Do not modify files in _deprecated/.
 
 ---
 
@@ -90,13 +94,23 @@ Use nflreadpy's `import_ids()` to maintain a mapping table at `application/data/
 One script per data source in `application/data/fetchers/`. Each fetcher has a single concern - one source, one cache file, one snapshot stream where applicable.
 
 Current fetcher state:
-- `sleeper.py` - most complete, consider the working baseline
-- `odds.py`, `fantasypros.py` - exist but untested, treat as stubs to be rebuilt
-- `weather.py` - NWS forecast is stubbed; stadium location data may be worth preserving
-- `nfl_stats.py` - built on deprecated nfl_data_py; to be replaced with nflreadpy fetcher
+- `sleeper.py` - does not exist
+- `odds.py` - does not exist
+- `fantasypros.py` - does not exist
+- `weather.py` - does not exist
+- `nfl_stats.py` - backfill + refresh modes, polars, player ID map
 - `leaguelogs.py` - does not exist yet
 
-Do not modify existing fetcher files. Write new fetchers to `application/data/fetchers/`.
+## nflreadpy Notes
+
+Package version: 0.1.5
+Key functions: load_player_stats(), load_snap_counts(),
+load_team_stats(), load_ff_playerids()
+All functions return polars DataFrames
+player_id in load_player_stats() is gsis_id format ("00-0023459")
+Snap count join path: load_snap_counts().pfr_player_id →
+load_ff_playerids().pfr_id → gsis_id
+85.5% sleeper ID join coverage expected (DST/K lack Sleeper mappings)
 
 ---
 

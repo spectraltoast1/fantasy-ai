@@ -26,15 +26,14 @@ IMPORTANT TECH NOTE: The python library nflreadpy is the core data source for th
 
 ## Today (the current status)
 
+The nflreadpy fetcher is built and the 2025 season has been backfilled. application/data/fetchers/nfl_stats.py produces player-week parquet snapshots at application/data/snapshots/nflreadpy/ and a player ID mapping table at application/data/cache/player_id_map.parquet. The fetcher has two modes: backfill(year) for full season pulls and refresh() for weekly in-season updates. The player ID map connects nflreadpy's gsis_id to sleeperPlayerId, enabling joins to Sleeper roster data.
+
 Data fetchers exist for Sleeper, The Odds API, and FantasyPros. They are untested and likely need editing, but the code exists as a starting point. A weather fetcher exists but needs to be rebuilt - the current data source is historical only and cannot support forecasting. Stadium location data in the current weather fetcher could be preserved, but isn't the only way to get it. A LeagueLogs fetcher does not exist yet.
-
-A data fetcher exists for nfl_data_py, but further research shows that library has been deprecated. The updated and active library is nflreadpy which is polars based. A new fetcher will need to be built for nflreadpy and the nfl_data_py fetcher can be abandoned.
-
-Everything else - a scheduler, a context compiler, and a prototype advisor - exists as extremely rough, barely-started code. These are not considered active work. The fetchers are the only scripts being carried forward.
 
 No dashboard exists.
 
 A deferred folder contains earlier work on transcript synthesis. This is intentionally parked.
+A deprecated folder contains outdated and untested versions of fetchers for Sleeper, The Odds, FantasyPros and weather. It also contains an outdated and untested scheduler, AI advisor and context generator. The folder is a graveyard of scripts that would need more editing than it would take to rebuild. The folder is .gitignored
 
 ## V1 (the project segment we're currently working toward)
 
@@ -42,25 +41,11 @@ A working dashboard for redraft fantasy football that pulls from reliable data f
 
 ## Next single highest-leverage move
 
-Begin building the nflreadpy data layer using 2025 season data. 
-The metrics worth tracking have been pre-researched:
+Rebuild the Sleeper fetcher. It needs to provide the league context (rosters, matchups,
+waiver pool, standings) that makes the nflreadpy data personally relevant.
+The rebuilt fetcher should:
 
-Core opportunity metrics (priority):
-  - snap_pct, target_share, air_yards_share, route_participation
-  - wopr (pre-calculated by nflreadpy)
-  - redzone_targets, redzone_carries
-
-Contextual metrics:
-  - adot, racr, yac_sh
-  - epa_per_play (note: noisy week-to-week, more reliable as rolling average)
-  - team_pass_rate, team_rush_rate
-
-Schema requirement: store as player-week rows, not current snapshots.
-Trend visualization over rolling 4-6 week windows is the core dashboard 
-use case, so longitudinal structure is non-negotiable from the start.
-
-Join key: map nflreadpy gsis_id to sleeperPlayerId via import_ids() 
-to connect this data to the Sleeper roster layer.
-
-Skip exploratory investigation - go straight to building the fetch, 
-store, and weekly snapshot pipeline.
+- Write current state to application/data/cache/sleeper/
+- Use polars throughout
+- Join on sleeperPlayerId as the canonical player key
+- Cover: league settings, rosters, weekly matchups, standings, waiver pool

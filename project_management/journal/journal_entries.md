@@ -10,6 +10,8 @@ For appendix entries, open the corresponding file in `journal/appendix/`.
 
 ### 2026-05
 
+- **2026-05-17-build-nflreadpy-fetcher** - Claude Code built the fetcher for nflreadpy data and pulled 2025 historical data. Slight folder organization. Clarified how Claude Code writes to the project, including a post-code guide for ensuring the work is completed and stored correctly.
+
 - **2026-05-17-reorg-v3** - final reorg. deprecated old files that will be rebuilt with improved product scope. ready to start rebuilding. Claude roles defined - Chat as Product Manager and Code as Engineer. Status doc is context for Chat and Tech Architecture is context for Code. Both docs must be updated regularly.
 
 - **2026-05-15-reorg-v2** - serious product scoping and cutting. focusing v1 on a usable, python powered dashboard for redraft only. purposefully not biting off more than can be chewed at one time. pushed AI analysis to v2 and complex data analytics to v3. new next steps are pulling historical nfl data and poking around to find relevant trends to track for in-season dashboards.
