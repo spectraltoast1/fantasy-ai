@@ -24,16 +24,27 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 
 IMPORTANT TECH NOTE: The python library nflreadpy is the core data source for this project. It returns polars DataFrames - it is not based on pandas. Any LLM coding instructions working with nflreadpy need to explicitly call out the polars DataFrames so we don't end up with mixed polars/pandas data manipulation syntax.
 
-## Today (the current status)
+## Today (the current status toward v1)
 
-The nflreadpy fetcher is built and the 2025 season has been backfilled. application/data/fetchers/nfl_stats.py produces player-week parquet snapshots at application/data/snapshots/nflreadpy/ and a player ID mapping table at application/data/cache/player_id_map.parquet. The fetcher has two modes: backfill(year) for full season pulls and refresh() for weekly in-season updates. The player ID map connects nflreadpy's gsis_id to sleeperPlayerId, enabling joins to Sleeper roster data.
+> most recent build
+The nflreadpy fetcher was just built and the 2025 season has been backfilled. application/data/fetchers/nfl_stats.py produces player-week parquet snapshots at application/data/snapshots/nflreadpy/ and a player ID mapping table at application/data/cache/player_id_map.parquet. The fetcher has two modes: backfill(year) for full season pulls and refresh() for weekly in-season updates. The player ID map connects nflreadpy's gsis_id to sleeperPlayerId, enabling joins to Sleeper roster data.
 
-Data fetchers exist for Sleeper, The Odds API, and FantasyPros. They are untested and likely need editing, but the code exists as a starting point. A weather fetcher exists but needs to be rebuilt - the current data source is historical only and cannot support forecasting. Stadium location data in the current weather fetcher could be preserved, but isn't the only way to get it. A LeagueLogs fetcher does not exist yet.
+> built
+    - nflreadpy fetcher
 
-No dashboard exists.
+> not yet built
+    >> backend
+        - sleeper fetcher
+        - LeagueLogs fetcher
+        - The Odds fetcher
+        - FantasyPros fetcher
+        - weather fetcher
+    >> frontend
+        - Dash dashboard
 
+> helpful historical context
 A deferred folder contains earlier work on transcript synthesis. This is intentionally parked.
-A deprecated folder contains outdated and untested versions of fetchers for Sleeper, The Odds, FantasyPros and weather. It also contains an outdated and untested scheduler, AI advisor and context generator. The folder is a graveyard of scripts that would need more editing than it would take to rebuild. The folder is .gitignored
+A deprecated folder contains outdated and untested versions of fetchers for Sleeper, The Odds, FantasyPros and weather. It also contains an outdated and untested scheduler, AI advisor and context generator. The folder is a graveyard of scripts that would need more editing than it would take to rebuild, so they are not considered to be relevant to the project. The folder is .gitignored
 
 ## V1 (the project segment we're currently working toward)
 

@@ -17,7 +17,7 @@ A fantasy football analytics dashboard (v1) and AI advisor (v2+). V1 is a pure a
 - **Language:** Python end-to-end
 - **Data manipulation:** polars (not pandas) - nflreadpy returns polars DataFrames; use polars syntax throughout
 - **NFL stats:** nflreadpy (successor to deprecated nfl_data_py) - returns polars DataFrames
-- **Dashboard:** Streamlit + Altair (not yet built)
+- **Dashboard:** Dash + Plotly (not yet built)
 - **Storage:** JSON (cache), parquet (snapshots), JSONL (advisor log - future)
 - **HTTP:** requests library
 - **Future query layer:** DuckDB (v2+, not in scope for v1)
@@ -38,7 +38,7 @@ fantasy-ai/
 ├── _deprecated/                    # old flat fetchers, do not modify
 ├── _deferred/                      # synthesis pipeline, parked for v2
 └── application/
-    ├── dashboard/                  # Streamlit app (not yet built)
+    ├── dashboard/                  # Dash app (not yet built)
     ├── data/
     │   ├── fetchers/               # one Python script per source (tracked in git)
     │   │   └── nfl_stats.py        # ✅ built
