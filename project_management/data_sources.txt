@@ -83,6 +83,8 @@ Limitations:
   - No coverage type tagging (man/zone) — that data is PFF-paywalled
   - No reliable route concept charting
 
+NOTE: returns polars DataFrames, not pandas based - use polars data manipulation syntax
+
 Join key: gsis_id (use import_ids() to map to other sources)
 
 ================================================================
