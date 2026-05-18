@@ -27,14 +27,14 @@ IMPORTANT TECH NOTE: The python library nflreadpy is the core data source for th
 ## Today (the current status toward v1)
 
 > most recent build
-The nflreadpy fetcher was just built and the 2025 season has been backfilled. application/data/fetchers/nfl_stats.py produces player-week parquet snapshots at application/data/snapshots/nflreadpy/ and a player ID mapping table at application/data/cache/player_id_map.parquet. The fetcher has two modes: backfill(year) for full season pulls and refresh() for weekly in-season updates. The player ID map connects nflreadpy's gsis_id to sleeperPlayerId, enabling joins to Sleeper roster data.
+Rebuilt Sleeper fetcher from scratch. application/data/fetchers/sleeper.py writes weekly matchup and transaction snapshots to application/data/snapshots/sleeper/<year>/ and league state cache to application/data/cache/sleeper/. application/shared/league_resolver.py handles username → league ID resolution, keeping the fetcher decoupled from config. 2025 season backfilled.
 
 > built
     - nflreadpy fetcher
+    - sleeper fetcher
 
 > not yet built
     >> backend
-        - sleeper fetcher
         - LeagueLogs fetcher
         - The Odds fetcher
         - FantasyPros fetcher
@@ -52,11 +52,4 @@ A working dashboard for redraft fantasy football that pulls from reliable data f
 
 ## Next single highest-leverage move
 
-Rebuild the Sleeper fetcher. It needs to provide the league context (rosters, matchups,
-waiver pool, standings) that makes the nflreadpy data personally relevant.
-The rebuilt fetcher should:
-
-- Write current state to application/data/cache/sleeper/
-- Use polars throughout
-- Join on sleeperPlayerId as the canonical player key
-- Cover: league settings, rosters, weekly matchups, standings, waiver pool
+Build a static Claude artifact that joins 2025 nflreadpy player stats with 2025 Sleeper matchup data for a single mid-season week. Goal is a working visualization to validate the data layer and establish the join pattern before building the full dashboard. Pick a concrete week (suggest week 9 or 10 - mid-season, full rosters, no bye week distortion) and build the artifact around it.

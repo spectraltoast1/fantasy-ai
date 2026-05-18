@@ -64,11 +64,16 @@ def _write_json(data, path: Path) -> None:
 
 
 def _write_parquet_from_list(data: list, path: Path, label: str) -> bool:
+    print(f"DEBUG: received {len(data)} rows for {label}")
     if not data:
         print(f"  {label}: empty response from Sleeper (offseason or week not yet played) — skipping write.")
         return False
     path.parent.mkdir(parents=True, exist_ok=True)
-    df = pl.from_dicts(data)
+    normalized = [
+        {k: (json.dumps(v) if isinstance(v, (dict, list)) else v) for k, v in row.items()}
+        for row in data
+    ]
+    df = pl.from_dicts(normalized)
     df.write_parquet(path)
     print(f"  {label}: {len(df)} rows → {path}")
     return True

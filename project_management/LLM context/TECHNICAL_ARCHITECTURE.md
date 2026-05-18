@@ -42,6 +42,7 @@ fantasy-ai/
     ├── data/
     │   ├── fetchers/               # one Python script per source (tracked in git)
     │   │   └── nfl_stats.py        # ✅ built
+            └── sleeper.py          # ✅ built
     │   ├── cache/                  # current state (gitignored)
     │   │   └── player_id_map.parquet  # gsis_id → sleeperPlayerId mapping
     │   └── snapshots/              # time-series parquet (gitignored)
@@ -94,7 +95,7 @@ Use nflreadpy's `import_ids()` to maintain a mapping table at `application/data/
 One script per data source in `application/data/fetchers/`. Each fetcher has a single concern - one source, one cache file, one snapshot stream where applicable.
 
 Current fetcher state:
-- `sleeper.py` - does not exist
+- `sleeper.py` - backfills + refresh modes
 - `odds.py` - does not exist
 - `fantasypros.py` - does not exist
 - `weather.py` - does not exist
@@ -111,6 +112,14 @@ player_id in load_player_stats() is gsis_id format ("00-0023459")
 Snap count join path: load_snap_counts().pfr_player_id →
 load_ff_playerids().pfr_id → gsis_id
 85.5% sleeper ID join coverage expected (DST/K lack Sleeper mappings)
+
+## sleeper.py Notes
+
+Player IDs are strings (e.g. "2307") throughout - never cast to int. This is the sleeperPlayerId join key.
+Offseason-safe week logic: season_type == "offseason" returns 18 completed weeks, not 0. season_type == "pre" is the only state that returns 0.
+Cache files are JSON. Snapshot files are parquet partitioned by season: snapshots/sleeper/<year>/
+league_resolver.py is the only file that touches SLEEPER_USERNAME. The fetcher accepts league_id as a parameter only.
+refresh() current-week snapshot writes will silently skip with an explicit log message during offseason - this is expected behavior.
 
 ---
 

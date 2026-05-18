@@ -9,12 +9,32 @@ after each session. Follow these steps after every Claude Code run.
 
 Before touching anything, understand what changed:
 
-```bash
-# See all files changed in the worktree branch vs main
-git diff main..HEAD --name-only
+Claude Code often writes files to the worktree directory but does not always commit them. Before running any git diff, check whether the files were committed.
 
-# See the full line-by-line diff
-git diff main..HEAD
+```bash
+cd .claude/worktrees/<branch-name>
+git status
+```
+
+If files are showing untracked or modified, commit them first:
+```bash
+git add <files>
+git commit -m "<message>"
+```
+
+Return to the repo root
+```bash
+cd .claude/worktrees/<branch-name>
+```
+
+To see all files changed in the worktree branch vs main
+```bash
+git diff main..claude/<branch name> --name-only
+```
+
+To see the full line-by-line diff
+```bash
+git diff main..claude/<branch name>
 ```
 
 Read through the diff. Ask yourself:
@@ -43,20 +63,7 @@ Catching problems here is cheap. Catching them after merging is not.
 
 Once satisfied:
 
-```bash
-git checkout main
-git merge <worktree-branch-name>
-```
-
-The branch name is visible in the Claude Code desktop UI (e.g., blissful-pascal-24).
-
-If the merge has conflicts, git will tell you. Open the conflicted files,
-resolve manually, then:
-
-```bash
-git add <conflicted-file>
-git commit
-```
+merge the worktree to main using the GitHub desktop app
 
 ---
 
@@ -74,17 +81,9 @@ ls <expected-paths>
 
 ---
 
-## 5. Commit message convention
+## 5. Delete the worktree
 
-Keep commit messages specific to what was built:
 
-```
-Add nflreadpy fetcher with 2025 backfill
-Rebuild Sleeper fetcher with polars
-Add LeagueLogs fetcher - cache and snapshot modes
-```
-
-Avoid vague messages like "Claude Code changes" or "update".
 
 ---
 

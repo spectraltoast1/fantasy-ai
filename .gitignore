@@ -190,8 +190,8 @@ venv/
 .DS_Store
 
 #FOLDERS & Files to ignore
-data/cache/
-data/snapshots/
+application/data/cache/
+application/data/snapshots/
 application/data_sources.txt
 **/__pycache__/
 **/*.pyc
