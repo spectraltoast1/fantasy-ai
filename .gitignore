@@ -199,3 +199,4 @@ application/data_sources.txt
 **/*.pyd
 *.log
 logs/
+.claude/
