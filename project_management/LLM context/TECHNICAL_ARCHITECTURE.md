@@ -78,6 +78,10 @@ Two storage patterns:
 
 These assignments reflect current v1 decisions, not permanent rules. Future versions may snapshot additional sources (e.g., odds history for post-hoc analysis).
 
+Cache files do not currently track fetch timestamp. Add a metadata.json sidecar file to each cache write before in-season use.
+
+Data sources are subject to change.
+
 ### Player ID join
 
 Each data source uses a different player identifier. The canonical join key for this project is `sleeperPlayerId`.

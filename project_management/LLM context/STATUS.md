@@ -52,4 +52,8 @@ A working dashboard for redraft fantasy football that pulls from reliable data f
 
 ## Next single highest-leverage move
 
-Build a static Claude artifact that joins 2025 nflreadpy player stats with 2025 Sleeper matchup data for a single mid-season week. Goal is a working visualization to validate the data layer and establish the join pattern before building the full dashboard. Pick a concrete week (suggest week 9 or 10 - mid-season, full rosters, no bye week distortion) and build the artifact around it.
+Build a transform script at application/data/transforms/weekly_joined.py that joins 2025 nflreadpy player stats with 2025 Sleeper matchup data for a single mid-season week. This is the clean data layer the dashboard will read from. Verify the join output before moving to the dashboard build.
+
+## The step after (unconfirmed, subject to change)
+
+Build a static Claude artifact that reads from the previous join. Goal is a working visualization to validate the data layer and begin visualization concepts before building the full dashboard.

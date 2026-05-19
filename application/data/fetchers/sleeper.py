@@ -64,7 +64,6 @@ def _write_json(data, path: Path) -> None:
 
 
 def _write_parquet_from_list(data: list, path: Path, label: str) -> bool:
-    print(f"DEBUG: received {len(data)} rows for {label}")
     if not data:
         print(f"  {label}: empty response from Sleeper (offseason or week not yet played) — skipping write.")
         return False
