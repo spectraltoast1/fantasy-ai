@@ -8,11 +8,11 @@ This guide assumes STATUS.md and TECHNICAL_ARCHITECTURE.md are current.
 ## The Workflow Model
 
 Claude Chat is the Product Manager. Claude Code is the Engineer.
-You are the CEO - you own the decisions, they do the work.
+The user is the CEO - they own the decisions and supervise deliverables from Claude Chat and Claude Code.
 
 Each session is intentionally fresh. LLMs work better without accumulated
 context drift. The document layer (STATUS, TECHNICAL_ARCHITECTURE) is what
-carries continuity across sessions, not conversation history.
+carries continuity across sessions, taking precedence over any conversation history.
 
 ```
 Your journal (personal tracking)
