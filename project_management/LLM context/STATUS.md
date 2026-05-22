@@ -46,9 +46,21 @@ Rebuilt Sleeper fetcher from scratch. application/data/fetchers/sleeper.py write
 A deferred folder contains earlier work on transcript synthesis. This is intentionally parked.
 A deprecated folder contains outdated and untested versions of fetchers for Sleeper, The Odds, FantasyPros and weather. It also contains an outdated and untested scheduler, AI advisor and context generator. The folder is a graveyard of scripts that would need more editing than it would take to rebuild, so they are not considered to be relevant to the project. The folder is .gitignored
 
-## V1 (the project segment we're currently working toward)
+## V1 Definition (current build target)
+Team overview, league standings, and matchup review. Powered by nflreadpy and Sleeper data already fetched. Target ship: NFL kickoff, mid-August 2026.
 
-A working dashboard for redraft fantasy football that pulls from reliable data fetchers and visualizes relevant data to support better in-season decisions. No AI component. No other league formats.
+## Version Roadmap (subject to change)
+- **V1** — Team overview, league standings, matchup review
+- **V2** — Waiver wire analysis (requires Sleeper full player database fetcher)
+- **V3** — Start/sit recommendations (requires FantasyPros projections fetcher)
+- **V4** — Trade analysis (requires LeagueLogs player valuation)
+- **V5** — AI-powered insights (major update, builds on complete data layer)
+- **V6+** — More complex analytics (TBD)
+
+## Known Scope Exclusions
+**DST/K (V1):** DST and kicker positional data is excluded from V1. The nflreadpy → Sleeper join has ~85.5% player ID coverage; DST/K are the primary gap due to missing Sleeper mappings. All V1 transform and dashboard work assumes skill positions only (QB, RB, WR, TE). Revisit in a future version.
+
+**Waiver wire (V1):** Full waiver wire analysis requires the Sleeper full player database fetcher (all available players, not just rostered). This fetcher does not exist yet and is scoped to V2. A separate sleeper_players.py fetcher is the planned approach — same separation of concerns as other fetchers, once-daily call cadence.
 
 ## Next single highest-leverage move
 

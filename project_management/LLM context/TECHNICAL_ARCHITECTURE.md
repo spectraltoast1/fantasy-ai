@@ -24,6 +24,21 @@ A fantasy football analytics dashboard (v1) and AI advisor (v2+). V1 is a pure a
 
 ---
 
+## Version Roadmap (subject to change)
+- **V1** — Team overview, league standings, matchup review (no AI)
+- **V2** — Waiver wire analysis (requires Sleeper full player database fetcher)
+- **V3** — Start/sit recommendations (requires FantasyPros projections fetcher)
+- **V4** — Trade analysis (requires LeagueLogs player valuation)
+- **V5** — AI-powered insights (major update, builds on complete data layer)
+- **V6+** — More complex analytics (TBD)
+
+## Known Scope Exclusions
+**DST/K (V1):** Excluded from all V1 transforms and dashboard work. The nflreadpy → Sleeper ID join has ~85.5% coverage; DST/K are the primary gap. All joins and visualizations should assume skill positions only: QB, RB, WR, TE. Do not attempt to handle DST/K in V1 code — skip or drop non-joining rows at the join stage.
+
+**Waiver wire / full player pool (V1):** The current Sleeper fetcher captures rostered players only. Full player pool analysis is V2 scope. When built, the Sleeper full player database fetch will be a separate fetcher (sleeper_players.py) per the separation of concerns principle — one concern per script, once-daily cadence.
+
+---
+
 ## Folder Structure
 
 ```
@@ -137,3 +152,4 @@ These do not change without an explicit architectural decision:
 4. **Pre-filter data before any API call** - do not send the LLM more context than it needs (cost control)
 5. **The strategy doc is markdown** - not vector-embedded; rules must be auditable and human-readable
 6. **Single source of truth per fact** - constitution docs hold current state; never duplicate across docs
+7. **Skill positions only in V1** — QB, RB, WR, TE. DST and K are explicitly out of scope until a future version. Do not write V1 code that attempts to handle them.
