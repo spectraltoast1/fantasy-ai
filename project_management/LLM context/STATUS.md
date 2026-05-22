@@ -66,6 +66,37 @@ Team overview, league standings, and matchup review. Powered by nflreadpy and Sl
 
 Build a transform script at application/data/transforms/weekly_joined.py that joins 2025 nflreadpy player stats with 2025 Sleeper matchup data for a single mid-season week. This is the clean data layer the dashboard will read from. Verify the join output before moving to the dashboard build.
 
+Dashboard build structure:
+Build first
+    - Power rankings league overview
+        What it shows: Composite team strength score with positional breakdown (QB/RB/WR/TE) as a detail layer.
+        Data needed: nflreadpy weekly stats + Sleeper roster data + weekly_joined transform.
+    - Points scored + consistency league overview
+        What it shows: Average weekly points per team and a consistency signal — stable vs. high-variance output.
+        Data needed: Sleeper matchup snapshots only. No join required.
+
+Build second
+    - Standings with trajectory lens league overview
+        What it shows: Record + points for/against, past strength of schedule, remaining schedule difficulty, historical league baseline for wins needed to reach playoffs.
+        Data needed: Sleeper matchup history + Sleeper league schedule + prior season backfill data.
+    - Manager dossiers league overview
+        What it shows: Static AI-generated profile per manager — waiver tendencies, trade behavior, roster construction patterns, positional preferences.
+        Data needed: Sleeper transaction + waiver history. One-time AI synthesis pass per manager, output stored as static JSON or markdown.
+    - Positional strength vs. league average team overview
+        What it shows: Your team's output by position compared to league average. Identifies tradeable surplus and gaps to address.
+        Data needed: weekly_joined transform.
+    - Head-to-head position breakdown matchup overview
+        What it shows: Your lineup vs. opponent's lineup by position — where's the edge, where's the risk.
+        Data needed: Sleeper current roster + weekly_joined.
+
+Build third
+    - Production consistency per player team overview
+        What it shows: Week-to-week variance per player. Who's reliable, who's boom/bust.
+        Data needed: nflreadpy weekly stats.
+    - Key player matchups + narrative read matchup overview
+        What it shows: The 1-3 decisive spots in the matchup — who could swing the week, whether you're ahead or at risk.
+        Data needed: Sleeper live scoring + nflreadpy historical context. Natural candidate for AI layer in V5.
+
 ## The step after (unconfirmed, subject to change)
 
 Build a static Claude artifact that reads from the previous join. Goal is a working visualization to validate the data layer and begin visualization concepts before building the full dashboard.
