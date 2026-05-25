@@ -146,10 +146,11 @@ refresh() current-week snapshot writes will silently skip with an explicit log m
 
 These do not change without an explicit architectural decision:
 
-1. **polars only** - no pandas anywhere in the codebase
+1. **polars only** - no pandas anywhere in the codebase, use polars until the project advances to a SQL backend
 2. **One fetcher per source** - no combined fetchers
 3. **The data layer is shared** - dashboard and AI advisor read from the same cache/snapshots; no parallel data paths
-4. **Pre-filter data before any API call** - do not send the LLM more context than it needs (cost control)
-5. **The strategy doc is markdown** - not vector-embedded; rules must be auditable and human-readable
-6. **Single source of truth per fact** - constitution docs hold current state; never duplicate across docs
-7. **Skill positions only in V1** — QB, RB, WR, TE. DST and K are explicitly out of scope until a future version. Do not write V1 code that attempts to handle them.
+4. **Separation of concerns** - focus scripts around a single action, i.e. analysis scripts never read from cache or snapshots directly. All data access goes through dedicated read functions. These are the only code that knows where data lives or what format it's in.
+5. **Pre-filter data before any API call** - do not send the LLM more context than it needs (cost control)
+6. **The strategy doc is markdown** - not vector-embedded; rules must be auditable and human-readable
+7. **Single source of truth per fact** - constitution docs hold current state; never duplicate across docs
+8. **Skill positions only in V1** — QB, RB, WR, TE. DST and K are explicitly out of scope until a future version. Do not write V1 code that attempts to handle them.
