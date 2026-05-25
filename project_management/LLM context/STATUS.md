@@ -24,14 +24,17 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 
 IMPORTANT TECH NOTE: The python library nflreadpy is the core data source for this project. It returns polars DataFrames - it is not based on pandas. Any LLM coding instructions working with nflreadpy need to explicitly call out the polars DataFrames so we don't end up with mixed polars/pandas data manipulation syntax.
 
+IMPORTANT TECH NOTE: All data I/O goes through application/data/data_layer.py. Transform scripts and dashboard components read and write via data_layer.py functions only — no script owns its own file paths or parquet logic.
+
 ## Today (the current status toward v1)
 
 > most recent build
-Rebuilt Sleeper fetcher from scratch. application/data/fetchers/sleeper.py writes weekly matchup and transaction snapshots to application/data/snapshots/sleeper/<year>/ and league state cache to application/data/cache/sleeper/. application/shared/league_resolver.py handles username → league ID resolution, keeping the fetcher decoupled from config. 2025 season backfilled.
+Built a transform script at application/data/transforms/join_nfl_sleeper_weekly.py that joins 2025 nflreadpy player stats with 2025 Sleeper matchup data. Executed for a 2025 week 4.
 
 > built
     - nflreadpy fetcher
     - sleeper fetcher
+    - nfl_sleeper join
 
 > not yet built
     >> backend
@@ -50,7 +53,8 @@ A deprecated folder contains outdated and untested versions of fetchers for Slee
 Team overview, league standings, and matchup review. Powered by nflreadpy and Sleeper data already fetched. Target ship: NFL kickoff, mid-August 2026.
 
 ## Version Roadmap (subject to change)
-- **V1** — Team overview, league standings, matchup review
+- **V1** — Team overview, league standings, matchup review (frozen at Week 4 of the 2025 NFL season)
+- **V1.5** — In-season scheduler: automates weekly data refresh and keeps the dashboard current during an NFL season
 - **V2** — Waiver wire analysis (requires Sleeper full player database fetcher)
 - **V3** — Start/sit recommendations (requires FantasyPros projections fetcher)
 - **V4** — Trade analysis (requires LeagueLogs player valuation)
@@ -64,7 +68,13 @@ Team overview, league standings, and matchup review. Powered by nflreadpy and Sl
 
 ## Next single highest-leverage move
 
-Build a transform script at application/data/transforms/weekly_joined.py that joins 2025 nflreadpy player stats with 2025 Sleeper matchup data for a single mid-season week. This is the clean data layer the dashboard will read from. Verify the join output before moving to the dashboard build.
+run join_nfl_sleeper_weekly.py for weeks 1, 2, and 3, validate each output, then proceed to power rankings and points consistency
+
+## The step after (unconfirmed, subject to change)
+
+Use joins from 2025 season to create power ranking and point consistency analysi
+
+## V1 Dashboard Build Order
 
 Dashboard build structure:
 Build first
@@ -96,7 +106,3 @@ Build third
     - Key player matchups + narrative read matchup overview
         What it shows: The 1-3 decisive spots in the matchup — who could swing the week, whether you're ahead or at risk.
         Data needed: Sleeper live scoring + nflreadpy historical context. Natural candidate for AI layer in V5.
-
-## The step after (unconfirmed, subject to change)
-
-Build a static Claude artifact that reads from the previous join. Goal is a working visualization to validate the data layer and begin visualization concepts before building the full dashboard.

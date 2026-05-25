@@ -55,20 +55,27 @@ fantasy-ai/
 └── application/
     ├── dashboard/                  # Dash app (not yet built)
     ├── data/
+        ├── data_layer.py           # ✅ built — centralized read/write module
     │   ├── fetchers/               # one Python script per source (tracked in git)
     │   │   └── nfl_stats.py        # ✅ built
             └── sleeper.py          # ✅ built
     │   ├── cache/                  # current state (gitignored)
     │   │   └── player_id_map.parquet  # gsis_id → sleeperPlayerId mapping
     │   └── snapshots/              # time-series parquet (gitignored)
+            └── nfl_sleeper_weekly_joined/ # output of nfl_sleeper_weekly_join.py
+                └── nfl_sleeper_joined_2025/
+                    └── ... # nfl/sleeper joined parquet files for each week of the 2025 season
     │       └── nflreadpy/
     │           └── nfl_stats_2025.parquet  # 18,539 rows × 121 cols, weeks 1-18
+            └── sleeper/
+                └── sleeper_2025/
+                    └── ... # matchup and transaction parquet files for each week of the 2025 season
     ├── shared/                     # league detection, config loaders
+    ├── transforms/ # one Python script per join/transform
+        └── join_nfl_sleeper_weekly.py # ✅ built
     ├── config.example.py
     └── requirements.txt
 ```
-
-Note: The codebase is currently flat (pre-reorg). The structure above is the target state. Do not move existing files - leave them where they are. Write new files to the target locations above. Do not modify files in _deprecated/.
 
 ---
 
@@ -81,15 +88,43 @@ Two storage patterns:
 - **cache/** - current state only. Overwritten on every refresh. Use for data where only "right now" matters (roster state, injury status, current odds, current projections).
 - **snapshots/** - time-series, append-only. Each refresh adds a new record without overwriting prior ones. Use for data where trend history matters (weekly stats, market values over time).
 
+## I/O Architecture
+
+All reads from and writes to the data layer (cache/, snapshots/) 
+must go through application/data/data_layer.py. This is a 
+non-negotiable architectural rule.
+
+**What this means in practice:**
+- Transform scripts import data_layer and call its functions — 
+  they do not construct file paths or call polars read/write directly
+- Dashboard components read via data_layer functions only
+- Any new data entity requires a read and write function added 
+  to data_layer.py before the consuming script is written
+
+**data_layer.py organization:**
+- Organized by data entity with a comment header per section
+- Read and write functions for the same entity live together
+- Section header naming matches the corresponding transform 
+  script name (e.g. # --- Join: NFL + Sleeper Weekly ---)
+
+**What never belongs in a transform or dashboard script:**
+- pathlib.Path construction pointing at snapshots/ or cache/
+- pl.read_parquet() or df.write_parquet() called directly
+- Hardcoded file path strings
+
 ### Current source assignments
 
 | Source | Storage | Rationale |
 |---|---|---|
+- external
 | Sleeper | cache/ only | Roster/matchup/injury state - current week only needed |
 | nflreadpy | snapshots/ only | Weekly player stats - trend visualization requires history |
 | LeagueLogs | cache/ + snapshots/ | Current values to cache; snapshot weekly for trend derivation (trend fields are stubbed at zero in the API) |
 | Odds API | cache/ only | Current week lines only needed for v1 |
 | FantasyPros | cache/ only | Current projections and news only needed for v1 |
+
+- internal
+| nfl_sleeper_weekly_joined transform | snapshots/nfl_sleeper_weekly_joined/ | Joined output — one folder per season, one file per season/week, append-only
 
 These assignments reflect current v1 decisions, not permanent rules. Future versions may snapshot additional sources (e.g., odds history for post-hoc analysis).
 
@@ -106,6 +141,8 @@ Each data source uses a different player identifier. The canonical join key for 
 - FantasyPros uses `fantasypros_id`
 
 Use nflreadpy's `import_ids()` to maintain a mapping table at `application/data/cache/player_id_map.parquet`. Refresh this mapping on every nflreadpy fetch run.
+
+nfl_stats_{year}.parquet already includes sleeper_player_id as a column — this join is performed during the fetch step in nfl_stats.py. Transform scripts that read from the nflreadpy snapshot do not need to re-join via player_id_map.parquet.
 
 ---
 
@@ -130,7 +167,8 @@ All functions return polars DataFrames
 player_id in load_player_stats() is gsis_id format ("00-0023459")
 Snap count join path: load_snap_counts().pfr_player_id →
 load_ff_playerids().pfr_id → gsis_id
-85.5% sleeper ID join coverage expected (DST/K lack Sleeper mappings)
+~85.5% sleeper ID join coverage expected across all active NFL players (DST/K lack Sleeper mappings)
+~37.5% join coverage on nfl_sleeper_weekly_joined is expected and correct for a 10-team league; this is not a data quality issue
 
 ## sleeper.py Notes
 
@@ -140,7 +178,18 @@ Cache files are JSON. Snapshot files are parquet partitioned by season: snapshot
 league_resolver.py is the only file that touches SLEEPER_USERNAME. The fetcher accepts league_id as a parameter only.
 refresh() current-week snapshot writes will silently skip with an explicit log message during offseason - this is expected behavior.
 
+players_points in matchup snapshots is stored as a serialized JSON string (map of sleeperPlayerId → points). Parse with json.loads before joining. Same applies to starters (JSON array of starter IDs).
+
 ---
+
+## Transforms
+
+One script per join in `application/data/transforms/`. Each transform reads 
+via data_layer.py, performs a single join, and writes via data_layer.py.
+
+- `join_nfl_sleeper_weekly.py` — joins nflreadpy weekly stats + Sleeper 
+  matchup data on sleeperPlayerId. Output: weekly_joined_{season}_w{week:02d}.parquet.
+  Accepts --season and --week as required CLI args.
 
 ## Technical Principles
 
