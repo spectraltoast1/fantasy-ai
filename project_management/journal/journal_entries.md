@@ -10,6 +10,8 @@ For appendix entries, open the corresponding file in `journal/appendix/`.
 
 ### 2026-05
 
+- **2026-05-29-focus** - brought clarity to project scope. the reorgs helped quarrantine old project files, but the scope of the project was still huge and overly ambitious. I realized that trying to do my own version of full data science work on player statistics would not return the quality of work that would satisfy me. I also realized that a lot of the classic fantasy tools available focus on identifying the best players, not necessarily the work it takes to maneuver a league to win. My tool will focus on the latter and let the other tools do what they can do best.
+
 - **2026-05-17-build-nflreadpy-fetcher** - Claude Code built the fetcher for nflreadpy data and pulled 2025 historical data. Slight folder organization. Clarified how Claude Code writes to the project, including a post-code guide for ensuring the work is completed and stored correctly.
 
 - **2026-05-17-reorg-v3** - final reorg. deprecated old files that will be rebuilt with improved product scope. ready to start rebuilding. Claude roles defined - Chat as Product Manager and Code as Engineer. Status doc is context for Chat and Tech Architecture is context for Code. Both docs must be updated regularly.
