@@ -30,11 +30,11 @@ def read_sleeper_matchups(season: int, week: int) -> pl.DataFrame:
 # --- Join: NFL + Sleeper Weekly ---
 
 def read_join_nfl_sleeper_weekly(season: int, week: int) -> pl.DataFrame:
-    path = _SNAPSHOT_DIR / "weekly_joined" / f"weekly_joined_{season}_w{week:02d}.parquet"
+    path = _SNAPSHOT_DIR / "nfl_sleeper_weekly_joined" / str(season) / f"weekly_joined_{season}_w{week:02d}.parquet"
     return pl.read_parquet(path)
 
 
 def write_join_nfl_sleeper_weekly(df: pl.DataFrame, season: int, week: int) -> None:
-    path = _SNAPSHOT_DIR / "weekly_joined" / f"weekly_joined_{season}_w{week:02d}.parquet"
+    path = _SNAPSHOT_DIR / "nfl_sleeper_weekly_joined" / str(season) / f"weekly_joined_{season}_w{week:02d}.parquet"
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path)
