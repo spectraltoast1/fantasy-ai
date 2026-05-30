@@ -1,11 +1,19 @@
 """
 Join NFL player stats (nflreadpy) with Sleeper matchup data for a given season + week.
 
+Design:
+  - Sleeper is the authoritative left table: every rostered skill-position player
+    appears in the output regardless of whether nflreadpy has stats for them that week.
+  - Players with no nflreadpy entry (injured, suspended, inactive) receive 0.0 for all
+    numeric stat columns. Their sleeper_points is already correct from Sleeper.
+  - DSTs are stripped before the join. Kickers are removed by the final SKILL_POSITIONS
+    filter (position="K" from nflreadpy, or null if they never appear in nflreadpy).
+  - Identity metadata (name, position, etc.) for unmatched players is sourced from an
+    in-memory lookup built from the full-season nflreadpy file. As a last resort,
+    player_id_map provides gsis_id for players absent from nflreadpy entirely.
+
 Usage:
     python join_nfl_sleeper_weekly.py --season 2025 --week 4
-
-Output:
-    application/data/snapshots/weekly_joined/weekly_joined_{season}_w{week:02d}.parquet
 """
 
 import argparse
@@ -20,20 +28,81 @@ import data_layer
 
 SKILL_POSITIONS = {"QB", "RB", "WR", "TE"}
 
+# Identity columns sourced from nflreadpy — used to enrich unmatched Sleeper rows.
+_IDENTITY_COLS = [
+    "player_id",
+    "player_name",
+    "player_display_name",
+    "position",
+    "position_group",
+    "headshot_url",
+]
+
+# Sleeper-derived columns that live at the end of the output schema.
+_SLEEPER_TAIL_COLS = [
+    "roster_id",
+    "matchup_id",
+    "sleeper_points",
+    "is_starter",
+    "roster_total_points",
+    "matchup_result",
+]
+
+
+# ---------------------------------------------------------------------------
+# Data loading
+# ---------------------------------------------------------------------------
 
 def _load_nfl_stats(season: int, week: int) -> pl.DataFrame:
+    """Load all positions for the target week.
+
+    Filtering to SKILL_POSITIONS happens after the join so that K rows
+    come through matched (position='K') and are dropped cleanly at the end.
+    """
     df = data_layer.read_nfl_stats(season)
     return df.filter(
-        (pl.col("season") == season)
-        & (pl.col("week") == week)
-        & (pl.col("position").is_in(list(SKILL_POSITIONS)))
+        (pl.col("season") == season) & (pl.col("week") == week)
     )
 
 
-def _parse_sleeper_matchups(season: int, week: int) -> pl.DataFrame:
+def _build_player_metadata(season: int) -> pl.DataFrame:
+    """One row per sleeper_player_id — identity columns only.
+
+    Built from the full-season nflreadpy file so players who were inactive
+    in the target week but played in other weeks are still resolvable.
+    """
+    df = data_layer.read_nfl_stats(season)
+    return (
+        df.select(_IDENTITY_COLS + ["sleeper_player_id"])
+        .filter(pl.col("sleeper_player_id").is_not_null())
+        .unique(subset=["sleeper_player_id"], keep="first")
+    )
+
+
+# ---------------------------------------------------------------------------
+# Sleeper parsing
+# ---------------------------------------------------------------------------
+
+def _parse_sleeper_matchups(
+    season: int, week: int
+) -> tuple[pl.DataFrame, dict]:
+    """Explode Sleeper matchup rows into one row per rostered player.
+
+    DSTs (all-uppercase alphabetic team codes like 'TB', 'DEN') are stripped
+    here. Kickers are left in and removed after the join via SKILL_POSITIONS.
+
+    Points come from Sleeper's own scoring — these are the league-official
+    fantasy points, not nflreadpy's recalculation.
+
+    Returns:
+        (DataFrame of non-DST players, counts dict with 'total' and 'dst_count')
+    """
     matchups = data_layer.read_sleeper_matchups(season, week)
 
     rows = []
+    total_entries = 0
+    dst_count = 0
+
     for row in matchups.iter_rows(named=True):
         roster_id = row["roster_id"]
         matchup_id = row["matchup_id"]
@@ -50,6 +119,11 @@ def _parse_sleeper_matchups(season: int, week: int) -> pl.DataFrame:
             starters = set()
 
         for player_id, pts in players_points.items():
+            total_entries += 1
+            # Strip DSTs — Sleeper represents them as all-uppercase team abbreviations.
+            if player_id.isalpha() and player_id.isupper():
+                dst_count += 1
+                continue
             rows.append(
                 {
                     "sleeper_player_id": player_id,
@@ -61,6 +135,8 @@ def _parse_sleeper_matchups(season: int, week: int) -> pl.DataFrame:
                 }
             )
 
+    counts = {"total": total_entries, "dst_count": dst_count}
+
     if not rows:
         return pl.DataFrame(
             schema={
@@ -71,9 +147,9 @@ def _parse_sleeper_matchups(season: int, week: int) -> pl.DataFrame:
                 "is_starter": pl.Boolean,
                 "roster_total_points": pl.Float64,
             }
-        )
+        ), counts
 
-    return pl.DataFrame(rows).with_columns(
+    df = pl.DataFrame(rows).with_columns(
         pl.col("sleeper_player_id").cast(pl.Utf8),
         pl.col("roster_id").cast(pl.Int64),
         pl.col("matchup_id").cast(pl.Int64),
@@ -81,11 +157,11 @@ def _parse_sleeper_matchups(season: int, week: int) -> pl.DataFrame:
         pl.col("is_starter").cast(pl.Boolean),
         pl.col("roster_total_points").cast(pl.Float64),
     )
+    return df, counts
 
 
 def _derive_matchup_result(sleeper: pl.DataFrame) -> pl.DataFrame:
-    # For each matchup_id, the roster with higher total points wins.
-    # Ties are recorded as "L" for both (extremely rare in fantasy).
+    """Tag each row W/L based on which roster scored more in the matchup."""
     winners = (
         sleeper.group_by("matchup_id")
         .agg(
@@ -103,43 +179,202 @@ def _derive_matchup_result(sleeper: pl.DataFrame) -> pl.DataFrame:
     ).drop("winner_roster_id")
 
 
-def _print_validation(joined: pl.DataFrame, nfl_row_count: int, season: int, week: int) -> None:
+# ---------------------------------------------------------------------------
+# Post-join enrichment
+# ---------------------------------------------------------------------------
+
+def _enrich_unmatched(
+    joined: pl.DataFrame,
+    metadata: pl.DataFrame,
+    season: int,
+    week: int,
+) -> pl.DataFrame:
+    """Fill identity columns and zero-out stat columns for unmatched rows.
+
+    Unmatched rows are players Sleeper rostered but nflreadpy has no entry for
+    that week (injured, suspended, inactive). Their metadata is pulled from the
+    full-season lookup; their stat columns are filled with 0.
+    """
+    # Join metadata with a suffix to avoid name conflicts with existing columns.
+    meta_renamed = metadata.rename({c: f"{c}_meta" for c in _IDENTITY_COLS})
+    enriched = joined.join(meta_renamed, on="sleeper_player_id", how="left")
+
+    # Coalesce: prefer the value nflreadpy already populated; fall back to lookup.
+    enriched = enriched.with_columns([
+        pl.coalesce([pl.col(c), pl.col(f"{c}_meta")]).alias(c)
+        for c in _IDENTITY_COLS
+    ]).drop([f"{c}_meta" for c in _IDENTITY_COLS])
+
+    # Fill week-context columns for rows that were unmatched.
+    enriched = enriched.with_columns([
+        pl.col("season").fill_null(season).cast(pl.Int32),
+        pl.col("week").fill_null(week).cast(pl.Int32),
+        pl.col("season_type").fill_null(pl.lit("REG")),
+    ])
+
+    # Zero-fill all numeric stat columns. Skip non-stat columns and string columns.
+    _skip = {
+        *_IDENTITY_COLS,
+        *_SLEEPER_TAIL_COLS,
+        "sleeper_player_id", "season", "week", "season_type",
+        "game_id", "team", "opponent_team",
+        "fetched_at",
+        "fg_made_list", "fg_missed_list", "fg_blocked_list",
+    }
+    fill_cols = [
+        c for c in enriched.columns
+        if c not in _skip and enriched[c].dtype in (
+            pl.Float64, pl.Float32, pl.Int64, pl.Int32, pl.Int16, pl.UInt64, pl.UInt32
+        )
+    ]
+    return enriched.with_columns([
+        pl.col(c).fill_null(0) for c in fill_cols
+    ])
+
+
+def _apply_player_id_map_fallback(joined: pl.DataFrame) -> pl.DataFrame:
+    """Last-resort: fill player_id and pfr_id from player_id_map for players absent
+    from nflreadpy entirely (e.g. cut before week 1, never recorded stats).
+
+    pfr_id is surfaced so unknown-position players can be identified in the
+    validation report (e.g. 'MixoJo00' is readable as Joe Mixon).
+    Name and position remain null; these players are dropped by the SKILL_POSITIONS
+    filter and flagged in the reconciliation report.
+    """
+    id_map = (
+        data_layer.read_player_id_map()
+        .select(["sleeper_player_id", "gsis_id", "pfr_id"])
+        .filter(pl.col("sleeper_player_id").is_not_null())
+        .with_columns(pl.col("sleeper_player_id").cast(pl.Utf8))
+    )
+
+    enriched = joined.join(id_map, on="sleeper_player_id", how="left")
+    enriched = enriched.with_columns(
+        pl.coalesce([pl.col("player_id"), pl.col("gsis_id")]).alias("player_id")
+    ).drop("gsis_id")
+
+    # Add pfr_id column if it doesn't already exist (it won't — nflreadpy doesn't carry it).
+    if "pfr_id" not in joined.columns:
+        return enriched
+    # If it somehow already exists, coalesce rather than duplicate.
+    return enriched.with_columns(
+        pl.coalesce([pl.col("pfr_id"), pl.col("pfr_id_right")]).alias("pfr_id")
+    ).drop("pfr_id_right")
+
+
+# ---------------------------------------------------------------------------
+# Output ordering
+# ---------------------------------------------------------------------------
+
+def _reorder_columns(df: pl.DataFrame) -> pl.DataFrame:
+    """Put Sleeper-derived columns at the end, preserving nflreadpy column order."""
+    tail = [c for c in _SLEEPER_TAIL_COLS if c in df.columns]
+    head = [c for c in df.columns if c not in set(_SLEEPER_TAIL_COLS)]
+    return df.select(head + tail)
+
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+
+def _print_validation(
+    raw_counts: dict,
+    pre_filter: pl.DataFrame,
+    joined: pl.DataFrame,
+    season: int,
+    week: int,
+) -> None:
+    """Print a full reconciliation report.
+
+    Every Sleeper roster entry must be accounted for in exactly one bucket:
+      raw_total = dst_count + k_count + unknown_count + skill_count
+    A mismatch here means something fell through all enrichment steps.
+    """
+    raw_total = raw_counts["total"]
+    dst_count = raw_counts["dst_count"]
+    k_count = pre_filter.filter(pl.col("position") == "K").height
+    unknown = pre_filter.filter(pl.col("position").is_null())
+    unknown_count = len(unknown)
+    skill_count = len(joined)
+
+    reconciled = dst_count + k_count + unknown_count + skill_count
+    status = "✓" if reconciled == raw_total else f"✗  ({reconciled} ≠ {raw_total})"
+
     print(f"\n=== Validation Report: season={season} week={week} ===")
-    print(f"Row count: {len(joined)}")
+    print(f"Total Sleeper roster entries: {raw_total}")
+    print(f"  DSTs stripped:              {dst_count}")
+    print(f"  Kickers removed:            {k_count}")
+    print(f"  Unknown position (dropped): {unknown_count}")
+    if unknown_count > 0:
+        for row in unknown.select(
+            ["sleeper_player_id", "player_id", "pfr_id", "roster_id"]
+        ).iter_rows(named=True):
+            pfr = row.get("pfr_id") or "—"
+            pid = row.get("player_id") or "—"
+            print(f"    → sleeper_id={row['sleeper_player_id']}  pfr_id={pfr}  gsis={pid}  roster={row['roster_id']}")
+    print(f"  Skill players in output:    {skill_count}")
+    print(f"Reconciled: {dst_count}+{k_count}+{unknown_count}+{skill_count} = {reconciled}/{raw_total} {status}")
+
+    zero_stat = joined.filter(pl.col("fantasy_points") == 0.0).height
+    print(f"\nZero-stat rows (inactive this week): {zero_stat}/{skill_count}")
 
     key_cols = ["player_display_name", "position", "fantasy_points", "matchup_result"]
     for col in key_cols:
         if col in joined.columns:
             null_count = joined[col].is_null().sum()
-            null_rate = null_count / len(joined) if len(joined) > 0 else 0.0
-            print(f"Null rate [{col}]: {null_rate:.1%} ({null_count}/{len(joined)})")
+            if null_count > 0:
+                print(f"  ⚠ Null [{col}]: {null_count} rows")
 
-    distinct_teams = joined["team"].n_unique() if "team" in joined.columns else "N/A"
-    distinct_positions = (
-        sorted(joined["position"].drop_nulls().unique().to_list())
-        if "position" in joined.columns
-        else "N/A"
-    )
-    print(f"Distinct teams: {distinct_teams}")
-    print(f"Distinct positions: {distinct_positions}")
+    if "position" in joined.columns:
+        pos_counts = joined["position"].value_counts().sort("position")
+        print(f"Position breakdown: {dict(zip(pos_counts['position'].to_list(), pos_counts['count'].to_list()))}")
 
-    if nfl_row_count > 0:
-        coverage = len(joined) / nfl_row_count
-        print(
-            f"Join coverage: {len(joined)}/{nfl_row_count} ({coverage:.1%})"
-            " NFL skill-position players matched in Sleeper"
-        )
 
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 def run(season: int, week: int) -> None:
     nfl = _load_nfl_stats(season, week)
-    sleeper = _parse_sleeper_matchups(season, week)
+    metadata = _build_player_metadata(season)
+    sleeper, raw_counts = _parse_sleeper_matchups(season, week)
     sleeper = _derive_matchup_result(sleeper)
 
-    joined = nfl.join(sleeper, on="sleeper_player_id", how="inner")
+    # Left join: every rostered non-DST player stays in the output.
+    joined = sleeper.join(nfl, on="sleeper_player_id", how="left")
+
+    # Enrich unmatched rows with metadata + zero stats.
+    joined = _enrich_unmatched(joined, metadata, season, week)
+
+    # Final fallback: player_id and pfr_id from id map for players absent from nflreadpy.
+    joined = _apply_player_id_map_fallback(joined)
+
+    # Capture pre-filter state for the reconciliation report.
+    pre_filter = joined
+
+    # Drop K and any player whose position is still unresolvable.
+    joined = joined.filter(pl.col("position").is_in(list(SKILL_POSITIONS)))
+
+    # Restore canonical column ordering (pfr_id is not part of the output schema).
+    if "pfr_id" in joined.columns:
+        joined = joined.drop("pfr_id")
+    joined = _reorder_columns(joined)
 
     data_layer.write_join_nfl_sleeper_weekly(joined, season, week)
-    _print_validation(joined, len(nfl), season, week)
+
+    # Write remainders — unknown-position players the join could not resolve.
+    # Empty DataFrame = clean join. Auditor reads this to decide whether to act.
+    unknown = pre_filter.filter(pl.col("position").is_null())
+    remainders = unknown.select([
+        "sleeper_player_id", "player_id", "pfr_id", "roster_id",
+        "matchup_id", "sleeper_points", "is_starter", "roster_total_points",
+    ]) if "pfr_id" in unknown.columns else unknown.select([
+        "sleeper_player_id", "player_id", "roster_id",
+        "matchup_id", "sleeper_points", "is_starter", "roster_total_points",
+    ])
+    data_layer.write_join_remainders(remainders, season, week)
+
+    _print_validation(raw_counts, pre_filter, joined, season, week)
 
 
 if __name__ == "__main__":
@@ -148,3 +383,6 @@ if __name__ == "__main__":
     parser.add_argument("--week", type=int, required=True)
     args = parser.parse_args()
     run(args.season, args.week)
+    # Audit runs automatically after every join to resolve any remainders.
+    import audit_join
+    audit_join.audit(args.season, args.week)

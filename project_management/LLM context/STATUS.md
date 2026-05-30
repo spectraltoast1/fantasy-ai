@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-05-17
+**Last updated:** 2026-05-30
 **Target ship:** NFL kickoff, mid August 2026
 
 ---
@@ -29,12 +29,13 @@ IMPORTANT TECH NOTE: All data I/O goes through application/data/data_layer.py. T
 ## Today (the current status toward v1)
 
 > most recent build
-Built a transform script at application/data/transforms/join_nfl_sleeper_weekly.py that joins 2025 nflreadpy player stats with 2025 Sleeper matchup data. Executed for a 2025 week 4.
+Completed the nfl_sleeper weekly join pipeline. Rewrote join_nfl_sleeper_weekly.py to use a left join (Sleeper as authoritative left table), ensuring all rostered skill-position players appear in the output even when nflreadpy has no stats for them that week (injured, suspended, inactive). Built audit_join.py to resolve any remaining unknowns using the Sleeper player registry. Added fetch_players() to sleeper.py to cache the Sleeper /players/nfl endpoint. Join output is now considered "closed" — every rostered skill player is accounted for. All four weeks of 2025 (weeks 1–4) have been run and verified.
 
 > built
     - nflreadpy fetcher
-    - sleeper fetcher
-    - nfl_sleeper join
+    - sleeper fetcher (includes fetch_players() for Sleeper player registry)
+    - nfl_sleeper join (left join, Sleeper-authoritative)
+    - audit_join (resolves unknown-position remainders post-join)
 
 > not yet built
     >> backend
@@ -62,17 +63,21 @@ Team overview, league standings, and matchup review. Powered by nflreadpy and Sl
 - **V6+** — More complex analytics (TBD)
 
 ## Known Scope Exclusions
-**DST/K (V1):** DST and kicker positional data is excluded from V1. The nflreadpy → Sleeper join has ~85.5% player ID coverage; DST/K are the primary gap due to missing Sleeper mappings. All V1 transform and dashboard work assumes skill positions only (QB, RB, WR, TE). Revisit in a future version.
+**DST/K (V1):** DST and kicker positional data is excluded from V1. DSTs are stripped at join time by detecting team abbreviations in the Sleeper matchup data. Kickers are filtered out via the SKILL_POSITIONS filter applied after the join. All V1 transform and dashboard work assumes skill positions only (QB, RB, WR, TE).
 
-**Waiver wire (V1):** Full waiver wire analysis requires the Sleeper full player database fetcher (all available players, not just rostered). This fetcher does not exist yet and is scoped to V2. A separate sleeper_players.py fetcher is the planned approach — same separation of concerns as other fetchers, once-daily call cadence.
+**Waiver wire (V1):** Full waiver wire analysis requires querying the full available player pool, not just rostered players. The Sleeper player registry (fetch_players() in sleeper.py, cached at cache/sleeper/players.parquet) now exists and is used by the auditor to resolve unknown-position players at join time. Full waiver wire analysis against the complete available player pool is still V2 scope.
+
+**IR roster overages:** Fantasy managers can use IR slots to carry more than the standard 17 roster spots. This is accurate data — the join reconciliation report handles it correctly and counts whatever Sleeper reports. Expect to see 18-player rosters from 1–2 teams per week during the season, particularly early when injury-stashing is common.
+
+**Zero-stat row context:** Rostered players who did not play in a given week (injured, suspended, inactive, not yet activated) appear in the join output with all stat columns at 0.0. The join correctly includes them, but provides no signal for why they scored 0. Injury status and roster status context would require a separate fetch from Sleeper's injury/status endpoint. This is a known gap — treat 0-stat rows as "rostered, did not contribute" without assuming a specific reason.
 
 ## Next single highest-leverage move
 
-run join_nfl_sleeper_weekly.py for weeks 1, 2, and 3, validate each output, then proceed to power rankings and points consistency
+TBD
 
 ## The step after (unconfirmed, subject to change)
 
-Use joins from 2025 season to create power ranking and point consistency analysi
+Use joins from 2025 season to create power rankings and points consistency analysis
 
 ## V1 Dashboard Build Order
 

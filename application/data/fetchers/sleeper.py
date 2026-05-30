@@ -21,6 +21,11 @@ CACHE_DIR = _DATA_DIR / "cache" / "sleeper"
 
 _SLEEPER_BASE = "https://api.sleeper.app/v1"
 
+_PLAYERS_CACHE_MAX_AGE_SECONDS = 86_400  # 24 hours
+
+# Columns to keep from the /players/nfl response — the full payload has 100+ fields.
+_PLAYERS_KEEP_COLS = ["sleeper_player_id", "full_name", "position", "team", "status"]
+
 
 # ---------------------------------------------------------------------------
 # Private helpers
@@ -81,6 +86,46 @@ def _write_parquet_from_list(data: list, path: Path, label: str) -> bool:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+def fetch_players(force: bool = False) -> None:
+    """Cache the Sleeper /players/nfl endpoint to players.parquet.
+
+    Skips the network call if the cache file is less than 24 hours old,
+    unless force=True. The full response is ~5 MB with 100+ fields per player;
+    we normalise it down to just the columns needed for position resolution.
+
+    Position values in this endpoint use Sleeper's internal codes:
+      skill positions: QB, RB, WR, TE
+      kickers:         K
+      defense/ST:      DEF  (not team abbreviations like in matchup data)
+    """
+    path = CACHE_DIR / "players.parquet"
+
+    if not force and path.exists():
+        age = time.time() - path.stat().st_mtime
+        if age < _PLAYERS_CACHE_MAX_AGE_SECONDS:
+            print(f"  players cache is fresh ({age / 3600:.1f}h old) — skipping fetch.")
+            return
+
+    print("  Fetching /players/nfl from Sleeper...")
+    resp = requests.get(f"{_SLEEPER_BASE}/players/nfl")
+    resp.raise_for_status()
+    raw: dict = resp.json()
+
+    rows = []
+    for player_id, player in raw.items():
+        rows.append({
+            "sleeper_player_id": str(player_id),
+            "full_name": player.get("full_name") or player.get("last_name", ""),
+            "position": player.get("position"),
+            "team": player.get("team"),
+            "status": player.get("status"),
+        })
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(rows).write_parquet(path)
+    print(f"  players: {len(rows)} players → {path}")
+
 
 def backfill(league_id: str, year: int) -> None:
     """Fetch all completed regular-season weeks and write parquet snapshots."""
@@ -148,6 +193,9 @@ def refresh(league_id: str) -> None:
     resp.raise_for_status()
     _write_json(resp.json(), CACHE_DIR / "losers_bracket.json")
 
+    # Players registry — refreshed at most once per 24 hours.
+    fetch_players()
+
     # Current week snapshots — same path pattern as backfill
     resp = requests.get(f"{_SLEEPER_BASE}/league/{league_id}/matchups/{week}")
     resp.raise_for_status()
@@ -173,7 +221,7 @@ def refresh(league_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    usage = "Usage: sleeper.py backfill <year> | sleeper.py refresh"
+    usage = "Usage: sleeper.py backfill <year> | sleeper.py refresh | sleeper.py fetch-players"
 
     if len(sys.argv) < 2:
         print(usage)
@@ -198,6 +246,9 @@ if __name__ == "__main__":
         _year = int(_state["season"])
         _league_id = league_resolver.resolve_league_id(_year)
         refresh(_league_id)
+
+    elif cmd == "fetch-players":
+        fetch_players(force=True)
 
     else:
         print(usage)

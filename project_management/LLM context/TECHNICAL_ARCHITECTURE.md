@@ -2,7 +2,7 @@
 
 > Engineering context document for Claude Code. Describes the stack, folder structure, data layer design, and technical principles. Updated regularly as the project evolves.
 
-**Last reviewed:** 2026-05-29
+**Last reviewed:** 2026-05-30
 
 ---
 
@@ -35,9 +35,13 @@ Winning a redraft fantasy football championship is about more than just collecti
 - **V6+** — More complex analytics (TBD)
 
 ## Known Scope Exclusions
-**DST/K (V1):** Excluded from all V1 transforms and dashboard work. The nflreadpy → Sleeper ID join has ~85.5% coverage; DST/K are the primary gap. All joins and visualizations should assume skill positions only: QB, RB, WR, TE. Do not attempt to handle DST/K in V1 code — skip or drop non-joining rows at the join stage.
+**DST/K (V1):** Excluded from all V1 transforms and dashboard work. DSTs are stripped at join time via team abbreviation detection (Sleeper represents DSTs as all-uppercase team codes in matchup data). Kickers are removed by the SKILL_POSITIONS filter applied after the join. All joins and visualizations assume skill positions only: QB, RB, WR, TE.
 
-**Waiver wire / full player pool (V1):** The current Sleeper fetcher captures rostered players only. Full player pool analysis is V2 scope. When built, the Sleeper full player database fetch will be a separate fetcher (sleeper_players.py) per the separation of concerns principle — one concern per script, once-daily cadence.
+**Waiver wire / full player pool (V1):** The Sleeper player registry is now cached via fetch_players() in sleeper.py (cache/sleeper/players.parquet, max once per 24 hours). This cache is used by the auditor at join time to resolve unknown-position players. Full player pool analysis against all available (non-rostered) players remains V2 scope.
+
+**IR roster overages:** Managers using IR slots can carry more than the standard 17 roster spots. The join reconciliation handles this correctly — it counts whatever Sleeper reports. Expect 18-player rosters from 1–2 teams per week in-season.
+
+**Zero-stat row context:** Rostered players who did not play (injured, suspended, inactive, not yet activated) appear in the join output with all stat columns at 0.0. No signal is provided for why they scored 0. Requires a separate Sleeper injury/status endpoint fetch to resolve. Treat 0-stat rows as "rostered, did not contribute" without assuming a specific reason.
 
 ---
 
@@ -62,11 +66,14 @@ fantasy-ai/
     │   │   └── nfl_stats.py        # ✅ built
             └── sleeper.py          # ✅ built
     │   ├── cache/                  # current state (gitignored)
-    │   │   └── player_id_map.parquet  # gsis_id → sleeperPlayerId mapping
+    │   │   ├── player_id_map.parquet  # gsis_id → sleeperPlayerId mapping
+    │   │   └── sleeper/
+    │   │       └── players.parquet    # Sleeper /players/nfl registry, refreshed ≤ once/day
     │   └── snapshots/              # time-series parquet (gitignored)
-            └── nfl_sleeper_weekly_joined/ # output of nfl_sleeper_weekly_join.py
-                └── nfl_sleeper_joined_2025/
-                    └── ... # nfl/sleeper joined parquet files for each week of the 2025 season
+            └── nfl_sleeper_weekly_joined/
+                └── 2025/
+                    ├── weekly_joined_2025_w{week}.parquet   # join output, one per week
+                    └── remainders_2025_w{week}.parquet      # unresolved players; empty = clean join
     │       └── nflreadpy/
     │           └── nfl_stats_2025.parquet  # 18,539 rows × 121 cols, weeks 1-18
             └── sleeper/
@@ -119,7 +126,7 @@ non-negotiable architectural rule.
 | Source | Storage | Rationale |
 |---|---|---|
 - external
-| Sleeper | cache/ only | Roster/matchup/injury state - current week only needed |
+| Sleeper | cache/ + snapshots/ | Matchup/roster/transaction state to snapshots/ (weekly history); player registry to cache/ (current state only, refreshed ≤ once/day) |
 | nflreadpy | snapshots/ only | Weekly player stats - trend visualization requires history |
 | LeagueLogs | cache/ + snapshots/ | Current values to cache; snapshot weekly for trend derivation (trend fields are stubbed at zero in the API) |
 | Odds API | cache/ only | Current week lines only needed for v1 |
@@ -169,18 +176,19 @@ All functions return polars DataFrames
 player_id in load_player_stats() is gsis_id format ("00-0023459")
 Snap count join path: load_snap_counts().pfr_player_id →
 load_ff_playerids().pfr_id → gsis_id
-~85.5% sleeper ID join coverage expected across all active NFL players (DST/K lack Sleeper mappings)
-~37.5% join coverage on nfl_sleeper_weekly_joined is expected and correct for a 10-team league; this is not a data quality issue
+Join coverage on nfl_sleeper_weekly_joined targets 100% of rostered skill-position players per week. The join is left-joined from Sleeper (authoritative), so players without nflreadpy stats that week (injured, inactive) appear with 0-stat rows rather than being dropped. The audit step resolves any remaining unknowns via the Sleeper player registry.
 
 ## sleeper.py Notes
 
 Player IDs are strings (e.g. "2307") throughout - never cast to int. This is the sleeperPlayerId join key.
 Offseason-safe week logic: season_type == "offseason" returns 18 completed weeks, not 0. season_type == "pre" is the only state that returns 0.
-Cache files are JSON. Snapshot files are parquet partitioned by season: snapshots/sleeper/<year>/
+Cache files are JSON (league/user/roster state) or parquet (players registry). Snapshot files are parquet partitioned by season: snapshots/sleeper/<year>/
 league_resolver.py is the only file that touches SLEEPER_USERNAME. The fetcher accepts league_id as a parameter only.
 refresh() current-week snapshot writes will silently skip with an explicit log message during offseason - this is expected behavior.
 
 players_points in matchup snapshots is stored as a serialized JSON string (map of sleeperPlayerId → points). Parse with json.loads before joining. Same applies to starters (JSON array of starter IDs).
+
+fetch_players() caches the full Sleeper /players/nfl endpoint to cache/sleeper/players.parquet. Skips the network call if the cache is less than 24 hours old; pass force=True to override. Called automatically by refresh() and by audit_join.py when the cache is stale or missing. Can also be triggered standalone: python fetchers/sleeper.py fetch-players. Position values in this endpoint use Sleeper's internal codes: QB/RB/WR/TE for skill, K for kicker, DEF for defense.
 
 ---
 
@@ -189,9 +197,9 @@ players_points in matchup snapshots is stored as a serialized JSON string (map o
 One script per join in `application/data/transforms/`. Each transform reads 
 via data_layer.py, performs a single join, and writes via data_layer.py.
 
-- `join_nfl_sleeper_weekly.py` — joins nflreadpy weekly stats + Sleeper 
-  matchup data on sleeperPlayerId. Output: weekly_joined_{season}_w{week:02d}.parquet.
-  Accepts --season and --week as required CLI args.
+- `join_nfl_sleeper_weekly.py` — joins nflreadpy weekly stats + Sleeper matchup data on sleeperPlayerId. Sleeper is the authoritative left table — all rostered skill-position players appear in the output regardless of whether nflreadpy has stats for them that week. DSTs are stripped at parse time; kickers are removed by the SKILL_POSITIONS filter after the join. Inactive/injured players appear with 0-stat rows. Writes weekly_joined_{season}_w{week:02d}.parquet and a remainders file. Calls audit_join automatically on completion. Accepts --season and --week as required CLI args.
+
+- `audit_join.py` — audits and repairs the weekly join output for unresolved players. Reads the remainders file, checks the Sleeper player registry (refreshing it if stale), classifies each remainder as skill (appended to joined file with 0 stats), K/DEF (confirmed and discarded), or truly unknown (left in remainders for manual review). Idempotent — safe to re-run. Called automatically by join_nfl_sleeper_weekly.py; can also be run standalone with --season and --week args.
 
 ## Technical Principles
 
