@@ -360,6 +360,13 @@ def run(season: int, week: int) -> None:
         joined = joined.drop("pfr_id")
     joined = _reorder_columns(joined)
 
+    # Guarantee season/week are present and correctly typed before the append.
+    # The single season file is keyed on these columns for its dedup guard.
+    joined = joined.with_columns(
+        pl.lit(season).cast(pl.Int32).alias("season"),
+        pl.lit(week).cast(pl.Int32).alias("week"),
+    )
+
     data_layer.write_join_nfl_sleeper_weekly(joined, season, week)
 
     # Write remainders — unknown-position players the join could not resolve.

@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-05-30
+**Last updated:** 2026-05-31
 **Target ship:** NFL kickoff, mid August 2026
 
 ---
@@ -29,6 +29,9 @@ IMPORTANT TECH NOTE: All data I/O goes through application/data/data_layer.py. T
 ## Today (the current status toward v1)
 
 > most recent build
+Changed the nfl_sleeper weekly join to append each week's data into a single per-season file (snapshots/nfl_sleeper_weekly_joined/season_{season}.parquet) instead of one parquet per week. The output is still weekly-grained (one row per player per week); only the storage layout changed from many week files to one season file. The append logic lives in data_layer.py and is idempotent — re-running a week replaces its rows via a (season, week) dedup guard. The audit_join gap-closing step is unchanged; it now operates on a week-slice of the season file. Re-ran and verified weeks 1–4 of 2025 (594 rows total).
+
+> prior build
 Completed the nfl_sleeper weekly join pipeline. Rewrote join_nfl_sleeper_weekly.py to use a left join (Sleeper as authoritative left table), ensuring all rostered skill-position players appear in the output even when nflreadpy has no stats for them that week (injured, suspended, inactive). Built audit_join.py to resolve any remaining unknowns using the Sleeper player registry. Added fetch_players() to sleeper.py to cache the Sleeper /players/nfl endpoint. Join output is now considered "closed" — every rostered skill player is accounted for. All four weeks of 2025 (weeks 1–4) have been run and verified.
 
 > built
@@ -85,7 +88,7 @@ Dashboard build structure:
 Build first
     - Power rankings league overview
         What it shows: Composite team strength score with positional breakdown (QB/RB/WR/TE) as a detail layer.
-        Data needed: nflreadpy weekly stats + Sleeper roster data + weekly_joined transform.
+        Data needed: nflreadpy weekly stats + Sleeper roster data + weekly data from the season join (nfl_sleeper_weekly_joined transform → season_{season}.parquet).
     - Points scored + consistency league overview
         What it shows: Average weekly points per team and a consistency signal — stable vs. high-variance output.
         Data needed: Sleeper matchup snapshots only. No join required.
@@ -99,10 +102,10 @@ Build second
         Data needed: Sleeper transaction + waiver history. One-time AI synthesis pass per manager, output stored as static JSON or markdown.
     - Positional strength vs. league average team overview
         What it shows: Your team's output by position compared to league average. Identifies tradeable surplus and gaps to address.
-        Data needed: weekly_joined transform.
+        Data needed: weekly data from the season join (nfl_sleeper_weekly_joined transform → season_{season}.parquet).
     - Head-to-head position breakdown matchup overview
         What it shows: Your lineup vs. opponent's lineup by position — where's the edge, where's the risk.
-        Data needed: Sleeper current roster + weekly_joined.
+        Data needed: Sleeper current roster + weekly data from the season join (season_{season}.parquet).
 
 Build third
     - Production consistency per player team overview

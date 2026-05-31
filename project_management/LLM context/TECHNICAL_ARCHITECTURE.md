@@ -71,8 +71,8 @@ fantasy-ai/
     │   │       └── players.parquet    # Sleeper /players/nfl registry, refreshed ≤ once/day
     │   └── snapshots/              # time-series parquet (gitignored)
             └── nfl_sleeper_weekly_joined/
+                ├── season_2025.parquet                  # join output, all weeks appended (one file per season)
                 └── 2025/
-                    ├── weekly_joined_2025_w{week}.parquet   # join output, one per week
                     └── remainders_2025_w{week}.parquet      # unresolved players; empty = clean join
     │       └── nflreadpy/
     │           └── nfl_stats_2025.parquet  # 18,539 rows × 121 cols, weeks 1-18
@@ -133,7 +133,7 @@ non-negotiable architectural rule.
 | FantasyPros | cache/ only | Current projections and news only needed for v1 |
 
 - internal
-| nfl_sleeper_weekly_joined transform | snapshots/nfl_sleeper_weekly_joined/ | Joined output — one folder per season, one file per season/week, append-only
+| nfl_sleeper_weekly_joined transform | snapshots/nfl_sleeper_weekly_joined/ | Joined output — one file per season (season_{season}.parquet), each week appended with a (season, week) dedup guard
 
 These assignments reflect current v1 decisions, not permanent rules. Future versions may snapshot additional sources (e.g., odds history for post-hoc analysis).
 
@@ -197,7 +197,7 @@ fetch_players() caches the full Sleeper /players/nfl endpoint to cache/sleeper/p
 One script per join in `application/data/transforms/`. Each transform reads 
 via data_layer.py, performs a single join, and writes via data_layer.py.
 
-- `join_nfl_sleeper_weekly.py` — joins nflreadpy weekly stats + Sleeper matchup data on sleeperPlayerId. Sleeper is the authoritative left table — all rostered skill-position players appear in the output regardless of whether nflreadpy has stats for them that week. DSTs are stripped at parse time; kickers are removed by the SKILL_POSITIONS filter after the join. Inactive/injured players appear with 0-stat rows. Writes weekly_joined_{season}_w{week:02d}.parquet and a remainders file. Calls audit_join automatically on completion. Accepts --season and --week as required CLI args.
+- `join_nfl_sleeper_weekly.py` — joins nflreadpy weekly stats + Sleeper matchup data on sleeperPlayerId. Sleeper is the authoritative left table — all rostered skill-position players appear in the output regardless of whether nflreadpy has stats for them that week. DSTs are stripped at parse time; kickers are removed by the SKILL_POSITIONS filter after the join. Inactive/injured players appear with 0-stat rows. Appends the week's rows to the single season_{season}.parquet (replacing any existing rows for that (season, week) combo) and writes a remainders file. Calls audit_join automatically on completion. Accepts --season and --week as required CLI args.
 
 - `audit_join.py` — audits and repairs the weekly join output for unresolved players. Reads the remainders file, checks the Sleeper player registry (refreshing it if stale), classifies each remainder as skill (appended to joined file with 0 stats), K/DEF (confirmed and discarded), or truly unknown (left in remainders for manual review). Idempotent — safe to re-run. Called automatically by join_nfl_sleeper_weekly.py; can also be run standalone with --season and --week args.
 

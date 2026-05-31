@@ -45,14 +45,37 @@ def read_sleeper_matchups(season: int, week: int) -> pl.DataFrame:
 
 # --- Join: NFL + Sleeper Weekly ---
 
+def _join_season_path(season: int) -> Path:
+    return _SNAPSHOT_DIR / "nfl_sleeper_weekly_joined" / f"season_{season}.parquet"
+
+
+def read_join_season(season: int) -> pl.DataFrame:
+    """Read the full season join file (all weeks)."""
+    return pl.read_parquet(_join_season_path(season))
+
+
 def read_join_nfl_sleeper_weekly(season: int, week: int) -> pl.DataFrame:
-    path = _SNAPSHOT_DIR / "nfl_sleeper_weekly_joined" / str(season) / f"weekly_joined_{season}_w{week:02d}.parquet"
-    return pl.read_parquet(path)
+    """Read a single week's slice from the season join file."""
+    return read_join_season(season).filter(
+        (pl.col("season") == season) & (pl.col("week") == week)
+    )
 
 
 def write_join_nfl_sleeper_weekly(df: pl.DataFrame, season: int, week: int) -> None:
-    path = _SNAPSHOT_DIR / "nfl_sleeper_weekly_joined" / str(season) / f"weekly_joined_{season}_w{week:02d}.parquet"
+    """Append a week's rows to the single season join file.
+
+    `df` is treated as the complete set of rows for (season, week). If the
+    season file already exists, any rows matching the (season, week) combo are
+    dropped first (dedup guard) so re-running a week replaces it rather than
+    duplicating. Otherwise the week's rows seed a new season file.
+    """
+    path = _join_season_path(season)
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        existing = pl.read_parquet(path).filter(
+            ~((pl.col("season") == season) & (pl.col("week") == week))
+        )
+        df = pl.concat([existing, df])
     df.write_parquet(path)
 
 
