@@ -200,3 +200,8 @@ application/data_sources.txt
 *.log
 logs/
 .claude/
+
+# Design playground (front-end): deps + symlinked live data; source is tracked
+application/design_playground/node_modules/
+application/design_playground/dist/
+application/design_playground/public/data/
