@@ -2,7 +2,7 @@
 
 > Engineering context document for Claude Code. Describes the stack, folder structure, data layer design, and technical principles. Updated regularly as the project evolves.
 
-**Last reviewed:** 2026-05-30
+**Last reviewed:** 2026-05-31
 
 ---
 
@@ -16,13 +16,13 @@ Winning a redraft fantasy football championship is about more than just collecti
 
 ## Tech Stack
 
-- **Language:** Python end-to-end
+- **Language:** Python for the data layer/pipeline; JS/React in the front-end playground
 - **Data manipulation:** polars (not pandas) - nflreadpy returns polars DataFrames; use polars syntax throughout
 - **NFL stats:** nflreadpy (successor to deprecated nfl_data_py) - returns polars DataFrames
-- **Dashboard:** Dash + Plotly (not yet built)
+- **Dashboard / front-end:** stack not finalized. Original plan was Dash + Plotly; currently leaning React + DuckDB (per the design playground), but undecided.
+- **Query layer:** DuckDB — SQL directly over parquet. Adopted as the query layer (in use now in the design playground); carries into the production app.
 - **Storage:** JSON (cache), parquet (snapshots), JSONL (advisor log - future)
 - **HTTP:** requests library
-- **Future query layer:** DuckDB (v2+, not in scope for v1)
 
 ---
 
@@ -59,7 +59,10 @@ fantasy-ai/
 ├── _deprecated/                    # old flat fetchers, do not modify
 ├── _deferred/                      # synthesis pipeline, parked for v2
 └── application/
-    ├── dashboard/                  # Dash app (not yet built)
+    ├── dashboard/                  # production front-end (not yet built; stack TBD)
+    ├── design_playground/          # React + DuckDB-WASM front-end sketchpad (Node/Vite)
+    │   ├── src/                     #   App.jsx (Power Rankings), db.js (DuckDB-WASM loader)
+    │   └── public/data/             #   symlink → snapshots/.../season_2025.parquet (gitignored)
     ├── data/
         ├── data_layer.py           # ✅ built — centralized read/write module
     │   ├── fetchers/               # one Python script per source (tracked in git)

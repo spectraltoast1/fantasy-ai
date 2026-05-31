@@ -29,16 +29,17 @@ IMPORTANT TECH NOTE: All data I/O goes through application/data/data_layer.py. T
 ## Today (the current status toward v1)
 
 > most recent build
-Changed the nfl_sleeper weekly join to append each week's data into a single per-season file (snapshots/nfl_sleeper_weekly_joined/season_{season}.parquet) instead of one parquet per week. The output is still weekly-grained (one row per player per week); only the storage layout changed from many week files to one season file. The append logic lives in data_layer.py and is idempotent — re-running a week replaces its rows via a (season, week) dedup guard. The audit_join gap-closing step is unchanged; it now operates on a week-slice of the season file. Re-ran and verified weeks 1–4 of 2025 (594 rows total).
+Stood up a front-end design playground (application/design_playground/) to prototype the real dashboard's look/feel against live data. React + Vite + DuckDB-WASM: it runs SQL directly against season_2025.parquet in the browser (no export step), mirroring the eventual DuckDB-over-parquet approach. First panel: Power Rankings — teams ranked by PPG with a QB/RB/WR/TE positional-strength breakdown, record, consistency badge, and a 0–100 power score. Throwaway sketchpad, not the production front-end. (Note: required installing Node via Homebrew.)
 
 > prior build
-Completed the nfl_sleeper weekly join pipeline. Rewrote join_nfl_sleeper_weekly.py to use a left join (Sleeper as authoritative left table), ensuring all rostered skill-position players appear in the output even when nflreadpy has no stats for them that week (injured, suspended, inactive). Built audit_join.py to resolve any remaining unknowns using the Sleeper player registry. Added fetch_players() to sleeper.py to cache the Sleeper /players/nfl endpoint. Join output is now considered "closed" — every rostered skill player is accounted for. All four weeks of 2025 (weeks 1–4) have been run and verified.
+Changed the nfl_sleeper weekly join to append each week's data into a single per-season file (snapshots/nfl_sleeper_weekly_joined/season_{season}.parquet) instead of one parquet per week. The output is still weekly-grained (one row per player per week); only the storage layout changed from many week files to one season file. The append logic lives in data_layer.py and is idempotent — re-running a week replaces its rows via a (season, week) dedup guard. The audit_join gap-closing step is unchanged; it now operates on a week-slice of the season file. Re-ran and verified weeks 1–4 of 2025 (594 rows total).
 
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
     - nfl_sleeper join (left join, Sleeper-authoritative)
     - audit_join (resolves unknown-position remainders post-join)
+    - design playground (React + DuckDB-WASM, reads live parquet) — Power Rankings panel
 
 > not yet built
     >> backend
@@ -47,7 +48,8 @@ Completed the nfl_sleeper weekly join pipeline. Rewrote join_nfl_sleeper_weekly.
         - FantasyPros fetcher
         - weather fetcher
     >> frontend
-        - Dash dashboard
+        - production dashboard — DuckDB is the query layer (decided);
+          front-end framework leaning React but not finalized (Dash was the original plan)
 
 > helpful historical context
 A deferred folder contains earlier work on transcript synthesis. This is intentionally parked.
@@ -76,7 +78,7 @@ Team overview, league standings, and matchup review. Powered by nflreadpy and Sl
 
 ## Next single highest-leverage move
 
-TBD
+Iterate the design playground to decide the production front-end stack (Dash vs. React + DuckDB) and the first panels worth building.
 
 ## The step after (unconfirmed, subject to change)
 
