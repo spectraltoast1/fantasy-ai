@@ -21,6 +21,8 @@ Winning a redraft fantasy football championship is about more than just collecti
 - **NFL stats:** nflreadpy (successor to deprecated nfl_data_py) - returns polars DataFrames
 - **Dashboard / front-end:** stack not finalized. Original plan was Dash + Plotly; currently leaning React + DuckDB (per the design playground), but undecided.
 - **Query layer:** DuckDB — SQL directly over parquet. Adopted as the query layer (in use now in the design playground); carries into the production app.
+- **Market values:** LeagueLogs API (keyed on sleeperPlayerId; QB/RB/WR/TE only; visible attribution required)
+- **Scheduling:** launchd (macOS) for daily fetchers
 - **Storage:** JSON (cache), parquet (snapshots), JSONL (advisor log - future)
 - **HTTP:** requests library
 
@@ -30,7 +32,7 @@ Winning a redraft fantasy football championship is about more than just collecti
 - **V1** — Team overview, league standings, matchup review (no AI)
 - **V2** — Waiver wire analysis (requires Sleeper full player database fetcher)
 - **V3** — Start/sit recommendations (requires FantasyPros projections fetcher)
-- **V4** — Trade analysis (requires LeagueLogs player valuation)
+- **V4** — Trade analysis (LeagueLogs market value — data collection started 2026-05-31; features still V4)
 - **V5** — AI-powered insights (major update, builds on complete data layer)
 - **V6+** — More complex analytics (TBD)
 
@@ -66,13 +68,19 @@ fantasy-ai/
     ├── data/
         ├── data_layer.py           # ✅ built — centralized read/write module
     │   ├── fetchers/               # one Python script per source (tracked in git)
-    │   │   └── nfl_stats.py        # ✅ built
-            └── sleeper.py          # ✅ built
+    │   │   ├── nfl_stats.py        # ✅ built
+    │   │   ├── sleeper.py          # ✅ built
+    │   │   ├── leaguelogs.py       # ✅ built — daily market-value snapshots
+    │   │   └── scheduler/          #   tracked launchd plist + README for the daily snapshot job
+    │   │       ├── com.fantasyai.leaguelogs-snapshot.plist
+    │   │       └── README.md
     │   ├── cache/                  # current state (gitignored)
     │   │   ├── player_id_map.parquet  # gsis_id → sleeperPlayerId mapping
     │   │   └── sleeper/
     │   │       └── players.parquet    # Sleeper /players/nfl registry, refreshed ≤ once/day
     │   └── snapshots/              # time-series parquet (gitignored)
+            ├── leaguelogs/
+            │   └── market_values.parquet            # daily market-value history, all profiles
             └── nfl_sleeper_weekly_joined/
                 ├── season_2025.parquet                  # join output, all weeks appended (one file per season)
                 └── 2025/
@@ -131,7 +139,7 @@ non-negotiable architectural rule.
 - external
 | Sleeper | cache/ + snapshots/ | Matchup/roster/transaction state to snapshots/ (weekly history); player registry to cache/ (current state only, refreshed ≤ once/day) |
 | nflreadpy | snapshots/ only | Weekly player stats - trend visualization requires history |
-| LeagueLogs | cache/ + snapshots/ | Current values to cache; snapshot weekly for trend derivation (trend fields are stubbed at zero in the API) |
+| LeagueLogs | snapshots/ only | Daily market-value snapshot of all profiles (redraft + dynasty). API serves only "now" (no history endpoint), so the value time-series exists only if we snapshot it. Keyed on sleeperPlayerId. |
 | Odds API | cache/ only | Current week lines only needed for v1 |
 | FantasyPros | cache/ only | Current projections and news only needed for v1 |
 
@@ -168,7 +176,7 @@ Current fetcher state:
 - `fantasypros.py` - does not exist
 - `weather.py` - does not exist
 - `nfl_stats.py` - backfill + refresh modes, polars, player ID map
-- `leaguelogs.py` - does not exist yet
+- `leaguelogs.py` - built; daily market-value snapshots (all profiles), scheduled by launchd at 4am ET
 
 ## nflreadpy Notes
 
@@ -192,6 +200,16 @@ refresh() current-week snapshot writes will silently skip with an explicit log m
 players_points in matchup snapshots is stored as a serialized JSON string (map of sleeperPlayerId → points). Parse with json.loads before joining. Same applies to starters (JSON array of starter IDs).
 
 fetch_players() caches the full Sleeper /players/nfl endpoint to cache/sleeper/players.parquet. Skips the network call if the cache is less than 24 hours old; pass force=True to override. Called automatically by refresh() and by audit_join.py when the cache is stale or missing. Can also be triggered standalone: python fetchers/sleeper.py fetch-players. Position values in this endpoint use Sleeper's internal codes: QB/RB/WR/TE for skill, K for kicker, DEF for defense.
+
+## leaguelogs.py Notes
+
+`snapshot` pulls every profile (discovered dynamically from /v1/market — the API contract is additive) and appends to snapshots/leaguelogs/market_values.parquet via data_layer.write_leaguelogs_market_snapshot(), idempotent with dedup on snapshot_date. `profiles` lists the current profile keys. Read history via data_layer.read_leaguelogs_market().
+
+Dynasty profiles include rookie-pick rows (synthetic ids like "PICK#2026#01"), flattened into pick_* columns with is_pick=true. Redraft profiles have players only.
+
+Market value is a black-box signal (methodology not published) — use for ranking/trend, not as ground truth. Mandatory attribution: any UI displaying the data must show "Powered by LeagueLogs API" (https://leaguelogs.com).
+
+Scheduler: launchd agent `com.fantasyai.leaguelogs-snapshot` runs `snapshot` daily at 04:00 America/New_York. Canonical plist + README are tracked in application/data/fetchers/scheduler/; the live copy lives at ~/Library/LaunchAgents/. **Gotcha:** launchd cannot open log files inside ~/Documents (TCC-protected) → it fails with EX_CONFIG/78 and empty logs. Logs therefore live at ~/Library/Logs/fantasy-ai/. The launchd-spawned python can still read/write parquet under ~/Documents — only the log-file open is blocked, so no Full Disk Access is needed. This applies to any future launchd job in this repo.
 
 ---
 

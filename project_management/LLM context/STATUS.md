@@ -29,10 +29,10 @@ IMPORTANT TECH NOTE: All data I/O goes through application/data/data_layer.py. T
 ## Today (the current status toward v1)
 
 > most recent build
-Stood up a front-end design playground (application/design_playground/) to prototype the real dashboard's look/feel against live data. React + Vite + DuckDB-WASM: it runs SQL directly against season_2025.parquet in the browser (no export step), mirroring the eventual DuckDB-over-parquet approach. First panel: Power Rankings — teams ranked by PPG with a QB/RB/WR/TE positional-strength breakdown, record, consistency badge, and a 0–100 power score. Throwaway sketchpad, not the production front-end. (Note: required installing Node via Homebrew.)
+Built the LeagueLogs market-value fetcher (application/data/fetchers/leaguelogs.py) + a launchd scheduler that snapshots all 5 published profiles (3 redraft, 2 dynasty) daily at 4am ET. Market value is keyed on sleeperPlayerId, so it joins the pipeline with no id mapping; QB/RB/WR/TE only (matches scope). The API serves only "now," so daily snapshots are the only way to build the value time-series — collection started now even though the consuming features (trade analysis) are V4, because history can't be backfilled. Appends to snapshots/leaguelogs/market_values.parquet via data_layer (idempotent dedup on snapshot_date), ~11 MB/year. First snapshot verified (3,409 rows); scheduler tested via launchd (exit 0).
 
 > prior build
-Changed the nfl_sleeper weekly join to append each week's data into a single per-season file (snapshots/nfl_sleeper_weekly_joined/season_{season}.parquet) instead of one parquet per week. The output is still weekly-grained (one row per player per week); only the storage layout changed from many week files to one season file. The append logic lives in data_layer.py and is idempotent — re-running a week replaces its rows via a (season, week) dedup guard. The audit_join gap-closing step is unchanged; it now operates on a week-slice of the season file. Re-ran and verified weeks 1–4 of 2025 (594 rows total).
+Stood up a front-end design playground (application/design_playground/) to prototype the real dashboard's look/feel against live data. React + Vite + DuckDB-WASM: it runs SQL directly against season_2025.parquet in the browser (no export step), mirroring the eventual DuckDB-over-parquet approach. First panel: Power Rankings — teams ranked by PPG with a QB/RB/WR/TE positional-strength breakdown, record, consistency badge, and a 0–100 power score. Throwaway sketchpad, not the production front-end. (Note: required installing Node via Homebrew.)
 
 > built
     - nflreadpy fetcher
@@ -40,10 +40,10 @@ Changed the nfl_sleeper weekly join to append each week's data into a single per
     - nfl_sleeper join (left join, Sleeper-authoritative)
     - audit_join (resolves unknown-position remainders post-join)
     - design playground (React + DuckDB-WASM, reads live parquet) — Power Rankings panel
+    - leaguelogs fetcher (daily market-value snapshots, all profiles) + launchd 4am-ET scheduler
 
 > not yet built
     >> backend
-        - LeagueLogs fetcher
         - The Odds fetcher
         - FantasyPros fetcher
         - weather fetcher
@@ -63,12 +63,14 @@ Team overview, league standings, and matchup review. Powered by nflreadpy and Sl
 - **V1.5** — In-season scheduler: automates weekly data refresh and keeps the dashboard current during an NFL season
 - **V2** — Waiver wire analysis (requires Sleeper full player database fetcher)
 - **V3** — Start/sit recommendations (requires FantasyPros projections fetcher)
-- **V4** — Trade analysis (requires LeagueLogs player valuation)
+- **V4** — Trade analysis (LeagueLogs market value — data collection started 2026-05-31; features still V4)
 - **V5** — AI-powered insights (major update, builds on complete data layer)
 - **V6+** — More complex analytics (TBD)
 
 ## Known Scope Exclusions
 **DST/K (V1):** DST and kicker positional data is excluded from V1. DSTs are stripped at join time by detecting team abbreviations in the Sleeper matchup data. Kickers are filtered out via the SKILL_POSITIONS filter applied after the join. All V1 transform and dashboard work assumes skill positions only (QB, RB, WR, TE).
+
+**Market value (V1):** LeagueLogs market value is being snapshotted daily now to bank the time-series, but the features that consume it (trade analysis, value-aware rankings) are V4. Any UI that displays it must show the required "Powered by LeagueLogs API" attribution.
 
 **Waiver wire (V1):** Full waiver wire analysis requires querying the full available player pool, not just rostered players. The Sleeper player registry (fetch_players() in sleeper.py, cached at cache/sleeper/players.parquet) now exists and is used by the auditor to resolve unknown-position players at join time. Full waiver wire analysis against the complete available player pool is still V2 scope.
 

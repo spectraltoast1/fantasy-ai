@@ -104,3 +104,34 @@ def read_join_remainders(season: int, week: int) -> pl.DataFrame:
 
 def remainders_exist(season: int, week: int) -> bool:
     return _remainders_path(season, week).exists()
+
+
+# --- LeagueLogs Market Values ---
+
+def _leaguelogs_market_path() -> Path:
+    return _SNAPSHOT_DIR / "leaguelogs" / "market_values.parquet"
+
+
+def read_leaguelogs_market() -> pl.DataFrame:
+    """Read the full LeagueLogs market-value snapshot history (all dates, all profiles)."""
+    return pl.read_parquet(_leaguelogs_market_path())
+
+
+def leaguelogs_market_exists() -> bool:
+    return _leaguelogs_market_path().exists()
+
+
+def write_leaguelogs_market_snapshot(df: pl.DataFrame, snapshot_date) -> None:
+    """Append one day's market snapshot (all profiles) to the single history file.
+
+    `df` is treated as the complete set of rows for `snapshot_date`. If the file
+    already exists, any rows for that date are dropped first (dedup guard), so a
+    same-day re-run replaces the day rather than duplicating it. History for other
+    dates is never touched — it cannot be re-fetched, so it is preserved.
+    """
+    path = _leaguelogs_market_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        existing = pl.read_parquet(path).filter(pl.col("snapshot_date") != snapshot_date)
+        df = pl.concat([existing, df])
+    df.write_parquet(path)

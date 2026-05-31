@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.fantasyai.leaguelogs-snapshot</string>
+
+    <!-- Absolute paths: launchd runs with a bare environment (no user PATH). -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Library/Frameworks/Python.framework/Versions/3.13/bin/python3</string>
+        <string>/Users/willdaniel/Documents/fantasy-ai/application/data/fetchers/leaguelogs.py</string>
+        <string>snapshot</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/willdaniel/Documents/fantasy-ai/application/data/fetchers</string>
+
+    <!-- 04:00 in the machine's LOCAL time (America/New_York) → 4am Eastern, DST-aware.
+         If the Mac is asleep at 04:00, launchd runs the job at next wake. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>4</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- Don't fire on load/login; only on the daily schedule (and manual kickstart). -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- Logs live OUTSIDE ~/Documents: launchd cannot open files in the
+         TCC-protected Documents folder (fails the job with EX_CONFIG/78). -->
+    <key>StandardOutPath</key>
+    <string>/Users/willdaniel/Library/Logs/fantasy-ai/leaguelogs.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/willdaniel/Library/Logs/fantasy-ai/leaguelogs.err.log</string>
+</dict>
+</plist>
