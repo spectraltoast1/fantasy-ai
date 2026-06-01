@@ -32,14 +32,14 @@ IMPORTANT TECH NOTE: All data I/O goes through application/data/data_layer.py. T
 Built the LeagueLogs market-value fetcher (application/data/fetchers/leaguelogs.py) + a launchd scheduler that snapshots all 5 published profiles (3 redraft, 2 dynasty) daily at 4am ET. Market value is keyed on sleeperPlayerId, so it joins the pipeline with no id mapping; QB/RB/WR/TE only (matches scope). The API serves only "now," so daily snapshots are the only way to build the value time-series — collection started now even though the consuming features (trade analysis) are V4, because history can't be backfilled. Appends to snapshots/leaguelogs/market_values.parquet via data_layer (idempotent dedup on snapshot_date), ~11 MB/year. First snapshot verified (3,409 rows); scheduler tested via launchd (exit 0).
 
 > prior build
-Stood up a front-end design playground (application/design_playground/) to prototype the real dashboard's look/feel against live data. React + Vite + DuckDB-WASM: it runs SQL directly against season_2025.parquet in the browser (no export step), mirroring the eventual DuckDB-over-parquet approach. First panel: Power Rankings — teams ranked by PPG with a QB/RB/WR/TE positional-strength breakdown, record, consistency badge, and a 0–100 power score. Throwaway sketchpad, not the production front-end. (Note: required installing Node via Homebrew.)
+Built the first skeleton of the production front-end at application/frontend/ (React + Vite + DuckDB-WASM). It runs SQL directly against season_2025.parquet in the browser (no export step) — the same DuckDB-over-parquet approach that carries to production. First panel: Power Rankings — teams ranked by PPG with a QB/RB/WR/TE positional-strength breakdown, record, consistency badge, and a 0–100 power score. Started as a "design playground" to choose a stack; building in the real stack proved easier than a chat artifact, so React is now the decided front-end and this is its first real slice (not throwaway). (Note: required installing Node via Homebrew.)
 
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
     - nfl_sleeper join (left join, Sleeper-authoritative)
     - audit_join (resolves unknown-position remainders post-join)
-    - design playground (React + DuckDB-WASM, reads live parquet) — Power Rankings panel
+    - front-end skeleton (React + Vite + DuckDB-WASM, reads live parquet) — Power Rankings panel
     - leaguelogs fetcher (daily market-value snapshots, all profiles) + launchd 4am-ET scheduler
 
 > not yet built
@@ -48,8 +48,8 @@ Stood up a front-end design playground (application/design_playground/) to proto
         - FantasyPros fetcher
         - weather fetcher
     >> frontend
-        - production dashboard — DuckDB is the query layer (decided);
-          front-end framework leaning React but not finalized (Dash was the original plan)
+        - production front-end — React + DuckDB decided; first skeleton built (Power Rankings).
+          Remaining: more panels, data-delivery model (client-side DuckDB-WASM vs a Python API), deployment
 
 > helpful historical context
 A deferred folder contains earlier work on transcript synthesis. This is intentionally parked.
@@ -80,7 +80,7 @@ Team overview, league standings, and matchup review. Powered by nflreadpy and Sl
 
 ## Next single highest-leverage move
 
-Iterate the design playground to decide the production front-end stack (Dash vs. React + DuckDB) and the first panels worth building.
+Build out the React front-end (application/frontend/): add panels beyond Power Rankings, and decide the data-delivery model — client-side DuckDB-WASM vs. a small Python API serving query results.
 
 ## The step after (unconfirmed, subject to change)
 

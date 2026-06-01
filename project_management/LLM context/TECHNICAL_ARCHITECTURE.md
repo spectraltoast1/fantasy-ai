@@ -19,8 +19,8 @@ Winning a redraft fantasy football championship is about more than just collecti
 - **Language:** Python for the data layer/pipeline; JS/React in the front-end playground
 - **Data manipulation:** polars (not pandas) - nflreadpy returns polars DataFrames; use polars syntax throughout
 - **NFL stats:** nflreadpy (successor to deprecated nfl_data_py) - returns polars DataFrames
-- **Dashboard / front-end:** stack not finalized. Original plan was Dash + Plotly; currently leaning React + DuckDB (per the design playground), but undecided.
-- **Query layer:** DuckDB — SQL directly over parquet. Adopted as the query layer (in use now in the design playground); carries into the production app.
+- **Front-end:** React + Vite + DuckDB (decided). Original plan was Dash + Plotly; switched after a vertical slice in the real stack validated it and proved easier to iterate than a chat artifact. Open question: data delivery — client-side DuckDB-WASM vs. a small Python API serving query results.
+- **Query layer:** DuckDB — SQL directly over parquet. Adopted as the query layer (in use now in the front-end skeleton); carries into the production app.
 - **Market values:** LeagueLogs API (keyed on sleeperPlayerId; QB/RB/WR/TE only; visible attribution required)
 - **Scheduling:** launchd (macOS) for daily fetchers
 - **Storage:** JSON (cache), parquet (snapshots), JSONL (advisor log - future)
@@ -61,8 +61,7 @@ fantasy-ai/
 ├── _deprecated/                    # old flat fetchers, do not modify
 ├── _deferred/                      # synthesis pipeline, parked for v2
 └── application/
-    ├── dashboard/                  # production front-end (not yet built; stack TBD)
-    ├── design_playground/          # React + DuckDB-WASM front-end sketchpad (Node/Vite)
+    ├── frontend/                   # production front-end — React + Vite + DuckDB-WASM (Node)
     │   ├── src/                     #   App.jsx (Power Rankings), db.js (DuckDB-WASM loader)
     │   └── public/data/             #   symlink → snapshots/.../season_2025.parquet (gitignored)
     ├── data/
