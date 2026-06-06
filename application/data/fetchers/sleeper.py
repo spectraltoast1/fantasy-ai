@@ -127,6 +127,52 @@ def fetch_players(force: bool = False) -> None:
     print(f"  players: {len(rows)} players → {path}")
 
 
+def fetch_teams(league_id: str, year: int) -> None:
+    """Fetch league users + rosters and write a roster_id → names map for the season.
+
+    Produces teams_{year}.parquet (roster_id, team_name, owner_name) via data_layer.
+    `team_name` is the manager's custom team name (users[].metadata.team_name); it is
+    null when a manager never set one — the consumer falls back to `owner_name`
+    (their Sleeper display_name).
+    """
+    print(f"Fetching Sleeper teams for league {league_id} ({year})...")
+
+    resp = requests.get(f"{_SLEEPER_BASE}/league/{league_id}/users")
+    resp.raise_for_status()
+    users = resp.json()
+
+    resp = requests.get(f"{_SLEEPER_BASE}/league/{league_id}/rosters")
+    resp.raise_for_status()
+    rosters = resp.json()
+
+    # user_id → (display_name, custom team name)
+    users_by_id = {
+        u["user_id"]: (
+            u.get("display_name"),
+            (u.get("metadata") or {}).get("team_name"),
+        )
+        for u in users
+    }
+
+    rows = []
+    for r in rosters:
+        display_name, team_name = users_by_id.get(r.get("owner_id"), (None, None))
+        rows.append({
+            "roster_id": int(r["roster_id"]),
+            "team_name": team_name,
+            "owner_name": display_name,
+        })
+
+    df = pl.from_dicts(rows)
+
+    # data_layer.py lives one level up in application/data/
+    sys.path.insert(0, str(_DATA_DIR))
+    import data_layer
+
+    data_layer.write_sleeper_teams(df, year)
+    print(f"  teams: {len(df)} rosters → snapshots/sleeper/{year}/teams_{year}.parquet")
+
+
 def backfill(league_id: str, year: int) -> None:
     """Fetch all completed regular-season weeks and write parquet snapshots."""
     print(f"Backfilling Sleeper data for league {league_id} ({year})...")
@@ -221,7 +267,10 @@ def refresh(league_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    usage = "Usage: sleeper.py backfill <year> | sleeper.py refresh | sleeper.py fetch-players"
+    usage = (
+        "Usage: sleeper.py backfill <year> | sleeper.py refresh | "
+        "sleeper.py fetch-players | sleeper.py fetch-teams <year>"
+    )
 
     if len(sys.argv) < 2:
         print(usage)
@@ -246,6 +295,14 @@ if __name__ == "__main__":
         _year = int(_state["season"])
         _league_id = league_resolver.resolve_league_id(_year)
         refresh(_league_id)
+
+    elif cmd == "fetch-teams":
+        if len(sys.argv) < 3:
+            print(usage)
+            sys.exit(1)
+        _year = int(sys.argv[2])
+        _league_id = league_resolver.resolve_league_id(_year)
+        fetch_teams(_league_id, _year)
 
     elif cmd == "fetch-players":
         fetch_players(force=True)

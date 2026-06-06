@@ -29,6 +29,27 @@ def read_sleeper_players() -> pl.DataFrame:
     return pl.read_parquet(path)
 
 
+# --- Sleeper Teams (roster_id → names) ---
+
+def _sleeper_teams_path(season: int) -> Path:
+    return _SNAPSHOT_DIR / "sleeper" / str(season) / f"teams_{season}.parquet"
+
+
+def write_sleeper_teams(df: pl.DataFrame, season: int) -> None:
+    """Write the roster_id → team/owner name map for a season (overwrite).
+
+    Roster identities are effectively fixed once a season is frozen, so this is a
+    single overwrite file per season rather than an appended time-series.
+    """
+    path = _sleeper_teams_path(season)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
+
+def read_sleeper_teams(season: int) -> pl.DataFrame:
+    return pl.read_parquet(_sleeper_teams_path(season))
+
+
 # --- NFL Stats ---
 
 def read_nfl_stats(season: int) -> pl.DataFrame:
