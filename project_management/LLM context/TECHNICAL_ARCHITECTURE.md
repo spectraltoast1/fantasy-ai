@@ -19,8 +19,9 @@ Winning a redraft fantasy football championship is about more than just collecti
 - **Language:** Python for the data layer/pipeline; JS/React in the front-end playground
 - **Data manipulation:** polars (not pandas) - nflreadpy returns polars DataFrames; use polars syntax throughout
 - **NFL stats:** nflreadpy (successor to deprecated nfl_data_py) - returns polars DataFrames
-- **Front-end:** React + Vite + DuckDB (decided). Original plan was Dash + Plotly; switched after a vertical slice in the real stack validated it and proved easier to iterate than a chat artifact. Open question: data delivery — client-side DuckDB-WASM vs. a small Python API serving query results.
-- **Query layer:** DuckDB — SQL directly over parquet. Adopted as the query layer (in use now in the front-end skeleton); carries into the production app.
+- **Front-end:** React + Vite + DuckDB (decided). Original plan was Dash + Plotly; switched after a vertical slice in the real stack validated it and proved easier to iterate than a chat artifact.
+- **Data delivery (V1):** client-side DuckDB-WASM — the browser reads parquet and runs SQL; no server, static hosting only. A server/API was **deliberately deferred, not ruled out** — switch to one when warranted (multiple users, data too large to ship to the browser, or secrets to protect). The swap point is the front-end data-access layer `src/queries.js`; the view components never call data access directly, so moving "read files" → "call API" won't touch them.
+- **Query layer:** DuckDB — SQL directly over parquet. Adopted as the query layer (in use now in the front-end); carries into the production app.
 - **Market values:** LeagueLogs API (keyed on sleeperPlayerId; QB/RB/WR/TE only; visible attribution required)
 - **Scheduling:** launchd (macOS) for daily fetchers
 - **Storage:** JSON (cache), parquet (snapshots), JSONL (advisor log - future)
@@ -62,7 +63,7 @@ fantasy-ai/
 ├── _deferred/                      # synthesis pipeline, parked for v2
 └── application/
     ├── frontend/                   # production front-end — React + Vite + DuckDB-WASM (Node)
-    │   ├── src/                     #   App.jsx (Power Rankings), db.js (DuckDB-WASM loader)
+    │   ├── src/                     #   App.jsx (view), queries.js (data-access layer), db.js (DuckDB-WASM loader)
     │   └── public/data/             #   symlink → snapshots/.../season_2025.parquet (gitignored)
     ├── data/
         ├── data_layer.py           # ✅ built — centralized read/write module

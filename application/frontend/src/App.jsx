@@ -1,101 +1,20 @@
 import React, { useEffect, useState } from 'react';
-import { query } from './db.js';
+import { loadPowerRankings, POS } from './queries.js';
 
-const POS = ['QB', 'RB', 'WR', 'TE'];
+// View-only concern: how positions are colored. All data access lives in queries.js.
 const POS_COLORS = { QB: '#e0709a', RB: '#5fb3a3', WR: '#6699e6', TE: '#d9a85f' };
-
-// --- SQL (all run live against the parquet via DuckDB-WASM) ---
-// Team-week score collapses the per-player rows to one row per (team, week),
-// since roster_total_points / matchup_result repeat across a team's players.
-const SQL_TEAMS = `
-  WITH team_week AS (
-    SELECT roster_id, week,
-           any_value(roster_total_points) AS team_pts,
-           any_value(matchup_result)      AS result
-    FROM 'season.parquet'
-    GROUP BY roster_id, week
-  )
-  SELECT roster_id,
-         round(avg(team_pts), 2)                      AS avg_pts,
-         round(coalesce(stddev_samp(team_pts), 0), 2) AS pts_std,
-         sum(result = 'W')::INT                        AS wins,
-         sum(result = 'L')::INT                        AS losses,
-         count(*)::INT                                 AS games
-  FROM team_week
-  GROUP BY roster_id
-  ORDER BY avg_pts DESC
-`;
-
-// Average starter points by position per team (QB/RB/WR/TE) — the strength breakdown.
-const SQL_POSITIONS = `
-  WITH pos_week AS (
-    SELECT roster_id, week, position, sum(sleeper_points) AS pos_pts
-    FROM 'season.parquet'
-    WHERE is_starter AND position IN ('QB','RB','WR','TE')
-    GROUP BY roster_id, week, position
-  )
-  SELECT roster_id, position, round(avg(pos_pts), 2) AS avg_pos_pts
-  FROM pos_week
-  GROUP BY roster_id, position
-`;
 
 export default function App() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    (async () => {
-      try {
-        const [teams, positions, weekRows, seasonRows] = await Promise.all([
-          query(SQL_TEAMS),
-          query(SQL_POSITIONS),
-          query(`SELECT DISTINCT week FROM 'season.parquet' ORDER BY week`),
-          query(`SELECT DISTINCT season FROM 'season.parquet'`),
-        ]);
-
-        // Index positional breakdown by team.
-        const posByTeam = {};
-        for (const r of positions) {
-          (posByTeam[r.roster_id] ??= {})[r.position] = Number(r.avg_pos_pts);
-        }
-
-        const maxAvg = Math.max(...teams.map((t) => Number(t.avg_pts)));
-        const maxStarterTotal = Math.max(
-          ...teams.map((t) =>
-            POS.reduce((s, p) => s + (posByTeam[t.roster_id]?.[p] ?? 0), 0),
-          ),
-        );
-
-        const ranked = teams.map((t, i) => {
-          const breakdown = posByTeam[t.roster_id] ?? {};
-          const starterTotal = POS.reduce((s, p) => s + (breakdown[p] ?? 0), 0);
-          const cv = Number(t.avg_pts) ? Number(t.pts_std) / Number(t.avg_pts) : 0;
-          return {
-            rank: i + 1,
-            rosterId: t.roster_id,
-            avgPts: Number(t.avg_pts),
-            std: Number(t.pts_std),
-            cv,
-            wins: Number(t.wins),
-            losses: Number(t.losses),
-            // Power score: avg PPG scaled to 0-100 against the league leader.
-            powerScore: Math.round((Number(t.avg_pts) / maxAvg) * 100),
-            breakdown,
-            starterTotal,
-          };
-        });
-
-        setData({
-          teams: ranked,
-          maxStarterTotal,
-          season: seasonRows[0]?.season,
-          weeks: weekRows.map((w) => Number(w.week)),
-        });
-      } catch (e) {
+    loadPowerRankings()
+      .then(setData)
+      .catch((e) => {
         console.error(e);
         setError(e.message ?? String(e));
-      }
-    })();
+      });
   }, []);
 
   if (error) {

@@ -80,7 +80,7 @@ Team overview, league standings, and matchup review. Powered by nflreadpy and Sl
 
 ## Next single highest-leverage move
 
-Build out the React front-end (application/frontend/): add panels beyond Power Rankings, and decide the data-delivery model — client-side DuckDB-WASM vs. a small Python API serving query results.
+Build out the React front-end (application/frontend/): add panels beyond Power Rankings, and add real team names (Sleeper users/rosters fetch). Data-delivery model is decided for V1 — client-side DuckDB-WASM, no server (a server/API was deferred, not ruled out; the src/queries.js data-access layer is the seam to switch later).
 
 ## The step after (unconfirmed, subject to change)
 
