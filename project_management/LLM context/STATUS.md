@@ -25,6 +25,7 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 IMPORTANT TECH NOTE: The python library nflreadpy is the core data source for this project. It returns polars DataFrames - it is not based on pandas. Any LLM coding instructions working with nflreadpy need to explicitly call out the polars DataFrames so we don't end up with mixed polars/pandas data manipulation syntax.
 
 IMPORTANT TECH NOTE: All data I/O goes through application/data/data_layer.py. Transform scripts and dashboard components read and write via data_layer.py functions only — no script owns its own file paths or parquet logic.
+IMPORTANT TECH NOTE: Data-delivery model is decided for V1 — client-side DuckDB-WASM, no server (a server/API was deferred, not ruled out; the src/queries.js data-access layer is the seam to switch later).
 
 ## Today (the current status toward v1)
 
@@ -80,7 +81,7 @@ Team overview, league standings, and matchup review. Powered by nflreadpy and Sl
 
 ## Next single highest-leverage move
 
-Undetermined — to be decided at the start of the next session. (Just completed: real team names on the Power Rankings cards via a Sleeper users/rosters fetch → teams_2025.parquet, joined in src/queries.js.) Likely candidates: more front-end panels beyond Power Rankings (see V1 Dashboard Build Order below). Data-delivery model is decided for V1 — client-side DuckDB-WASM, no server (a server/API was deferred, not ruled out; the src/queries.js data-access layer is the seam to switch later).
+Deepen the existing Power Rankings panel into an interactive view (depth over breadth — no new fetcher, all from season_2025.parquet). Three additions: (1) a week filter — the weeks are already queried in loadPowerRankings() but only used for the header label, so wire them into the SQL so rankings can be scoped to a week or range; (2) per-team drill-down — expand a card to its roster/player rows for that team; (3) re-sortable by metric (power score vs. PPG vs. record). Goal: validate what makes a single panel genuinely useful before replicating the pattern across more panels.
 
 ## The step after (unconfirmed, subject to change)
 
