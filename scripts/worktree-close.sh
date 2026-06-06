@@ -54,6 +54,23 @@ if ! git -C "$WT_ROOT" diff --name-only "main..$BRANCH" | grep -q 'STATUS.md'; t
   echo "⚠ STATUS.md untouched this session — update it before merging if state changed."
 fi
 
+# 4b. Runtime-data-deletion guard. A merge applies the branch's tree deletions to
+# main's working tree — so if this branch untracked a gitignored runtime data
+# file, merging would delete main's on-disk copy (which won't return from git).
+DELETED_DATA="$(git -C "$WT_ROOT" diff --diff-filter=D --name-only "main..$BRANCH" \
+  | grep -E '^application/data/(snapshots|cache)/' || true)"
+if [ -n "$DELETED_DATA" ]; then
+  echo
+  echo "⚠ This branch removes runtime data file(s) from the tree:"
+  echo "$DELETED_DATA" | sed 's/^/    /'
+  echo "  Merging would delete main's on-disk copies. Back them up first, then"
+  echo "  restore them after the merge (they are gitignored — git won't return them)."
+  if [ "$DO_MERGE" -eq 1 ]; then
+    echo "✖ Refusing to auto-merge with runtime-data deletions — handle it manually."
+    exit 1
+  fi
+fi
+
 if [ "$DO_MERGE" -eq 0 ]; then
   echo
   echo "Review the above. To merge into main and remove this worktree, re-run:"
@@ -66,7 +83,9 @@ echo
 echo "Merging $BRANCH into main..."
 git -C "$MAIN_ROOT" merge --no-ff "$BRANCH" -m "Merge $BRANCH"
 echo "Removing worktree..."
-git -C "$MAIN_ROOT" worktree remove "$WT_ROOT"
+# --force: a worktree always holds untracked runtime (the setup symlinks,
+# generated parquets), which a plain remove would refuse on.
+git -C "$MAIN_ROOT" worktree remove --force "$WT_ROOT"
 echo
 echo "✓ Merged into local main and removed the worktree."
 echo "  Push when ready:  git -C \"$MAIN_ROOT\" push"
