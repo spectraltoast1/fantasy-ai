@@ -19,12 +19,18 @@ async function initDB() {
   await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
   URL.revokeObjectURL(workerUrl);
 
-  // Live read: public/data/season_2025.parquet is a symlink to the real snapshot.
-  const res = await fetch('/data/season_2025.parquet');
-  if (!res.ok) throw new Error(`Could not load parquet (HTTP ${res.status})`);
-  const buf = new Uint8Array(await res.arrayBuffer());
-  await db.registerFileBuffer('season.parquet', buf);
+  // Live reads: public/data/*.parquet are symlinks to the real snapshots.
+  // season = the weekly join; teams = roster_id → team/owner names.
+  await registerParquet(db, '/data/season_2025.parquet', 'season.parquet');
+  await registerParquet(db, '/data/teams_2025.parquet', 'teams.parquet');
   return db;
+}
+
+async function registerParquet(db, url, name) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Could not load ${url} (HTTP ${res.status})`);
+  const buf = new Uint8Array(await res.arrayBuffer());
+  await db.registerFileBuffer(name, buf);
 }
 
 export function getDB() {

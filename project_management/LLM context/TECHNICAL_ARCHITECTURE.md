@@ -29,6 +29,38 @@ Winning a redraft fantasy football championship is about more than just collecti
 
 ---
 
+## Client/Server Seam — Invariants
+
+V1 runs client-side (DuckDB-WASM in the browser, no server). Going server-side
+(a Python API) one day is **expected, not hypothetical** — the goal is to keep
+that switch boring. This is a bounded, ~5-item surface, not a sprawling one. Keep
+these invariants true and the switch stays a localized swap rather than a rewrite:
+
+1. **All data access lives in `src/queries.js`.** It is the single seam. Going
+   server-side means rewriting the bodies of its functions ("read parquet" → "call
+   API") and nothing else in the data path. This is the one that makes everything
+   below cheap.
+2. **View components never touch data access directly.** `App.jsx` and future
+   panels call `queries.js` functions and consume plain JS values/objects — never
+   SQL, never DuckDB handles, never file paths. If a view knows it's reading a
+   parquet file, the seam has leaked.
+3. **No DuckDB-WASM specifics outside `queries.js`/`db.js`.** SQL strings, DuckDB
+   quirks, and `.parquet` awareness stay behind the seam. A server build would
+   change `db.js` (how data is located/loaded) without touching views.
+4. **Data addressing is config-level, not scattered.** Today: symlinks in
+   `public/data/` + `db.js` registering files. A server serves these instead. Keep
+   "where the data is" in `db.js`, so the answer changes in one place.
+5. **Don't bake in "no auth / no secrets / whole dataset fits in the browser."**
+   These are the conditions that *trigger* the server decision (multiple users,
+   data too large to ship, secrets to protect) — not things to pre-engineer now.
+   Just don't write code that assumes their absence is permanent.
+
+This is a one-time checklist, not a living log: if these hold, the migration is a
+swap. It is intentionally kept here (single source of truth) rather than in a
+separate decisions doc.
+
+---
+
 ## Version Roadmap (subject to change)
 - **V1** — Team overview, league standings, matchup review (no AI)
 - **V2** — Waiver wire analysis (requires Sleeper full player database fetcher)
@@ -59,8 +91,6 @@ fantasy-ai/
     ├── PROJECT_OVERVIEW.md
 │   ├── data_sources.txt
 │   └── journal/
-├── _deprecated/                    # old flat fetchers, do not modify
-├── _deferred/                      # synthesis pipeline, parked for v2
 └── application/
     ├── frontend/                   # production front-end — React + Vite + DuckDB-WASM (Node)
     │   ├── src/                     #   App.jsx (view), queries.js (data-access layer), db.js (DuckDB-WASM loader)

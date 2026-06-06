@@ -73,7 +73,7 @@ function TeamCard({ team, maxStarterTotal }) {
 
       <div className="card-body">
         <div className="card-top">
-          <div className="team-name">Team {team.rosterId}</div>
+          <div className="team-name">{team.name}</div>
           <div className="record">
             {team.wins}–{team.losses}
           </div>

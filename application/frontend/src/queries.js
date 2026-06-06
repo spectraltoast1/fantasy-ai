@@ -21,16 +21,21 @@ const SQL_TEAMS = `
            any_value(matchup_result)      AS result
     FROM 'season.parquet'
     GROUP BY roster_id, week
+  ),
+  agg AS (
+    SELECT roster_id,
+           round(avg(team_pts), 2)                      AS avg_pts,
+           round(coalesce(stddev_samp(team_pts), 0), 2) AS pts_std,
+           sum(result = 'W')::INT                        AS wins,
+           sum(result = 'L')::INT                        AS losses,
+           count(*)::INT                                 AS games
+    FROM team_week
+    GROUP BY roster_id
   )
-  SELECT roster_id,
-         round(avg(team_pts), 2)                      AS avg_pts,
-         round(coalesce(stddev_samp(team_pts), 0), 2) AS pts_std,
-         sum(result = 'W')::INT                        AS wins,
-         sum(result = 'L')::INT                        AS losses,
-         count(*)::INT                                 AS games
-  FROM team_week
-  GROUP BY roster_id
-  ORDER BY avg_pts DESC
+  SELECT a.*, t.team_name, t.owner_name
+  FROM agg a
+  LEFT JOIN 'teams.parquet' t USING (roster_id)
+  ORDER BY a.avg_pts DESC
 `;
 
 // Average starter points by position per team (QB/RB/WR/TE) — the strength breakdown.
@@ -79,6 +84,8 @@ export async function loadPowerRankings() {
     return {
       rank: i + 1,
       rosterId: t.roster_id,
+      // Display name: custom team name, then Sleeper handle, then a roster-id stub.
+      name: t.team_name || t.owner_name || `Team ${t.roster_id}`,
       avgPts: Number(t.avg_pts),
       std: Number(t.pts_std),
       cv,

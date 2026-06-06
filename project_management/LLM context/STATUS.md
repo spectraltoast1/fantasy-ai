@@ -29,9 +29,12 @@ IMPORTANT TECH NOTE: All data I/O goes through application/data/data_layer.py. T
 ## Today (the current status toward v1)
 
 > most recent build
-Built the LeagueLogs market-value fetcher (application/data/fetchers/leaguelogs.py) + a launchd scheduler that snapshots all 5 published profiles (3 redraft, 2 dynasty) daily at 4am ET. Market value is keyed on sleeperPlayerId, so it joins the pipeline with no id mapping; QB/RB/WR/TE only (matches scope). The API serves only "now," so daily snapshots are the only way to build the value time-series — collection started now even though the consuming features (trade analysis) are V4, because history can't be backfilled. Appends to snapshots/leaguelogs/market_values.parquet via data_layer (idempotent dedup on snapshot_date), ~11 MB/year. First snapshot verified (3,409 rows); scheduler tested via launchd (exit 0).
+Real team names on the Power Rankings cards. Added sleeper.py fetch_teams() + fetch-teams CLI (resolves the season's league, maps roster_id → team_name/owner_name via /users + /rosters) writing teams_2025.parquet through data_layer; db.js registers it; queries.js LEFT JOINs it and computes the display name (custom team name → Sleeper handle → "Team N" fallback); App.jsx consumes team.name. Verified live (all 10 teams named; null-custom-name fallback confirmed). Also this session: documented the client/server seam invariants in TECHNICAL_ARCHITECTURE.md; established the Code-only session lifecycle (CLAUDE.md + scripts/worktree-setup.sh + scripts/worktree-close.sh + co-build guides/SESSION_GUIDE.md, 3-commit cap); repo cleanup (untracked the two committed parquets, deleted _deprecated and _deferred).
 
 > prior build
+Built the LeagueLogs market-value fetcher (application/data/fetchers/leaguelogs.py) + a launchd scheduler that snapshots all 5 published profiles (3 redraft, 2 dynasty) daily at 4am ET. Market value is keyed on sleeperPlayerId, so it joins the pipeline with no id mapping; QB/RB/WR/TE only (matches scope). The API serves only "now," so daily snapshots are the only way to build the value time-series — collection started now even though the consuming features (trade analysis) are V4, because history can't be backfilled. Appends to snapshots/leaguelogs/market_values.parquet via data_layer (idempotent dedup on snapshot_date), ~11 MB/year. First snapshot verified (3,409 rows); scheduler tested via launchd (exit 0).
+
+> earlier build
 Built the first skeleton of the production front-end at application/frontend/ (React + Vite + DuckDB-WASM). It runs SQL directly against season_2025.parquet in the browser (no export step) — the same DuckDB-over-parquet approach that carries to production. First panel: Power Rankings — teams ranked by PPG with a QB/RB/WR/TE positional-strength breakdown, record, consistency badge, and a 0–100 power score. Started as a "design playground" to choose a stack; building in the real stack proved easier than a chat artifact, so React is now the decided front-end and this is its first real slice (not throwaway). (Note: required installing Node via Homebrew.)
 
 > built
@@ -41,6 +44,7 @@ Built the first skeleton of the production front-end at application/frontend/ (R
     - audit_join (resolves unknown-position remainders post-join)
     - front-end skeleton (React + Vite + DuckDB-WASM, reads live parquet) — Power Rankings panel
     - leaguelogs fetcher (daily market-value snapshots, all profiles) + launchd 4am-ET scheduler
+    - sleeper teams fetch (fetch_teams → teams_2025.parquet) — real team names on Power Rankings cards
 
 > not yet built
     >> backend
@@ -50,10 +54,6 @@ Built the first skeleton of the production front-end at application/frontend/ (R
     >> frontend
         - production front-end — React + DuckDB decided; first skeleton built (Power Rankings).
           Remaining: more panels, data-delivery model (client-side DuckDB-WASM vs a Python API), deployment
-
-> helpful historical context
-A deferred folder contains earlier work on transcript synthesis. This is intentionally parked.
-A deprecated folder contains outdated and untested versions of fetchers for Sleeper, The Odds, FantasyPros and weather. It also contains an outdated and untested scheduler, AI advisor and context generator. The folder is a graveyard of scripts that would need more editing than it would take to rebuild, so they are not considered to be relevant to the project. The folder is .gitignored
 
 ## V1 Definition (current build target)
 Team overview, league standings, and matchup review. Powered by nflreadpy and Sleeper data already fetched. Target ship: NFL kickoff, mid-August 2026.
@@ -80,7 +80,7 @@ Team overview, league standings, and matchup review. Powered by nflreadpy and Sl
 
 ## Next single highest-leverage move
 
-Build out the React front-end (application/frontend/): add panels beyond Power Rankings, and add real team names (Sleeper users/rosters fetch). Data-delivery model is decided for V1 — client-side DuckDB-WASM, no server (a server/API was deferred, not ruled out; the src/queries.js data-access layer is the seam to switch later).
+Undetermined — to be decided at the start of the next session. (Just completed: real team names on the Power Rankings cards via a Sleeper users/rosters fetch → teams_2025.parquet, joined in src/queries.js.) Likely candidates: more front-end panels beyond Power Rankings (see V1 Dashboard Build Order below). Data-delivery model is decided for V1 — client-side DuckDB-WASM, no server (a server/API was deferred, not ruled out; the src/queries.js data-access layer is the seam to switch later).
 
 ## The step after (unconfirmed, subject to change)
 
