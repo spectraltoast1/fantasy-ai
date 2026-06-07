@@ -200,6 +200,7 @@ application/data_sources.txt
 *.log
 logs/
 .claude/
+start-dashboard.command
 
 # Front-end: deps + symlinked live data; source is tracked
 application/frontend/node_modules/
