@@ -94,7 +94,7 @@ fantasy-ai/
 └── application/
     ├── frontend/                   # production front-end — React + Vite + DuckDB-WASM (Node)
     │   ├── src/                     #   App.jsx (view), queries.js (data-access layer), db.js (DuckDB-WASM loader)
-    │   └── public/data/             #   symlink → snapshots/.../season_2025.parquet (gitignored)
+    │   └── public/data/             #   symlinks → season_2025 + teams_2025 + lineup_slots_2025 parquet (gitignored)
     ├── data/
         ├── data_layer.py           # ✅ built — centralized read/write module
     │   ├── fetchers/               # one Python script per source (tracked in git)
@@ -118,11 +118,16 @@ fantasy-ai/
     │       └── nflreadpy/
     │           └── nfl_stats_2025.parquet  # 18,539 rows × 121 cols, weeks 1-18
             └── sleeper/
-                └── sleeper_2025/
+                └── 2025/
+                    ├── teams_2025.parquet            # roster_id → team/owner names
+                    ├── roster_positions_2025.parquet # raw league starting-lineup slot list
+                    ├── lineup_slots_2025.parquet     # derived starting skill-slot requirements (optimal-lineup config)
                     └── ... # matchup and transaction parquet files for each week of the 2025 season
     ├── shared/                     # league detection, config loaders
     ├── transforms/ # one Python script per join/transform
-        └── join_nfl_sleeper_weekly.py # ✅ built
+        ├── join_nfl_sleeper_weekly.py # ✅ built
+        ├── audit_join.py              # ✅ built — resolves unknown-position remainders
+        └── derive_lineup_slots.py     # ✅ built — roster_positions → lineup_slots (starting skill slots)
     ├── config.example.py
     └── requirements.txt
 ```
@@ -175,6 +180,7 @@ non-negotiable architectural rule.
 
 - internal
 | nfl_sleeper_weekly_joined transform | snapshots/nfl_sleeper_weekly_joined/ | Joined output — one file per season (season_{season}.parquet), each week appended with a (season, week) dedup guard
+| derive_lineup_slots transform | snapshots/sleeper/{season}/ | lineup_slots_{season}.parquet — starting skill-slot requirements (slot, count, eligible) derived from the league's raw roster_positions; declares the QB/RB/WR/TE + FLEX config so the front-end "perfect lineup" / efficiency calc is exact, not inferred |
 
 These assignments reflect current v1 decisions, not permanent rules. Future versions may snapshot additional sources (e.g., odds history for post-hoc analysis).
 

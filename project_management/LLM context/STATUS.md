@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-05-31
+**Last updated:** 2026-06-07
 **Target ship:** NFL kickoff, mid August 2026
 
 ---
@@ -31,9 +31,27 @@ IMPORTANT TECH NOTE: Data-delivery model is decided for V1 — client-side DuckD
 ## Today (the current status toward v1)
 
 > most recent build
+Power Rankings team drill-down — click a card to open a side drawer that decomposes a
+team's record into its three real drivers: roster quality (all-play "true record" — W/L
+as if each team played all others every week, luck-stripped, with a Lucky/Earned/Unlucky
+tag), manager skill (lineup efficiency vs. the optimal lineup achievable from the roster
+= points left on the bench), and luck (the gap between them). Plus a weekly-scoring chart
+(bars tinted by beat/below league median, mean line) and two qualitative spectrums:
+Consistent↔Volatile (CV of weekly scores) and Balanced↔Hero-led (concentration of
+per-position vs-league output), with per-position vs-league bars. Markers are league-
+relative. All five metrics aggregate over `week` with no hardcoded count, so they sharpen
+automatically as V1.5 appends weeks. Built in 3 passes: (1) roster_positions fetcher +
+derive_lineup_slots transform → declared QB1/RB2/WR2/TE1/FLEX2 config (replaces inference,
+makes the optimal-lineup calc exact); (2) all-play + efficiency + weekly scoring in the
+drawer; (3) the two spectrums. Verified live — every metric reconciles with a polars
+prototype (e.g. Bski: all-play 31–5/Earned, 88% eff; DebTheDeb: 19–17/Lucky, balanced).
+New seam: queries.js `loadTeamDetails()`; lineup_slots_2025.parquet symlinked into
+public/data and registered in db.js.
+
+> earlier build
 Real team names on the Power Rankings cards. Added sleeper.py fetch_teams() + fetch-teams CLI (resolves the season's league, maps roster_id → team_name/owner_name via /users + /rosters) writing teams_2025.parquet through data_layer; db.js registers it; queries.js LEFT JOINs it and computes the display name (custom team name → Sleeper handle → "Team N" fallback); App.jsx consumes team.name. Verified live (all 10 teams named; null-custom-name fallback confirmed). Also this session: documented the client/server seam invariants in TECHNICAL_ARCHITECTURE.md; established the Code-only session lifecycle (CLAUDE.md + scripts/worktree-setup.sh + scripts/worktree-close.sh + co-build guides/SESSION_GUIDE.md, 3-commit cap); repo cleanup (untracked the two committed parquets, deleted _deprecated and _deferred).
 
-> prior build
+> earlier build
 Built the LeagueLogs market-value fetcher (application/data/fetchers/leaguelogs.py) + a launchd scheduler that snapshots all 5 published profiles (3 redraft, 2 dynasty) daily at 4am ET. Market value is keyed on sleeperPlayerId, so it joins the pipeline with no id mapping; QB/RB/WR/TE only (matches scope). The API serves only "now," so daily snapshots are the only way to build the value time-series — collection started now even though the consuming features (trade analysis) are V4, because history can't be backfilled. Appends to snapshots/leaguelogs/market_values.parquet via data_layer (idempotent dedup on snapshot_date), ~11 MB/year. First snapshot verified (3,409 rows); scheduler tested via launchd (exit 0).
 
 > earlier build
@@ -47,6 +65,8 @@ Built the first skeleton of the production front-end at application/frontend/ (R
     - front-end skeleton (React + Vite + DuckDB-WASM, reads live parquet) — Power Rankings panel
     - leaguelogs fetcher (daily market-value snapshots, all profiles) + launchd 4am-ET scheduler
     - sleeper teams fetch (fetch_teams → teams_2025.parquet) — real team names on Power Rankings cards
+    - roster_positions fetch + derive_lineup_slots transform — declared starting-lineup config (lineup_slots_2025.parquet)
+    - Power Rankings team drill-down drawer — all-play true record, lineup efficiency, weekly scoring, consistency + positional-shape spectrums
 
 > not yet built
     >> backend
@@ -54,8 +74,9 @@ Built the first skeleton of the production front-end at application/frontend/ (R
         - FantasyPros fetcher
         - weather fetcher
     >> frontend
-        - production front-end — React + DuckDB decided; first skeleton built (Power Rankings).
-          Remaining: more panels, data-delivery model (client-side DuckDB-WASM vs a Python API), deployment
+        - production front-end — React + DuckDB decided; Power Rankings panel built + deepened
+          (team drill-down drawer with all-play, efficiency, weekly scoring, two spectrums).
+          Remaining: more panels (per the Build Order below), deployment.
 
 ## V1 Definition (current build target)
 Team overview, league standings, and matchup review. Powered by nflreadpy and Sleeper data already fetched. Target ship: NFL kickoff, mid-August 2026.
@@ -82,11 +103,20 @@ Team overview, league standings, and matchup review. Powered by nflreadpy and Sl
 
 ## Next single highest-leverage move
 
-Deepen the existing Power Rankings panel into an interactive view (depth over breadth — no new fetcher, all from season_2025.parquet). Three additions: (1) a week filter — the weeks are already queried in loadPowerRankings() but only used for the header label, so wire them into the SQL so rankings can be scoped to a week or range; (2) per-team drill-down — expand a card to its roster/player rows for that team; (3) re-sortable by metric (power score vs. PPG vs. record). Goal: validate what makes a single panel genuinely useful before replicating the pattern across more panels.
+The Power Rankings panel is now proven deep (ranking cards + a rich team drill-down).
+Decide between two directions: (a) **breadth** — start the second panel in the Build
+Order ("Points scored + consistency league overview", Sleeper matchups only, no join),
+replicating the now-validated card+drawer pattern; or (b) **roster depth** — add a
+per-team roster table to the drawer (the actual players started/benched each week, which
+would also let the lineup-efficiency number name *which* bench player should have started).
+Lean (b) if the goal is to make the existing efficiency metric actionable; lean (a) to
+start covering the V1 surface. Either way: no new fetcher needed — all from
+season_2025.parquet + the data already wired in.
 
 ## The step after (unconfirmed, subject to change)
 
-Use joins from 2025 season to create power rankings and points consistency analysis
+Continue down the V1 Dashboard Build Order (standings with trajectory; manager dossiers;
+positional strength vs. league average; head-to-head matchup breakdown).
 
 ## V1 Dashboard Build Order
 
