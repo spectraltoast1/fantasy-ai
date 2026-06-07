@@ -18,11 +18,51 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* ---- Top-level tab nav (League | Team) ---- */
+.topnav { border-bottom: 1px solid var(--line); background: var(--panel); }
+.topnav-inner {
+  max-width: 880px; margin: 0 auto; padding: 0 24px;
+  display: flex; gap: 4px;
+}
+.topnav-tab {
+  background: none; border: none; cursor: pointer;
+  color: var(--muted); font-size: 14px; font-weight: 600;
+  padding: 16px 14px; border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.topnav-tab:hover { color: var(--text); }
+.topnav-tab.active { color: var(--text); border-bottom-color: var(--accent); }
+
 .page { max-width: 880px; margin: 0 auto; padding: 32px 24px 64px; }
 
 .page-head { margin-bottom: 24px; }
 .page-head h1 { margin: 0; font-size: 28px; letter-spacing: -0.02em; }
 .page-head .sub { color: var(--muted); margin-top: 4px; font-size: 13px; }
+
+/* ---- Team tab: header switcher + inner sub-nav ---- */
+.team-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.team-switch { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+.team-switch-label { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.team-switch select {
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 8px;
+  padding: 7px 10px; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.team-switch select:hover { border-color: #3a4254; }
+
+.subnav { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 24px; }
+.subnav-tab {
+  background: none; border: none; cursor: pointer;
+  color: var(--muted); font-size: 13px; font-weight: 600;
+  padding: 10px 12px; border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.subnav-tab:hover { color: var(--text); }
+.subnav-tab.active { color: var(--text); border-bottom-color: var(--accent); }
+
+.subview-stub {
+  color: var(--muted); background: var(--panel); border: 1px dashed var(--line);
+  border-radius: 12px; padding: 32px 24px; text-align: center; line-height: 1.5;
+}
 
 .state { padding: 64px 24px; text-align: center; color: var(--muted); }
 .state.error { color: #e0709a; }

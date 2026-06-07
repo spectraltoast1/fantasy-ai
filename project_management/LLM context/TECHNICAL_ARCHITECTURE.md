@@ -2,7 +2,7 @@
 
 > Engineering context document for Claude Code. Describes the stack, folder structure, data layer design, and technical principles. Updated regularly as the project evolves.
 
-**Last reviewed:** 2026-05-31
+**Last reviewed:** 2026-06-07
 
 ---
 
@@ -16,7 +16,7 @@ Winning a redraft fantasy football championship is about more than just collecti
 
 ## Tech Stack
 
-- **Language:** Python for the data layer/pipeline; JS/React in the front-end playground
+- **Language:** Python for the data layer/pipeline; JS/React in the front-end
 - **Data manipulation:** polars (not pandas) - nflreadpy returns polars DataFrames; use polars syntax throughout
 - **NFL stats:** nflreadpy (successor to deprecated nfl_data_py) - returns polars DataFrames
 - **Front-end:** React + Vite + DuckDB (decided). Original plan was Dash + Plotly; switched after a vertical slice in the real stack validated it and proved easier to iterate than a chat artifact.
@@ -61,13 +61,9 @@ separate decisions doc.
 
 ---
 
-## Version Roadmap (subject to change)
-- **V1** — Team overview, league standings, matchup review (no AI)
-- **V2** — Waiver wire analysis (requires Sleeper full player database fetcher)
-- **V3** — Start/sit recommendations (requires FantasyPros projections fetcher)
-- **V4** — Trade analysis (LeagueLogs market value — data collection started 2026-05-31; features still V4)
-- **V5** — AI-powered insights (major update, builds on complete data layer)
-- **V6+** — More complex analytics (TBD)
+## Version Roadmap
+→ Source of truth: **STATUS.md § Version Roadmap**. (Versions are referenced here for
+scope tagging only; the canonical list lives in STATUS.)
 
 ## Known Scope Exclusions
 **DST/K (V1):** Excluded from all V1 transforms and dashboard work. DSTs are stripped at join time via team abbreviation detection (Sleeper represents DSTs as all-uppercase team codes in matchup data). Kickers are removed by the SKILL_POSITIONS filter applied after the join. All joins and visualizations assume skill positions only: QB, RB, WR, TE.
@@ -93,7 +89,7 @@ fantasy-ai/
 │   └── journal/
 └── application/
     ├── frontend/                   # production front-end — React + Vite + DuckDB-WASM (Node)
-    │   ├── src/                     #   App.jsx (view), queries.js (data-access layer), db.js (DuckDB-WASM loader)
+    │   ├── src/                     #   App.jsx (tab shell), LeaguePanel/TeamPanel.jsx (views), queries.js (data-access layer), db.js (DuckDB-WASM loader)
     │   └── public/data/             #   symlinks → season_2025 + teams_2025 + lineup_slots_2025 parquet (gitignored)
     ├── data/
         ├── data_layer.py           # ✅ built — centralized read/write module

@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-06-07
+**Last updated:** 2026-06-07 (Team-tab foundation)
 **Target ship:** NFL kickoff, mid August 2026
 
 ---
@@ -22,15 +22,34 @@ Winning a redraft fantasy football championship is about more than just collecti
 
 The project will do this in two ways: a dashboard for user-driven insight and an AI layer for interpretation and decision suggestions. The AI layer is not meant to run the team - it's a consultation, putting data-driven suggestions alongside the user's own analysis to produce better decisions.
 
-IMPORTANT TECH NOTE: The python library nflreadpy is the core data source for this project. It returns polars DataFrames - it is not based on pandas. Any LLM coding instructions working with nflreadpy need to explicitly call out the polars DataFrames so we don't end up with mixed polars/pandas data manipulation syntax.
-
-IMPORTANT TECH NOTE: All data I/O goes through application/data/data_layer.py. Transform scripts and dashboard components read and write via data_layer.py functions only — no script owns its own file paths or parquet logic.
-
-IMPORTANT TECH NOTE: Data-delivery model is decided for V1 — client-side DuckDB-WASM, no server (a server/API was deferred, not ruled out; the src/queries.js data-access layer is the seam to switch later).
+> Tech non-negotiables (polars-only, all I/O through data_layer.py, client-side
+> DuckDB-WASM with src/queries.js as the server seam) live in **CLAUDE.md** and
+> **TECHNICAL_ARCHITECTURE.md** — not restated here.
 
 ## Today (the current status toward v1)
 
+> **Maintenance (rolling log):** keep only the **most recent build + the 2 prior**
+> (3 prose entries max). At closedown, prepend the new build and delete the oldest
+> prose entry. Nothing is lost — the cumulative record lives in `> built` below; this
+> section is just the recent-detail window. Keeps the doc light for every session.
+
 > most recent build
+Tab navigation + the **Team tab** foundation. Introduced the app's first nav layer:
+`App.jsx` is now a thin shell owning top-level tab state (**League | Team**); the
+Power Rankings content moved into `LeaguePanel.jsx` (owns its own data load). The
+former single panel is the **League** tab (Power Rankings today; manager dossiers +
+other league overviews to follow). New **Team** tab is a single-team drill-down:
+opens on the logged-in user's roster, flips to any team via a switcher, and toggles
+two inner sub-tabs — **Overview** (team strengths/weak spots, to be deepened from the
+League drawer metrics) and **Players** (per-player real-world metrics + interpretive
+viz). Both sub-views are scaffolded/stubbed — content lands in later sessions. New
+seam: queries.js `loadTeams()` + `MY_USERNAME` constant (mirrors
+config.SLEEPER_USERNAME, matched against teams_2025.parquet `owner_name` to resolve
+"your" roster). Identity seam to formalize later: bake an `is_me` flag into the teams
+parquet at fetch time so the constant can go away. Verified live (Team tab opens on
+"Tet Lasso"/roster 8, switcher + sub-tab toggles work, no console errors).
+
+> earlier build
 Power Rankings team drill-down — click a card to open a side drawer that decomposes a
 team's record into its three real drivers: roster quality (all-play "true record" — W/L
 as if each team played all others every week, luck-stripped, with a Lucky/Earned/Unlucky
@@ -51,12 +70,6 @@ public/data and registered in db.js.
 > earlier build
 Real team names on the Power Rankings cards. Added sleeper.py fetch_teams() + fetch-teams CLI (resolves the season's league, maps roster_id → team_name/owner_name via /users + /rosters) writing teams_2025.parquet through data_layer; db.js registers it; queries.js LEFT JOINs it and computes the display name (custom team name → Sleeper handle → "Team N" fallback); App.jsx consumes team.name. Verified live (all 10 teams named; null-custom-name fallback confirmed). Also this session: documented the client/server seam invariants in TECHNICAL_ARCHITECTURE.md; established the Code-only session lifecycle (CLAUDE.md + scripts/worktree-setup.sh + scripts/worktree-close.sh + co-build guides/SESSION_GUIDE.md, 3-commit cap); repo cleanup (untracked the two committed parquets, deleted _deprecated and _deferred).
 
-> earlier build
-Built the LeagueLogs market-value fetcher (application/data/fetchers/leaguelogs.py) + a launchd scheduler that snapshots all 5 published profiles (3 redraft, 2 dynasty) daily at 4am ET. Market value is keyed on sleeperPlayerId, so it joins the pipeline with no id mapping; QB/RB/WR/TE only (matches scope). The API serves only "now," so daily snapshots are the only way to build the value time-series — collection started now even though the consuming features (trade analysis) are V4, because history can't be backfilled. Appends to snapshots/leaguelogs/market_values.parquet via data_layer (idempotent dedup on snapshot_date), ~11 MB/year. First snapshot verified (3,409 rows); scheduler tested via launchd (exit 0).
-
-> earlier build
-Built the first skeleton of the production front-end at application/frontend/ (React + Vite + DuckDB-WASM). It runs SQL directly against season_2025.parquet in the browser (no export step) — the same DuckDB-over-parquet approach that carries to production. First panel: Power Rankings — teams ranked by PPG with a QB/RB/WR/TE positional-strength breakdown, record, consistency badge, and a 0–100 power score. Started as a "design playground" to choose a stack; building in the real stack proved easier than a chat artifact, so React is now the decided front-end and this is its first real slice (not throwaway). (Note: required installing Node via Homebrew.)
-
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
@@ -67,6 +80,8 @@ Built the first skeleton of the production front-end at application/frontend/ (R
     - sleeper teams fetch (fetch_teams → teams_2025.parquet) — real team names on Power Rankings cards
     - roster_positions fetch + derive_lineup_slots transform — declared starting-lineup config (lineup_slots_2025.parquet)
     - Power Rankings team drill-down drawer — all-play true record, lineup efficiency, weekly scoring, consistency + positional-shape spectrums
+    - tab nav shell (League | Team) — App.jsx shell + LeaguePanel/TeamPanel split
+    - Team tab foundation — your-team resolver (loadTeams + MY_USERNAME), team switcher, Overview/Players sub-tabs (stubbed)
 
 > not yet built
     >> backend
@@ -91,27 +106,29 @@ Team overview, league standings, and matchup review. Powered by nflreadpy and Sl
 - **V6+** — More complex analytics (TBD)
 
 ## Known Scope Exclusions
-**DST/K (V1):** DST and kicker positional data is excluded from V1. DSTs are stripped at join time by detecting team abbreviations in the Sleeper matchup data. Kickers are filtered out via the SKILL_POSITIONS filter applied after the join. All V1 transform and dashboard work assumes skill positions only (QB, RB, WR, TE).
-
-**Market value (V1):** LeagueLogs market value is being snapshotted daily now to bank the time-series, but the features that consume it (trade analysis, value-aware rankings) are V4. Any UI that displays it must show the required "Powered by LeagueLogs API" attribution.
-
-**Waiver wire (V1):** Full waiver wire analysis requires querying the full available player pool, not just rostered players. The Sleeper player registry (fetch_players() in sleeper.py, cached at cache/sleeper/players.parquet) now exists and is used by the auditor to resolve unknown-position players at join time. Full waiver wire analysis against the complete available player pool is still V2 scope.
-
-**IR roster overages:** Fantasy managers can use IR slots to carry more than the standard 17 roster spots. This is accurate data — the join reconciliation report handles it correctly and counts whatever Sleeper reports. Expect to see 18-player rosters from 1–2 teams per week during the season, particularly early when injury-stashing is common.
-
-**Zero-stat row context:** Rostered players who did not play in a given week (injured, suspended, inactive, not yet activated) appear in the join output with all stat columns at 0.0. The join correctly includes them, but provides no signal for why they scored 0. Injury status and roster status context would require a separate fetch from Sleeper's injury/status endpoint. This is a known gap — treat 0-stat rows as "rostered, did not contribute" without assuming a specific reason.
+→ Source of truth: **TECHNICAL_ARCHITECTURE.md § Known Scope Exclusions** (DST/K, waiver
+wire / full player pool, IR roster overages, zero-stat rows). One product note kept here:
+**Market value (V1)** is snapshotted daily now to bank the time-series, but the features
+that consume it (trade analysis, value-aware rankings) are V4; any UI showing it must
+carry the "Powered by LeagueLogs API" attribution.
 
 ## Next single highest-leverage move
 
-The Power Rankings panel is now proven deep (ranking cards + a rich team drill-down).
-Decide between two directions: (a) **breadth** — start the second panel in the Build
-Order ("Points scored + consistency league overview", Sleeper matchups only, no join),
-replicating the now-validated card+drawer pattern; or (b) **roster depth** — add a
-per-team roster table to the drawer (the actual players started/benched each week, which
-would also let the lineup-efficiency number name *which* bench player should have started).
-Lean (b) if the goal is to make the existing efficiency metric actionable; lean (a) to
-start covering the V1 surface. Either way: no new fetcher needed — all from
-season_2025.parquet + the data already wired in.
+The Team tab's structural foundation is in (nav shell + your-team resolver + switcher +
+Overview/Players sub-tabs), but both sub-views are stubs. Fill them in — each is its own
+session-sized slice, no new fetcher needed:
+- **Team Overview** — promote/deepen the League drawer metrics (all-play true record,
+  lineup efficiency, weekly scoring, consistency + positional-shape spectrums) into a
+  full single-team page that reads as "how is this team doing, where's the strength,
+  where's the weakness." Reuses `loadTeamDetails()` (already keyed by roster_id).
+- **Players** — per-player real-world metrics from season_2025.parquet (127 cols:
+  passing/rushing/receiving yards, TDs, targets, target_share, air_yards_share, wopr,
+  EPA…) with visualizations that make the stats *interpretable*, not a raw table.
+  Needs a new queries.js function (e.g. `loadTeamPlayers(rosterId)`).
+
+Lean **Team Overview first** — it's the larger payoff (turns the cramped drawer into a
+real page) and reuses an existing query; Players is the bigger net-new (new query +
+viz design). Both should respect the team switcher already wired in.
 
 ## The step after (unconfirmed, subject to change)
 
