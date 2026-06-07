@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import LeaguePanel from './LeaguePanel.jsx';
+import TeamPanel from './TeamPanel.jsx';
 
 // App shell: owns the top-level tab and renders the active panel. Each panel owns
 // its own data loading (via queries.js), so this stays a thin navigation frame.
@@ -28,14 +29,7 @@ export default function App() {
       </nav>
 
       {tab === 'league' && <LeaguePanel />}
-      {tab === 'team' && (
-        <div className="page">
-          <header className="page-head">
-            <h1>Team</h1>
-            <div className="sub">Single-team drill-down — coming next.</div>
-          </header>
-        </div>
-      )}
+      {tab === 'team' && <TeamPanel />}
     </div>
   );
 }

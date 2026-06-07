@@ -12,6 +12,12 @@ import { query } from './db.js';
 
 export const POS = ['QB', 'RB', 'WR', 'TE'];
 
+// Who "you" are in this league. Mirrors config.SLEEPER_USERNAME (Python-side, so
+// not readable here); the value matches teams_2025.parquet's owner_name. Identity
+// seam: the cleaner long-term move is to bake an `is_me` flag into the teams
+// parquet at fetch time so this constant can go away.
+export const MY_USERNAME = 'spectraltoast1';
+
 // Team-week score collapses per-player rows to one row per (team, week), since
 // roster_total_points / matchup_result repeat across a team's players.
 const SQL_TEAMS = `
@@ -295,6 +301,34 @@ export async function loadTeamDetails() {
   attachSpectrumPos(details, (d) => d.shape.heroCv, (d, t) => (d.shape.pos = t));
 
   return details;
+}
+
+// ---------------------------------------------------------------------------
+// Team tab — the roster picker (who's in the league + which one is "you").
+// ---------------------------------------------------------------------------
+
+/**
+ * The league's teams for the Team-tab switcher, plus which roster is the
+ * logged-in user's (resolved by matching MY_USERNAME against owner_name).
+ * Names follow the same custom-name → handle → stub fallback as the cards.
+ * @returns {Promise<{teams: {rosterId: number, name: string, owner: string, isMe: boolean}[], myRosterId: number|null}>}
+ */
+export async function loadTeams() {
+  const rows = await query(
+    `SELECT roster_id, team_name, owner_name FROM 'teams.parquet' ORDER BY roster_id`,
+  );
+  let myRosterId = null;
+  const teams = rows.map((r) => {
+    const isMe = r.owner_name === MY_USERNAME;
+    if (isMe) myRosterId = Number(r.roster_id);
+    return {
+      rosterId: Number(r.roster_id),
+      name: r.team_name || r.owner_name || `Team ${r.roster_id}`,
+      owner: r.owner_name,
+      isMe,
+    };
+  });
+  return { teams, myRosterId };
 }
 
 const round1 = (n) => Math.round(n * 10) / 10;
