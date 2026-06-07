@@ -93,7 +93,7 @@ fantasy-ai/
 │   └── journal/
 └── application/
     ├── frontend/                   # production front-end — React + Vite + DuckDB-WASM (Node)
-    │   ├── src/                     #   App.jsx (view), queries.js (data-access layer), db.js (DuckDB-WASM loader)
+    │   ├── src/                     #   App.jsx (tab shell), LeaguePanel/TeamPanel.jsx (views), queries.js (data-access layer), db.js (DuckDB-WASM loader)
     │   └── public/data/             #   symlinks → season_2025 + teams_2025 + lineup_slots_2025 parquet (gitignored)
     ├── data/
         ├── data_layer.py           # ✅ built — centralized read/write module

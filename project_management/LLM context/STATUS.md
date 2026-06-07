@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-06-07
+**Last updated:** 2026-06-07 (Team-tab foundation)
 **Target ship:** NFL kickoff, mid August 2026
 
 ---
@@ -31,6 +31,22 @@ IMPORTANT TECH NOTE: Data-delivery model is decided for V1 — client-side DuckD
 ## Today (the current status toward v1)
 
 > most recent build
+Tab navigation + the **Team tab** foundation. Introduced the app's first nav layer:
+`App.jsx` is now a thin shell owning top-level tab state (**League | Team**); the
+Power Rankings content moved into `LeaguePanel.jsx` (owns its own data load). The
+former single panel is the **League** tab (Power Rankings today; manager dossiers +
+other league overviews to follow). New **Team** tab is a single-team drill-down:
+opens on the logged-in user's roster, flips to any team via a switcher, and toggles
+two inner sub-tabs — **Overview** (team strengths/weak spots, to be deepened from the
+League drawer metrics) and **Players** (per-player real-world metrics + interpretive
+viz). Both sub-views are scaffolded/stubbed — content lands in later sessions. New
+seam: queries.js `loadTeams()` + `MY_USERNAME` constant (mirrors
+config.SLEEPER_USERNAME, matched against teams_2025.parquet `owner_name` to resolve
+"your" roster). Identity seam to formalize later: bake an `is_me` flag into the teams
+parquet at fetch time so the constant can go away. Verified live (Team tab opens on
+"Tet Lasso"/roster 8, switcher + sub-tab toggles work, no console errors).
+
+> earlier build
 Power Rankings team drill-down — click a card to open a side drawer that decomposes a
 team's record into its three real drivers: roster quality (all-play "true record" — W/L
 as if each team played all others every week, luck-stripped, with a Lucky/Earned/Unlucky
@@ -67,6 +83,8 @@ Built the first skeleton of the production front-end at application/frontend/ (R
     - sleeper teams fetch (fetch_teams → teams_2025.parquet) — real team names on Power Rankings cards
     - roster_positions fetch + derive_lineup_slots transform — declared starting-lineup config (lineup_slots_2025.parquet)
     - Power Rankings team drill-down drawer — all-play true record, lineup efficiency, weekly scoring, consistency + positional-shape spectrums
+    - tab nav shell (League | Team) — App.jsx shell + LeaguePanel/TeamPanel split
+    - Team tab foundation — your-team resolver (loadTeams + MY_USERNAME), team switcher, Overview/Players sub-tabs (stubbed)
 
 > not yet built
     >> backend
@@ -103,15 +121,21 @@ Team overview, league standings, and matchup review. Powered by nflreadpy and Sl
 
 ## Next single highest-leverage move
 
-The Power Rankings panel is now proven deep (ranking cards + a rich team drill-down).
-Decide between two directions: (a) **breadth** — start the second panel in the Build
-Order ("Points scored + consistency league overview", Sleeper matchups only, no join),
-replicating the now-validated card+drawer pattern; or (b) **roster depth** — add a
-per-team roster table to the drawer (the actual players started/benched each week, which
-would also let the lineup-efficiency number name *which* bench player should have started).
-Lean (b) if the goal is to make the existing efficiency metric actionable; lean (a) to
-start covering the V1 surface. Either way: no new fetcher needed — all from
-season_2025.parquet + the data already wired in.
+The Team tab's structural foundation is in (nav shell + your-team resolver + switcher +
+Overview/Players sub-tabs), but both sub-views are stubs. Fill them in — each is its own
+session-sized slice, no new fetcher needed:
+- **Team Overview** — promote/deepen the League drawer metrics (all-play true record,
+  lineup efficiency, weekly scoring, consistency + positional-shape spectrums) into a
+  full single-team page that reads as "how is this team doing, where's the strength,
+  where's the weakness." Reuses `loadTeamDetails()` (already keyed by roster_id).
+- **Players** — per-player real-world metrics from season_2025.parquet (127 cols:
+  passing/rushing/receiving yards, TDs, targets, target_share, air_yards_share, wopr,
+  EPA…) with visualizations that make the stats *interpretable*, not a raw table.
+  Needs a new queries.js function (e.g. `loadTeamPlayers(rosterId)`).
+
+Lean **Team Overview first** — it's the larger payoff (turns the cramped drawer into a
+real page) and reuses an existing query; Players is the bigger net-new (new query +
+viz design). Both should respect the team switcher already wired in.
 
 ## The step after (unconfirmed, subject to change)
 
