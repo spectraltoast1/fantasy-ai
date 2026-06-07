@@ -114,19 +114,22 @@ function Overview({ vitals, roster }) {
       <section className="to-section">
         <h3 className="to-h3">How this team is built</h3>
         <Reliance reliance={roster.reliance} />
-        <DepthChart byPosition={roster.byPosition} maxTotal={roster.maxTotal} />
+        <Signals signals={roster.signals} />
+        <DepthChart byPosition={roster.byPosition} posMax={roster.posMax} />
         <div className="to-foot">
-          Bars are total points scored for this team over the season window
-          (bench included), on one scale per team — so the drop-off after a
-          starter reads as real roster depth or a cliff. Filled markers = regular
-          starters.
+          Bars are points per game (bench included), scaled within each position —
+          so a drop-off after a starter reads as a cliff. Filled dot = regular
+          starter; dimmed = bench; struck-through = no longer on the roster. “1g”
+          marks a one-game sample (too small to trust, left out of the signals).
         </div>
       </section>
     </>
   );
 }
 
-// At-a-glance vitals: where the team sits before the construction detail.
+// At-a-glance vitals: where the team sits before the construction detail. This is
+// a deliberate recap of the League-card numbers — the bridge that carries context
+// one level deeper, not new analysis.
 function Vitals({ vitals }) {
   const tiles = [
     { label: 'Power rank', value: `#${vitals.rank}`, sub: `of ${vitals.teamCount}` },
@@ -147,80 +150,86 @@ function Vitals({ vitals }) {
   );
 }
 
-// Star reliance: how concentrated the team's starting output is. High top-3 share
-// = leaning on a few players (fragile to injury/bye); low = distributed/deep.
-function relianceRead(top3) {
-  if (top3 >= 0.55) return { label: 'Top-heavy', tone: 'heavy', note: 'leans on a few players' };
-  if (top3 >= 0.42) return { label: 'Balanced', tone: 'balanced', note: 'a solid core, some spread' };
-  return { label: 'Deep', tone: 'deep', note: 'output spread across the roster' };
-}
-
+// Star dependence: how exposed the team is to its single best player, placed
+// league-relative (balanced attack ↔ star-led) rather than on a fixed threshold.
 function Reliance({ reliance }) {
-  const read = relianceRead(reliance.top3);
-  // Contribution bar: show the top contributors by name, fold the rest together.
-  const TOP = 5;
-  const shown = reliance.contributors.slice(0, TOP);
-  const restShare = reliance.contributors.slice(TOP).reduce((s, c) => s + c.share, 0);
-
+  const pct = Math.round(reliance.top1 * 100);
   return (
     <div className="to-reliance">
-      <div className="to-reliance-head">
-        <div>
-          <div className="to-reliance-stat">
-            Top 3 starters
-            <span className="to-reliance-pct">{Math.round(reliance.top3 * 100)}%</span>
-            <span className="to-reliance-of">of starting points</span>
-          </div>
-          <div className="to-reliance-sub">
-            Top scorer alone {Math.round(reliance.top1 * 100)}%
-          </div>
+      <div className="to-reliance-stat">
+        Star dependence
+        {reliance.star && (
+          <span className="to-reliance-note">
+            <strong>{reliance.star}</strong> carries {pct}% of starting points
+          </span>
+        )}
+      </div>
+      <div className="spectrum">
+        <div className="spec-track">
+          <div
+            className="spec-marker"
+            style={{ left: `${Math.max(0, Math.min(1, reliance.pos ?? 0.5)) * 100}%` }}
+          />
         </div>
-        <span className={`reliance-tag rel-${read.tone}`} title={read.note}>{read.label}</span>
-      </div>
-
-      <div className="to-contrib" role="img" aria-label="starting-point contribution by player">
-        {shown.map((c) => (
-          <div
-            key={c.name}
-            className="to-contrib-seg"
-            style={{ width: `${c.share * 100}%`, background: POS_COLORS[c.position] }}
-            title={`${c.name} — ${Math.round(c.share * 100)}%`}
-          />
-        ))}
-        {restShare > 0 && (
-          <div
-            className="to-contrib-seg rest"
-            style={{ width: `${restShare * 100}%` }}
-            title={`Rest of roster — ${Math.round(restShare * 100)}%`}
-          />
-        )}
-      </div>
-      <div className="to-contrib-legend">
-        {shown.map((c) => (
-          <span key={c.name} className="to-contrib-key">
-            <span className="to-contrib-dot" style={{ background: POS_COLORS[c.position] }} />
-            {c.name} {Math.round(c.share * 100)}%
-          </span>
-        ))}
-        {restShare > 0 && (
-          <span className="to-contrib-key">
-            <span className="to-contrib-dot rest" />
-            Rest {Math.round(restShare * 100)}%
-          </span>
-        )}
+        <div className="spec-ends">
+          <span>Balanced attack</span>
+          <span>Star-led</span>
+        </div>
       </div>
     </div>
   );
 }
 
-// Depth chart: per position, every rostered skill player as a bar (total points,
-// one scale per team). Starters are solid, bench is dimmed — so the shape of the
-// position (deep vs. one stud + a cliff) is visible at a glance.
-function DepthChart({ byPosition, maxTotal }) {
+// Auto-surfaced signals: lead with what to do. Lineup calls are fixable in house
+// (start the bench guy); holes need an outside upgrade. No noise = a clean bill.
+function Signals({ signals }) {
+  const lineup = signals.lineup.slice(0, 3);
+  const holes = signals.holes.slice(0, 2);
+  const none = lineup.length === 0 && holes.length === 0;
+
+  return (
+    <div className="to-signals">
+      {none && (
+        <div className="to-signal clean">
+          <span className="to-signal-tag tag-clean">All set</span>
+          <span className="to-signal-text">
+            No lineup or roster red flags — your best options are in the lineup.
+          </span>
+        </div>
+      )}
+      {lineup.map((s) => (
+        <div className="to-signal" key={`l-${s.position}-${s.benchName}`}>
+          <span className="to-signal-tag tag-lineup">Lineup</span>
+          <span className="to-signal-text">
+            <strong>{s.benchName}</strong> ({s.benchRate}/g) is out-producing starter{' '}
+            <strong>{s.starterName}</strong> ({s.starterRate}/g) at{' '}
+            <span style={{ color: POS_COLORS[s.position] }}>{s.position}</span>.
+          </span>
+        </div>
+      ))}
+      {holes.map((s) => (
+        <div className="to-signal" key={`h-${s.position}`}>
+          <span className="to-signal-tag tag-hole">Hole</span>
+          <span className="to-signal-text">
+            <span style={{ color: POS_COLORS[s.position] }}>{s.position}</span> is thin —{' '}
+            <strong>{s.name}</strong> ({s.rate}/g) trails the league’s ~{s.leagueRate}/g, with
+            no better option on the roster.
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Depth chart: per position, every rostered skill player as a bar (points per
+// game, scaled within position). Solid = regular starter, dimmed = bench,
+// struck-through = departed — so misused players and thin spots pop out.
+function DepthChart({ byPosition, posMax }) {
   return (
     <div className="to-depth">
       {POS.map((pos) => {
         const players = byPosition[pos] ?? [];
+        const max = posMax[pos] || 1;
         return (
           <div className="to-depth-group" key={pos}>
             <div className="to-depth-pos" style={{ color: POS_COLORS[pos] }}>{pos}</div>
@@ -229,21 +238,23 @@ function DepthChart({ byPosition, maxTotal }) {
                 <div className="to-depth-empty">no players</div>
               ) : (
                 players.map((p) => {
-                  const width = maxTotal ? (p.total / maxTotal) * 100 : 0;
-                  const starter = p.starts > 0;
+                  const width = Math.min(100, (p.rate / max) * 100);
+                  const role = p.departedTo ? 'departed' : p.startShare >= 0.5 ? 'starter' : 'bench';
                   return (
-                    <div className={`to-depth-row ${starter ? 'starter' : 'bench'}`} key={p.name}>
-                      <span className="to-depth-name">
-                        {starter && <span className="to-depth-marker" />}
-                        {p.name}
+                    <div className={`to-depth-row ${role}`} key={p.name}>
+                      <span className="to-depth-name" title={p.departedTo ? `now on ${p.departedTo}` : undefined}>
+                        {role === 'starter' && <span className="to-depth-marker" />}
+                        <span className="to-depth-pname">{p.name}</span>
+                        {p.lowSample && <span className="to-depth-flag">1g</span>}
+                        {p.departedTo && <span className="to-depth-left">→ {p.departedTo}</span>}
                       </span>
                       <div className="to-depth-track">
                         <div
-                          className="to-depth-fill"
+                          className={`to-depth-fill ${p.lowSample ? 'noisy' : ''}`}
                           style={{ width: `${width}%`, background: POS_COLORS[pos] }}
                         />
                       </div>
-                      <span className="to-depth-val">{p.total.toFixed(0)}</span>
+                      <span className="to-depth-val">{p.rate.toFixed(1)}</span>
                     </div>
                   );
                 })
