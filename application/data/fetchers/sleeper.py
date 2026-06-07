@@ -173,6 +173,39 @@ def fetch_teams(league_id: str, year: int) -> None:
     print(f"  teams: {len(df)} rosters → snapshots/sleeper/{year}/teams_{year}.parquet")
 
 
+def fetch_roster_positions(league_id: str, year: int) -> None:
+    """Fetch the league object and write its raw roster_positions slot list.
+
+    Produces roster_positions_{year}.parquet (slot_index, slot) via data_layer —
+    the league's declared starting-lineup configuration straight from Sleeper, e.g.
+    ['QB','RB','RB','WR','WR','TE','FLEX','FLEX','BN','BN',...]. Bench/IR/taxi slots
+    are kept here as the faithful source of truth; transforms/derive_lineup_slots.py
+    filters to the starting skill slots the optimal-lineup calc needs.
+    """
+    print(f"Fetching Sleeper roster_positions for league {league_id} ({year})...")
+
+    resp = requests.get(f"{_SLEEPER_BASE}/league/{league_id}")
+    resp.raise_for_status()
+    league = resp.json()
+
+    slots = league.get("roster_positions") or []
+    if not slots:
+        print("  No roster_positions on the league object — nothing to write.")
+        return
+
+    df = pl.DataFrame(
+        {"slot_index": list(range(len(slots))), "slot": [str(s) for s in slots]}
+    )
+
+    # data_layer.py lives one level up in application/data/
+    sys.path.insert(0, str(_DATA_DIR))
+    import data_layer
+
+    data_layer.write_roster_positions(df, year)
+    print(f"  roster_positions: {len(df)} slots → snapshots/sleeper/{year}/roster_positions_{year}.parquet")
+    print(f"  slots: {slots}")
+
+
 def backfill(league_id: str, year: int) -> None:
     """Fetch all completed regular-season weeks and write parquet snapshots."""
     print(f"Backfilling Sleeper data for league {league_id} ({year})...")
@@ -269,7 +302,8 @@ def refresh(league_id: str) -> None:
 if __name__ == "__main__":
     usage = (
         "Usage: sleeper.py backfill <year> | sleeper.py refresh | "
-        "sleeper.py fetch-players | sleeper.py fetch-teams <year>"
+        "sleeper.py fetch-players | sleeper.py fetch-teams <year> | "
+        "sleeper.py fetch-roster-positions <year>"
     )
 
     if len(sys.argv) < 2:
@@ -303,6 +337,14 @@ if __name__ == "__main__":
         _year = int(sys.argv[2])
         _league_id = league_resolver.resolve_league_id(_year)
         fetch_teams(_league_id, _year)
+
+    elif cmd == "fetch-roster-positions":
+        if len(sys.argv) < 3:
+            print(usage)
+            sys.exit(1)
+        _year = int(sys.argv[2])
+        _league_id = league_resolver.resolve_league_id(_year)
+        fetch_roster_positions(_league_id, _year)
 
     elif cmd == "fetch-players":
         fetch_players(force=True)

@@ -50,6 +50,52 @@ def read_sleeper_teams(season: int) -> pl.DataFrame:
     return pl.read_parquet(_sleeper_teams_path(season))
 
 
+# --- Sleeper Roster Positions (league starting-lineup config) ---
+
+def _roster_positions_path(season: int) -> Path:
+    return _SNAPSHOT_DIR / "sleeper" / str(season) / f"roster_positions_{season}.parquet"
+
+
+def write_roster_positions(df: pl.DataFrame, season: int) -> None:
+    """Write the league's raw roster_positions slot list for a season (overwrite).
+
+    One row per slot, in Sleeper's declared order (slot_index, slot). This is the
+    source of truth straight from the league object — derive_lineup_slots shapes it
+    into the starting skill-slot requirements the optimal-lineup calc consumes.
+    Like team identities, league lineup config is fixed once a season is frozen, so
+    this is a single overwrite file per season, not an appended time-series.
+    """
+    path = _roster_positions_path(season)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
+
+def read_roster_positions(season: int) -> pl.DataFrame:
+    return pl.read_parquet(_roster_positions_path(season))
+
+
+# --- Lineup Slots (derived starting skill-slot requirements) ---
+
+def _lineup_slots_path(season: int) -> Path:
+    return _SNAPSHOT_DIR / "sleeper" / str(season) / f"lineup_slots_{season}.parquet"
+
+
+def write_lineup_slots(df: pl.DataFrame, season: int) -> None:
+    """Write the derived starting skill-slot requirements for a season (overwrite).
+
+    Output of transforms/derive_lineup_slots.py: one row per distinct starting slot
+    type (slot, count, eligible) covering only slots a QB/RB/WR/TE can fill. Consumed
+    by the front-end optimal-lineup ("perfect lineup") calculation.
+    """
+    path = _lineup_slots_path(season)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
+
+def read_lineup_slots(season: int) -> pl.DataFrame:
+    return pl.read_parquet(_lineup_slots_path(season))
+
+
 # --- NFL Stats ---
 
 def read_nfl_stats(season: int) -> pl.DataFrame:
