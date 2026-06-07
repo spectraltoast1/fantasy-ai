@@ -40,7 +40,8 @@ body {
   border-radius: 12px;
   padding: 16px 18px;
 }
-.card:hover { border-color: #3a4254; }
+.card:hover { border-color: #3a4254; cursor: pointer; }
+.card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .rank { font-size: 22px; font-weight: 700; color: var(--muted); text-align: center; }
 
@@ -84,3 +85,77 @@ body {
 .legend-item { display: inline-flex; align-items: center; gap: 6px; }
 .swatch { width: 10px; height: 10px; border-radius: 2px; }
 .legend-note { margin-left: auto; font-style: italic; }
+
+/* ---- Team drawer (drill-down) ---- */
+.drawer-scrim {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5);
+  animation: fade 0.15s ease;
+}
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; width: 420px; max-width: 92vw;
+  background: var(--panel); border-left: 1px solid var(--line);
+  padding: 24px; overflow-y: auto; z-index: 10;
+  box-shadow: -16px 0 40px rgba(0, 0, 0, 0.4);
+  animation: slide-in 0.18s ease;
+}
+@keyframes slide-in { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+
+.drawer-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.drawer-name { font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
+.drawer-sub { color: var(--muted); font-size: 12px; margin-top: 3px; font-variant-numeric: tabular-nums; }
+.drawer-close {
+  background: none; border: none; color: var(--muted); font-size: 26px; line-height: 1;
+  cursor: pointer; padding: 0 4px;
+}
+.drawer-close:hover { color: var(--text); }
+.drawer-empty { color: var(--muted); padding: 24px 0; }
+
+.drawer-section { padding: 18px 0; border-top: 1px solid var(--line); }
+.drawer-h3 { margin: 0 0 14px; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+
+.stat-row { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
+.stat-row:last-child { margin-bottom: 0; }
+.stat-main { flex: 1; min-width: 0; }
+.stat-label { font-size: 13px; color: var(--text); }
+.stat-hint { color: var(--muted); font-size: 11px; }
+.stat-value { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; display: flex; align-items: baseline; gap: 10px; }
+.stat-pct { font-size: 14px; color: var(--muted); font-weight: 600; }
+.stat-sub { font-size: 11px; color: var(--muted); font-weight: 500; }
+
+.luck-tag { font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); white-space: nowrap; }
+.luck-lucky { color: #d9a85f; border-color: #4d4329; }
+.luck-unlucky { color: #6699e6; border-color: #2c3b59; }
+.luck-earned { color: #5fb3a3; border-color: #2f5249; }
+
+.eff-bar { width: 96px; height: 8px; border-radius: 999px; background: var(--panel-2); overflow: hidden; flex-shrink: 0; }
+.eff-fill { height: 100%; background: linear-gradient(90deg, #5fb3a3, #6699e6); }
+
+/* Bars and the mean line share one scale: both are % of .wk-chart's height. */
+.wk-chart {
+  position: relative; display: flex; align-items: flex-end; gap: 12px;
+  height: 120px; margin: 22px 0 26px;
+}
+.wk-col { flex: 1; display: flex; align-items: flex-end; justify-content: center; height: 100%; }
+.wk-bar {
+  position: relative; width: 100%; max-width: 44px;
+  border-radius: 5px 5px 0 0; min-height: 3px;
+}
+.wk-bar.beat { background: #5fb3a3; }
+.wk-bar.miss { background: #3a4254; }
+.wk-pts {
+  position: absolute; top: -17px; left: 0; right: 0; text-align: center;
+  font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.wk-label {
+  position: absolute; bottom: -22px; left: 0; right: 0; text-align: center;
+  font-size: 11px; color: var(--muted);
+}
+.wk-mean { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--accent); opacity: 0.7; }
+
+.wk-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 14px; color: var(--muted); font-size: 11px; }
+.wk-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.wk-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.wk-swatch.beat { background: #5fb3a3; }
+.wk-swatch.miss { background: #3a4254; }
+.wk-mean-key { color: var(--accent); }

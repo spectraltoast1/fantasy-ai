@@ -20,9 +20,11 @@ async function initDB() {
   URL.revokeObjectURL(workerUrl);
 
   // Live reads: public/data/*.parquet are symlinks to the real snapshots.
-  // season = the weekly join; teams = roster_id → team/owner names.
+  // season = the weekly join; teams = roster_id → team/owner names;
+  // slots = the league's declared starting skill-slot config (for optimal lineups).
   await registerParquet(db, '/data/season_2025.parquet', 'season.parquet');
   await registerParquet(db, '/data/teams_2025.parquet', 'teams.parquet');
+  await registerParquet(db, '/data/lineup_slots_2025.parquet', 'slots.parquet');
   return db;
 }
 
