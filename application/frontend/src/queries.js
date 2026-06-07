@@ -337,6 +337,18 @@ const SQL_CURRENT_TEAM = `
 
 const SQL_TEAM_NAMES = `SELECT roster_id, team_name, owner_name FROM 'teams.parquet'`;
 
+// One row per (team, week): the team's total points and W/L — the per-week series
+// the trajectory (form) read is built from. Mirrors SQL_TEAM_WEEK in the drawer
+// seam, kept here so the Team-tab Overview stays self-contained.
+const SQL_TEAM_TRAJECTORY = `
+  SELECT roster_id, week,
+         any_value(roster_total_points) AS pts,
+         any_value(matchup_result)      AS result
+  FROM 'season.parquet'
+  GROUP BY roster_id, week
+  ORDER BY roster_id, week
+`;
+
 // Below this many games a per-game rate is too noisy to trust (one big week
 // distorts it), so such players are flagged low-confidence and kept out of the
 // auto-surfaced signals and the bar scale.
@@ -355,14 +367,32 @@ const MIN_GAMES = 2;
  *   - signals: lineup calls (a benched player out-rating a starter — fixable in
  *     house) and roster holes (a position whose best option trails the league —
  *     needs an outside upgrade)
+ *   - form: recent trajectory — last-half vs first-half scoring swing (`delta`),
+ *     a direction read (rising/fading/steady), the recent-half record, the weekly
+ *     series (with beat-median flags), and a league-relative Fading↔Surging marker
  * @returns {Promise<Object<number, object>>} keyed by roster_id
  */
 export async function loadTeamRosters() {
-  const [rows, currentRows, teamRows] = await Promise.all([
+  const [rows, currentRows, teamRows, trajRows] = await Promise.all([
     query(SQL_ROSTER),
     query(SQL_CURRENT_TEAM),
     query(SQL_TEAM_NAMES),
+    query(SQL_TEAM_TRAJECTORY),
   ]);
+
+  // Per-week team scores, indexed by team (sorted series) and by week (for the
+  // league median, so each week reads beat/below the field).
+  const weeksByTeam = {};
+  const ptsByWeek = {};
+  for (const r of trajRows) {
+    const rid = Number(r.roster_id);
+    const wk = Number(r.week);
+    const pts = Number(r.pts);
+    (weeksByTeam[rid] ??= []).push({ week: wk, pts, result: r.result });
+    (ptsByWeek[wk] ??= []).push(pts);
+  }
+  const medianByWeek = {};
+  for (const [wk, list] of Object.entries(ptsByWeek)) medianByWeek[wk] = median(list);
 
   const nameOf = {};
   for (const t of teamRows) {
@@ -473,12 +503,15 @@ export async function loadTeamRosters() {
       posMax,
       reliance: { top1, star: starters[0]?.name ?? null },
       signals: { lineup, holes },
+      form: computeForm(weeksByTeam[rid] ?? [], medianByWeek),
     };
   }
 
-  // League-relative marker for star dependence (balanced ↔ star-led), so each
-  // team reads against the league's actual spread rather than a fixed threshold.
+  // League-relative markers, so each team reads against the league's actual
+  // spread rather than a fixed threshold: star dependence (balanced ↔ star-led)
+  // and form trajectory (fading ↔ surging, by the recent-vs-early scoring swing).
   attachSpectrumPos(rosters, (d) => d.reliance.top1, (d, t) => (d.reliance.pos = t));
+  attachSpectrumPos(rosters, (d) => d.form.delta, (d, t) => (d.form.pos = t));
 
   return rosters;
 }
@@ -512,6 +545,52 @@ export async function loadTeams() {
 }
 
 const round1 = (n) => Math.round(n * 10) / 10;
+
+const mean = (xs) => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : 0);
+
+// Median of a numeric list (avg of the two middle values when even).
+function median(xs) {
+  const s = xs.slice().sort((a, b) => a - b);
+  const m = s.length;
+  if (!m) return 0;
+  return m % 2 ? s[(m - 1) / 2] : (s[m / 2 - 1] + s[m / 2]) / 2;
+}
+
+// Recent trajectory from a team's weekly score series. Splits the season into a
+// first half and a last half (non-overlapping; the middle week is dropped when
+// the count is odd) and reads the swing between them — direction, not variance.
+// At 4 weeks this is last-2 vs first-2; it widens automatically as weeks append.
+// `delta` is the points/week change (recent − early); the direction label uses a
+// threshold relative to the team's own scoring so a small wobble stays "steady".
+function computeForm(series, medianByWeek) {
+  const weeks = series
+    .slice()
+    .sort((a, b) => a.week - b.week)
+    .map((w) => ({ ...w, beatMedian: w.pts > (medianByWeek[w.week] ?? 0) }));
+  const n = weeks.length;
+  const pts = weeks.map((w) => w.pts);
+  const weekMax = pts.length ? Math.max(...pts) : 0;
+
+  if (n < 2) {
+    return { delta: 0, direction: 'steady', recent: { w: 0, l: 0 }, weeks, weekMax };
+  }
+  const half = Math.floor(n / 2);
+  const early = pts.slice(0, half);
+  const recent = pts.slice(n - half);
+  const delta = mean(recent) - mean(early);
+
+  const avg = mean(pts);
+  const rel = avg ? delta / avg : 0;
+  const direction = rel > 0.06 ? 'rising' : rel < -0.06 ? 'fading' : 'steady';
+
+  const recentWeeks = weeks.slice(n - half);
+  const rec = {
+    w: recentWeeks.filter((w) => w.result === 'W').length,
+    l: recentWeeks.filter((w) => w.result === 'L').length,
+  };
+
+  return { delta: round1(delta), direction, recent: rec, recentCount: half, weeks, weekMax };
+}
 
 // Coefficient of variation (sample stddev / mean) of a numeric list.
 function cv(xs) {

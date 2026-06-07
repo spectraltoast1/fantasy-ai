@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-06-07 (Team Overview — roster construction)
+**Last updated:** 2026-06-07 (Team Overview — form / trajectory lens)
 **Target ship:** NFL kickoff, mid August 2026
 
 ---
@@ -34,6 +34,30 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**Team Overview — Lens 3 (Form / trajectory).** New **Form** section under the
+construction block. Reframes weekly scoring from *variance* (the League drawer's
+read) to *direction*: is the team trending up or fading? **Honest with the 4-week
+freeze** — STATUS's planned "last-3 vs first-3" would overlap windows, so the split
+is **last-half vs first-half** (at 4 weeks: last-2 vs first-2, non-overlapping; the
+middle week drops when odd; widens automatically as V1.5 appends weeks). Three
+pieces: a **direction headline** (Heating up / Cooling off / Holding steady — the
+"steady" threshold is ±6% of the team's *own* avg so a wobble isn't called a surge)
+with the recent-half scoring swing (`±pts/wk`) and recent record; a **league-relative
+Fading↔Surging spectrum** (marker by the swing vs the league's actual spread); and a
+**weekly column chart** — the 4 scores, green = beat the league median that week /
+grey = below, recent window shaded so the comparison the delta describes is visible.
+The read deliberately separates *direction* from *results*: e.g. Saquarles is steady
+on scoring but 0–2 (unlucky), which the copy surfaces rather than hides.
+
+New shaping in queries.js `loadTeamRosters()` only (no new fetcher, no new seam):
+`SQL_TEAM_TRAJECTORY` per-week team points + `computeForm()` + `median()`/`mean()`
+helpers; the existing `attachSpectrumPos()` places the Fading↔Surging marker. Verified
+live across all three states (Team SCOOP surging +46.7/2–0; Saquarles steady/0–2; Tet
+Lasso fading −14.1) — every delta, direction, record, and spectrum position reconciles
+with a polars prototype. This is **3 of the 4 planned Overview lenses** (construction +
+reliance + form); only **Lens 4 (where you leave points)** remains.
+
+> earlier build
 **Team Overview** sub-view filled in (was a stub). This gives the Team tab its own
 identity vs. the League drawer: the League tab is **comparative** ("how do I stack
 up?", starters only); the Team tab is **constructive** ("how is THIS team built?")
@@ -81,24 +105,6 @@ config.SLEEPER_USERNAME, matched against teams_2025.parquet `owner_name` to reso
 parquet at fetch time so the constant can go away. Verified live (Team tab opens on
 "Tet Lasso"/roster 8, switcher + sub-tab toggles work, no console errors).
 
-> earlier build
-Power Rankings team drill-down — click a card to open a side drawer that decomposes a
-team's record into its three real drivers: roster quality (all-play "true record" — W/L
-as if each team played all others every week, luck-stripped, with a Lucky/Earned/Unlucky
-tag), manager skill (lineup efficiency vs. the optimal lineup achievable from the roster
-= points left on the bench), and luck (the gap between them). Plus a weekly-scoring chart
-(bars tinted by beat/below league median, mean line) and two qualitative spectrums:
-Consistent↔Volatile (CV of weekly scores) and Balanced↔Hero-led (concentration of
-per-position vs-league output), with per-position vs-league bars. Markers are league-
-relative. All five metrics aggregate over `week` with no hardcoded count, so they sharpen
-automatically as V1.5 appends weeks. Built in 3 passes: (1) roster_positions fetcher +
-derive_lineup_slots transform → declared QB1/RB2/WR2/TE1/FLEX2 config (replaces inference,
-makes the optimal-lineup calc exact); (2) all-play + efficiency + weekly scoring in the
-drawer; (3) the two spectrums. Verified live — every metric reconciles with a polars
-prototype (e.g. Bski: all-play 31–5/Earned, 88% eff; DebTheDeb: 19–17/Lucky, balanced).
-New seam: queries.js `loadTeamDetails()`; lineup_slots_2025.parquet symlinked into
-public/data and registered in db.js.
-
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
@@ -112,6 +118,7 @@ public/data and registered in db.js.
     - tab nav shell (League | Team) — App.jsx shell + LeaguePanel/TeamPanel split
     - Team tab foundation — your-team resolver (loadTeams + MY_USERNAME), team switcher, Overview/Players sub-tabs (stubbed)
     - Team Overview sub-view — vitals + "how this team is built": rate-based depth chart, league-relative star dependence, auto-surfaced lineup/hole signals; loadTeamRosters(), shared posColors.js [Overview lenses 1–2 of 4]
+    - Team Overview — Form / trajectory lens: direction headline (heating up/cooling off/steady), league-relative Fading↔Surging spectrum, weekly column chart (beat/below median); last-half vs first-half scoring swing in loadTeamRosters() [Overview lens 3 of 4]
 
 > not yet built
     >> backend
@@ -144,23 +151,21 @@ carry the "Powered by LeagueLogs API" attribution.
 
 ## Next single highest-leverage move
 
-The Team Overview now has **lenses 1–2** (roster construction/depth + star dependence)
-plus an **auto-surfaced signals** layer (lineup calls + roster holes) and the vitals
-strip. The design splits "how is this team built / how is it managed" into **4 lenses**;
-two shipped this session. Next sessions, in order:
+The Team Overview now has **lenses 1–3** (roster construction/depth + star dependence
++ form/trajectory) plus an **auto-surfaced signals** layer (lineup calls + roster holes)
+and the vitals strip. The design splits "how is this team built / how is it managed"
+into **4 lenses**; three are shipped. Next, in order:
 
-**Finish the Team Overview — the remaining 2 lenses** (deferred deliberately this
-session; each its own slice, no new fetcher needed):
-- **Lens 3 — Form / trajectory.** Reframe weekly scoring from *variance* (what the
-  League drawer shows) to *direction*: is the team trending up or fading? Rolling form,
-  last-3 vs. first-3. Same `season.parquet` per-week data; new shaping in queries.js.
+**Finish the Team Overview — the last lens** (its own slice, no new fetcher needed):
 - **Lens 4 — Where you leave points.** Decompose lineup inefficiency (the drawer's one
   "% / pts on bench" number) into an *actionable* read: which weeks, which slots are
-  costing points. Builds on the optimal-lineup calc already in `loadTeamDetails()`.
+  costing points. Builds on the optimal-lineup calc already in `loadTeamDetails()`
+  (League seam) — decide whether to surface it through `loadTeamRosters()` (the Team
+  seam, where lenses 1–3 live) or wire `loadTeamDetails()` into TeamPanel; the per-week
+  optimal-vs-actual machinery already exists, this lens is about *attributing* the gap.
 
-  (Lens 1 = roster construction/depth and lens 2 = star dependence both shipped this
-  session, plus the lineup/hole signals layer. The two above are what's left for the
-  Overview.)
+  (Lenses 1–3 = roster construction/depth, star dependence, and form/trajectory all
+  shipped, plus the lineup/hole signals layer. Lens 4 above is what's left.)
 
 **Then the Players sub-view** (still a stub) — per-player real-world metrics from
 season_2025.parquet (127 cols: passing/rushing/receiving yards, TDs, targets,

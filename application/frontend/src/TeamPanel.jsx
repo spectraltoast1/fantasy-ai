@@ -123,7 +123,95 @@ function Overview({ vitals, roster }) {
           marks a one-game sample (too small to trust, left out of the signals).
         </div>
       </section>
+      <section className="to-section">
+        <h3 className="to-h3">Form</h3>
+        <Form form={roster.form} />
+      </section>
     </>
+  );
+}
+
+// Form / trajectory: where the team is heading, not how much it bounces. Reads
+// the swing between the season's first half and its last half (at 4 weeks,
+// last-2 vs first-2) and places it on a league-relative Fading↔Surging spectrum,
+// then shows the weekly scores so the shape is legible. Distinct from the League
+// drawer's variance read — this is about direction.
+const DIRECTION = {
+  rising: { word: 'Heating up', cls: 'up' },
+  fading: { word: 'Cooling off', cls: 'down' },
+  steady: { word: 'Holding steady', cls: 'flat' },
+};
+
+function Form({ form }) {
+  if (!form || form.weeks.length < 2) {
+    return <div className="subview-stub">Not enough games yet to read a trend.</div>;
+  }
+  const dir = DIRECTION[form.direction];
+  const span = form.recentCount === 1 ? 'week' : `${form.recentCount} weeks`;
+  const sign = form.delta > 0 ? '+' : '';
+  const detail =
+    form.direction === 'steady'
+      ? 'scoring is flat across the season so far'
+      : `${sign}${form.delta.toFixed(1)} pts/wk over the last ${span} vs. the first ${span}`;
+  const rec = `${form.recent.w}–${form.recent.l} recently`;
+
+  return (
+    <div className="to-form">
+      <div className="to-form-head">
+        <span className={`to-form-word ${dir.cls}`}>{dir.word}</span>
+        <span className="to-form-detail">{detail} · {rec}</span>
+      </div>
+
+      <div className="spectrum">
+        <div className="spec-track form-track">
+          <div
+            className="spec-marker"
+            style={{ left: `${Math.max(0, Math.min(1, form.pos ?? 0.5)) * 100}%` }}
+          />
+        </div>
+        <div className="spec-ends">
+          <span>Fading</span>
+          <span>Surging</span>
+        </div>
+      </div>
+
+      <WeeklyTrend weeks={form.weeks} weekMax={form.weekMax} recentCount={form.recentCount} />
+
+      <div className="to-foot">
+        Columns are weekly points; green beat the league median that week, grey
+        fell below it. The shaded weeks on the right are the recent window the
+        trend compares against the earlier ones.
+      </div>
+    </div>
+  );
+}
+
+// Weekly scores as a small column chart — the "show the work" behind the trend.
+// Bars scale within the team; a tick marks the league median that week. The most
+// recent half is shaded so the comparison the delta describes is visible.
+function WeeklyTrend({ weeks, weekMax, recentCount }) {
+  const n = weeks.length;
+  const recentFrom = n - recentCount;
+  return (
+    <div className="to-trend">
+      {weeks.map((w, i) => {
+        const h = weekMax ? Math.max(4, (w.pts / weekMax) * 100) : 0;
+        return (
+          <div className={`to-trend-col ${i >= recentFrom ? 'recent' : ''}`} key={w.week}>
+            <span className="to-trend-pts">{Math.round(w.pts)}</span>
+            <div className="to-trend-bar-wrap">
+              <div
+                className={`to-trend-bar ${w.beatMedian ? 'beat' : 'below'}`}
+                style={{ height: `${h}%` }}
+              />
+            </div>
+            <span className={`to-trend-wk ${w.result === 'W' ? 'win' : 'loss'}`}>
+              W{w.week} · {w.result}
+            </span>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
