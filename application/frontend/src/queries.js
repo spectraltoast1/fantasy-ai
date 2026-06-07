@@ -304,6 +304,186 @@ export async function loadTeamDetails() {
 }
 
 // ---------------------------------------------------------------------------
+// Team tab — roster construction (depth, star dependence, lineup/roster signals).
+// ---------------------------------------------------------------------------
+
+// One row per (team, player): season-window totals. Bench rows are kept (the
+// whole point of the depth view), so this looks at every skill player who logged
+// a game, not just starters. starter_pts isolates output that actually counted
+// toward the team's score — the basis for the star-dependence read.
+const SQL_ROSTER = `
+  SELECT roster_id,
+         player_display_name           AS name,
+         any_value(position)           AS position,
+         count(*)                      AS games,
+         sum(is_starter::INT)          AS starts,
+         round(sum(sleeper_points), 1) AS total,
+         round(sum(CASE WHEN is_starter THEN sleeper_points ELSE 0 END), 1) AS starter_pts
+  FROM 'season.parquet'
+  WHERE position IN ('QB','RB','WR','TE')
+  GROUP BY roster_id, name
+`;
+
+// Each player's CURRENT team = the roster they belong to in their latest week
+// (arg_max over week). roster_id is per-week in the join, so a traded/dropped
+// player lands here on whoever rosters them now — letting a former team's view
+// mark him as departed while still crediting the weeks he played there.
+const SQL_CURRENT_TEAM = `
+  SELECT player_display_name AS name, arg_max(roster_id, week) AS cur_roster
+  FROM 'season.parquet'
+  WHERE position IN ('QB','RB','WR','TE')
+  GROUP BY name
+`;
+
+const SQL_TEAM_NAMES = `SELECT roster_id, team_name, owner_name FROM 'teams.parquet'`;
+
+// Below this many games a per-game rate is too noisy to trust (one big week
+// distorts it), so such players are flagged low-confidence and kept out of the
+// auto-surfaced signals and the bar scale.
+const MIN_GAMES = 2;
+
+/**
+ * Per-team roster construction, computed once for every team. Powers the Team
+ * Overview's "how this team is built" section:
+ *   - byPosition: players grouped QB/RB/WR/TE, reliable players by per-game rate
+ *     (quality, not availability), low-sample ones pushed to the bottom; each
+ *     carries `current`/`departedTo`/`lowSample`/`startShare` flags
+ *   - posMax: per-position top reliable rate, so depth bars scale within their
+ *     position (a cliff reads clearly; QBs don't squash TEs)
+ *   - reliance: single-player exposure — top-1 share of starting points, league-
+ *     relative marker (`pos`), and the named star
+ *   - signals: lineup calls (a benched player out-rating a starter — fixable in
+ *     house) and roster holes (a position whose best option trails the league —
+ *     needs an outside upgrade)
+ * @returns {Promise<Object<number, object>>} keyed by roster_id
+ */
+export async function loadTeamRosters() {
+  const [rows, currentRows, teamRows] = await Promise.all([
+    query(SQL_ROSTER),
+    query(SQL_CURRENT_TEAM),
+    query(SQL_TEAM_NAMES),
+  ]);
+
+  const nameOf = {};
+  for (const t of teamRows) {
+    nameOf[Number(t.roster_id)] = t.team_name || t.owner_name || `Team ${t.roster_id}`;
+  }
+  const curTeam = {};
+  for (const c of currentRows) curTeam[c.name] = Number(c.cur_roster);
+
+  // Build per-player records grouped by team.
+  const byTeam = {};
+  for (const r of rows) {
+    const rid = Number(r.roster_id);
+    const games = Number(r.games);
+    const cur = curTeam[r.name];
+    (byTeam[rid] ??= []).push({
+      name: r.name,
+      position: r.position,
+      games,
+      starterPts: Number(r.starter_pts),
+      rate: games ? Number(r.total) / games : 0,
+      startShare: games ? Number(r.starts) / games : 0,
+      lowSample: games < MIN_GAMES,
+      current: cur === rid,
+      departedTo: cur === rid ? null : nameOf[cur] ?? null,
+    });
+  }
+
+  // League per-position benchmark: the average rate of reliable, regular starters
+  // across every team — the bar a position has to clear to not be a "hole".
+  const lgSum = {};
+  const lgN = {};
+  for (const players of Object.values(byTeam)) {
+    for (const p of players) {
+      if (p.current && !p.lowSample && p.startShare >= 0.5) {
+        lgSum[p.position] = (lgSum[p.position] ?? 0) + p.rate;
+        lgN[p.position] = (lgN[p.position] ?? 0) + 1;
+      }
+    }
+  }
+  const leagueRate = {};
+  for (const p of POS) leagueRate[p] = lgN[p] ? lgSum[p] / lgN[p] : 0;
+
+  const rosters = {};
+  for (const [ridStr, players] of Object.entries(byTeam)) {
+    const rid = Number(ridStr);
+
+    // Depth: per position, reliable players by rate desc, low-sample at the
+    // bottom; bars scale to the position's top reliable rate.
+    const byPosition = {};
+    const posMax = {};
+    for (const pos of POS) {
+      const inPos = players.filter((p) => p.position === pos);
+      const reliable = inPos.filter((p) => !p.lowSample).sort((a, b) => b.rate - a.rate);
+      const noisy = inPos.filter((p) => p.lowSample).sort((a, b) => b.rate - a.rate);
+      byPosition[pos] = [...reliable, ...noisy];
+      posMax[pos] = reliable.length ? reliable[0].rate : Math.max(...inPos.map((p) => p.rate), 0);
+    }
+
+    // Star dependence: share of starting points carried by the single top player.
+    const starters = players.filter((p) => p.starterPts > 0).sort((a, b) => b.starterPts - a.starterPts);
+    const starterTotal = starters.reduce((s, p) => s + p.starterPts, 0);
+    const top1 = starterTotal ? starters[0].starterPts / starterTotal : 0;
+
+    // Signals — current roster, reliable samples only.
+    const lineup = [];
+    const holes = [];
+    for (const pos of POS) {
+      const cur = byPosition[pos].filter((p) => p.current && !p.lowSample); // rate desc
+      if (!cur.length) continue;
+      const regs = cur.filter((p) => p.startShare >= 0.5);
+      const bench = cur.filter((p) => p.startShare < 0.5);
+
+      // Lineup call: the best benched player out-rates the weakest regular
+      // starter by a clear margin (>10%) — you may be starting the wrong guy.
+      if (regs.length && bench.length) {
+        const weakStarter = regs[regs.length - 1];
+        const topBench = bench[0];
+        if (topBench.rate > weakStarter.rate * 1.1) {
+          lineup.push({
+            position: pos,
+            benchName: topBench.name,
+            benchRate: round1(topBench.rate),
+            starterName: weakStarter.name,
+            starterRate: round1(weakStarter.rate),
+            gap: topBench.rate - weakStarter.rate,
+          });
+        }
+      }
+
+      // Roster hole: even the best current option at this position trails the
+      // league benchmark by a clear margin (>15%) — an outside upgrade target.
+      const best = cur[0];
+      if (leagueRate[pos] && best.rate < leagueRate[pos] * 0.85) {
+        holes.push({
+          position: pos,
+          name: best.name,
+          rate: round1(best.rate),
+          leagueRate: round1(leagueRate[pos]),
+          gap: leagueRate[pos] - best.rate,
+        });
+      }
+    }
+    lineup.sort((a, b) => b.gap - a.gap);
+    holes.sort((a, b) => b.gap - a.gap);
+
+    rosters[rid] = {
+      byPosition,
+      posMax,
+      reliance: { top1, star: starters[0]?.name ?? null },
+      signals: { lineup, holes },
+    };
+  }
+
+  // League-relative marker for star dependence (balanced ↔ star-led), so each
+  // team reads against the league's actual spread rather than a fixed threshold.
+  attachSpectrumPos(rosters, (d) => d.reliance.top1, (d, t) => (d.reliance.pos = t));
+
+  return rosters;
+}
+
+// ---------------------------------------------------------------------------
 // Team tab — the roster picker (who's in the league + which one is "you").
 // ---------------------------------------------------------------------------
 
