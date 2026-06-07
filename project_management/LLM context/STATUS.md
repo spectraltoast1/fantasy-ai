@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-06-07 (Team-tab foundation)
+**Last updated:** 2026-06-07 (Team Overview — roster construction)
 **Target ship:** NFL kickoff, mid August 2026
 
 ---
@@ -34,6 +34,38 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**Team Overview** sub-view filled in (was a stub). This gives the Team tab its own
+identity vs. the League drawer: the League tab is **comparative** ("how do I stack
+up?", starters only); the Team tab is **constructive** ("how is THIS team built?")
+and looks *inside* one roster — **bench included**, the data the drawer throws away.
+The page leads with the answer, then shows the work: **vitals strip** (power rank,
+record, points/wk ±std, power score — a deliberate recap that bridges from the League
+card) → **"How this team is built"** with three pieces:
+- **Star dependence** — single-player exposure (top-1 share of starting points),
+  placed on a **league-relative** Balanced↔Star-led spectrum (chose top-1 over top-3:
+  top-3 barely varied across teams — ~half for everyone with 8 starters — while top-1
+  reads as real character and isn't confounded by lineup churn). Names the star.
+- **Auto-surfaced signals** — the headline. **Lineup** calls (a benched player
+  out-rating a same-position starter by >10% per game → fix in house, e.g. "Gainwell
+  15.9/g > starter Pacheco 6.8/g at RB") and **Holes** (a position whose best current
+  option trails the league benchmark by >15% → outside upgrade). Surfaces the insight
+  rather than leaving the user to hunt the depth chart. "All set" when clean.
+- **Depth chart** — every skill player as a bar by **points per game**, **scaled
+  within each position** (so cliffs read clearly and QBs don't squash TEs). Starter
+  solid / bench dimmed / departed struck-through with "→ new team". ≤1-game samples
+  flagged "1g", hatched, sorted to the bottom, and excluded from signals + bar scale
+  (kills the one-big-week distortion).
+
+New seams: queries.js `loadTeamRosters()` (per-team, keyed by roster_id — depth,
+star dependence, signals, league per-position benchmarks; current-team resolved via
+`arg_max(roster_id, week)` so traded/dropped players are marked departed while still
+credited for weeks played). `POS_COLORS` extracted to `posColors.js`, shared by both
+panels. Roster set is **cumulative season**, departed players retained. Verified live
+across teams; metrics reconcile with a polars prototype (Naber top-1 23%/star-led +
+Gainwell lineup signal; Tet Lasso all-set). This covers **2 of the 4 planned Overview
+lenses** (roster construction + reliance) plus the signals layer — remaining 2 below.
+
+> earlier build
 Tab navigation + the **Team tab** foundation. Introduced the app's first nav layer:
 `App.jsx` is now a thin shell owning top-level tab state (**League | Team**); the
 Power Rankings content moved into `LeaguePanel.jsx` (owns its own data load). The
@@ -67,9 +99,6 @@ prototype (e.g. Bski: all-play 31–5/Earned, 88% eff; DebTheDeb: 19–17/Lucky,
 New seam: queries.js `loadTeamDetails()`; lineup_slots_2025.parquet symlinked into
 public/data and registered in db.js.
 
-> earlier build
-Real team names on the Power Rankings cards. Added sleeper.py fetch_teams() + fetch-teams CLI (resolves the season's league, maps roster_id → team_name/owner_name via /users + /rosters) writing teams_2025.parquet through data_layer; db.js registers it; queries.js LEFT JOINs it and computes the display name (custom team name → Sleeper handle → "Team N" fallback); App.jsx consumes team.name. Verified live (all 10 teams named; null-custom-name fallback confirmed). Also this session: documented the client/server seam invariants in TECHNICAL_ARCHITECTURE.md; established the Code-only session lifecycle (CLAUDE.md + scripts/worktree-setup.sh + scripts/worktree-close.sh + co-build guides/SESSION_GUIDE.md, 3-commit cap); repo cleanup (untracked the two committed parquets, deleted _deprecated and _deferred).
-
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
@@ -82,6 +111,7 @@ Real team names on the Power Rankings cards. Added sleeper.py fetch_teams() + fe
     - Power Rankings team drill-down drawer — all-play true record, lineup efficiency, weekly scoring, consistency + positional-shape spectrums
     - tab nav shell (League | Team) — App.jsx shell + LeaguePanel/TeamPanel split
     - Team tab foundation — your-team resolver (loadTeams + MY_USERNAME), team switcher, Overview/Players sub-tabs (stubbed)
+    - Team Overview sub-view — vitals + "how this team is built": rate-based depth chart, league-relative star dependence, auto-surfaced lineup/hole signals; loadTeamRosters(), shared posColors.js [Overview lenses 1–2 of 4]
 
 > not yet built
     >> backend
@@ -114,21 +144,31 @@ carry the "Powered by LeagueLogs API" attribution.
 
 ## Next single highest-leverage move
 
-The Team tab's structural foundation is in (nav shell + your-team resolver + switcher +
-Overview/Players sub-tabs), but both sub-views are stubs. Fill them in — each is its own
-session-sized slice, no new fetcher needed:
-- **Team Overview** — promote/deepen the League drawer metrics (all-play true record,
-  lineup efficiency, weekly scoring, consistency + positional-shape spectrums) into a
-  full single-team page that reads as "how is this team doing, where's the strength,
-  where's the weakness." Reuses `loadTeamDetails()` (already keyed by roster_id).
-- **Players** — per-player real-world metrics from season_2025.parquet (127 cols:
-  passing/rushing/receiving yards, TDs, targets, target_share, air_yards_share, wopr,
-  EPA…) with visualizations that make the stats *interpretable*, not a raw table.
-  Needs a new queries.js function (e.g. `loadTeamPlayers(rosterId)`).
+The Team Overview now has **lenses 1–2** (roster construction/depth + star dependence)
+plus an **auto-surfaced signals** layer (lineup calls + roster holes) and the vitals
+strip. The design splits "how is this team built / how is it managed" into **4 lenses**;
+two shipped this session. Next sessions, in order:
 
-Lean **Team Overview first** — it's the larger payoff (turns the cramped drawer into a
-real page) and reuses an existing query; Players is the bigger net-new (new query +
-viz design). Both should respect the team switcher already wired in.
+**Finish the Team Overview — the remaining 2 lenses** (deferred deliberately this
+session; each its own slice, no new fetcher needed):
+- **Lens 3 — Form / trajectory.** Reframe weekly scoring from *variance* (what the
+  League drawer shows) to *direction*: is the team trending up or fading? Rolling form,
+  last-3 vs. first-3. Same `season.parquet` per-week data; new shaping in queries.js.
+- **Lens 4 — Where you leave points.** Decompose lineup inefficiency (the drawer's one
+  "% / pts on bench" number) into an *actionable* read: which weeks, which slots are
+  costing points. Builds on the optimal-lineup calc already in `loadTeamDetails()`.
+
+  (Lens 1 = roster construction/depth and lens 2 = star dependence both shipped this
+  session, plus the lineup/hole signals layer. The two above are what's left for the
+  Overview.)
+
+**Then the Players sub-view** (still a stub) — per-player real-world metrics from
+season_2025.parquet (127 cols: passing/rushing/receiving yards, TDs, targets,
+target_share, air_yards_share, wopr, EPA…) with visualizations that make the stats
+*interpretable*, not a raw table. Needs a new queries.js function (e.g.
+`loadTeamPlayers(rosterId)`). Bigger net-new lift (new query + viz design).
+
+All Team-tab work should respect the team switcher already wired in.
 
 ## The step after (unconfirmed, subject to change)
 

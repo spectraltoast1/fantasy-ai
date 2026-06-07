@@ -1,8 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { loadPowerRankings, loadTeamDetails, POS } from './queries.js';
-
-// View-only concern: how positions are colored. All data access lives in queries.js.
-const POS_COLORS = { QB: '#e0709a', RB: '#5fb3a3', WR: '#6699e6', TE: '#d9a85f' };
+import { POS_COLORS } from './posColors.js';
 
 // League tab: league-wide views. Today that's Power Rankings (cards + drill-down
 // drawer); manager dossiers and other league overviews will join it here.

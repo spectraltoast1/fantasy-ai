@@ -64,6 +64,61 @@ body {
   border-radius: 12px; padding: 32px 24px; text-align: center; line-height: 1.5;
 }
 
+/* ---- Team Overview ---- */
+.to-vitals { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
+.to-tile {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 16px 18px;
+}
+.to-tile-value { font-size: 26px; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.to-tile-value.accent { color: var(--accent); }
+.to-tile-label { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-top: 4px; }
+.to-tile-sub { font-size: 12px; color: var(--muted); margin-top: 2px; font-variant-numeric: tabular-nums; }
+
+.to-section {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 22px 24px;
+}
+.to-h3 { margin: 0 0 18px; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.to-foot { margin-top: 18px; color: var(--muted); font-size: 11px; font-style: italic; line-height: 1.5; }
+
+/* Star dependence (league-relative spectrum) */
+.to-reliance { padding-bottom: 22px; margin-bottom: 22px; border-bottom: 1px solid var(--line); }
+.to-reliance-stat { font-size: 13px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.to-reliance-note { color: var(--muted); font-size: 12px; }
+.to-reliance-note strong { color: var(--text); font-weight: 600; }
+
+/* Auto-surfaced signals */
+.to-signals { display: flex; flex-direction: column; gap: 8px; padding-bottom: 22px; margin-bottom: 22px; border-bottom: 1px solid var(--line); }
+.to-signal { display: flex; align-items: flex-start; gap: 10px; }
+.to-signal-tag { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 3px 8px; border-radius: 6px; white-space: nowrap; flex-shrink: 0; margin-top: 1px; }
+.tag-lineup { color: #6699e6; background: #1c2740; }
+.tag-hole { color: #e0709a; background: #3a212c; }
+.tag-clean { color: #5fb3a3; background: #16302a; }
+.to-signal-text { font-size: 13px; line-height: 1.5; }
+.to-signal-text strong { font-weight: 700; }
+
+/* Depth chart */
+.to-depth { display: flex; flex-direction: column; gap: 18px; }
+.to-depth-group { display: grid; grid-template-columns: 32px 1fr; gap: 14px; align-items: start; }
+.to-depth-pos { font-size: 13px; font-weight: 800; padding-top: 2px; }
+.to-depth-rows { display: flex; flex-direction: column; gap: 6px; }
+.to-depth-empty { color: var(--muted); font-size: 12px; font-style: italic; }
+.to-depth-row { display: grid; grid-template-columns: 200px 1fr 36px; align-items: center; gap: 12px; }
+.to-depth-name { font-size: 13px; display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden; }
+.to-depth-pname { overflow: hidden; text-overflow: ellipsis; }
+.to-depth-row.bench .to-depth-name { color: var(--muted); }
+.to-depth-row.departed .to-depth-name { color: var(--muted); }
+.to-depth-row.departed .to-depth-pname { text-decoration: line-through; }
+.to-depth-marker { width: 6px; height: 6px; border-radius: 50%; background: var(--text); flex-shrink: 0; }
+.to-depth-flag { font-size: 9px; font-weight: 700; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; flex-shrink: 0; }
+.to-depth-left { font-size: 11px; color: var(--muted); font-style: italic; flex-shrink: 0; }
+.to-depth-track { height: 10px; background: var(--panel-2); border-radius: 5px; overflow: hidden; }
+.to-depth-fill { height: 100%; border-radius: 5px; }
+.to-depth-row.bench .to-depth-fill, .to-depth-row.departed .to-depth-fill { opacity: 0.4; }
+.to-depth-fill.noisy { opacity: 0.3; background-image: repeating-linear-gradient(45deg, rgba(255,255,255,0.18) 0 3px, transparent 3px 6px); }
+.to-depth-val { font-size: 12px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+
 .state { padding: 64px 24px; text-align: center; color: var(--muted); }
 .state.error { color: #e0709a; }
 .state pre { text-align: left; background: var(--panel); padding: 16px; border-radius: 8px; overflow: auto; }
