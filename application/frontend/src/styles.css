@@ -18,6 +18,21 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* ---- Top-level tab nav (League | Team) ---- */
+.topnav { border-bottom: 1px solid var(--line); background: var(--panel); }
+.topnav-inner {
+  max-width: 880px; margin: 0 auto; padding: 0 24px;
+  display: flex; gap: 4px;
+}
+.topnav-tab {
+  background: none; border: none; cursor: pointer;
+  color: var(--muted); font-size: 14px; font-weight: 600;
+  padding: 16px 14px; border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.topnav-tab:hover { color: var(--text); }
+.topnav-tab.active { color: var(--text); border-bottom-color: var(--accent); }
+
 .page { max-width: 880px; margin: 0 auto; padding: 32px 24px 64px; }
 
 .page-head { margin-bottom: 24px; }
