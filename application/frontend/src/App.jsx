@@ -234,10 +234,78 @@ function TeamDrawer({ team, detail, onClose }) {
                 <span className="wk-mean-key">— mean</span>
               </div>
             </section>
+
+            <section className="drawer-section">
+              <h3 className="drawer-h3">What kind of team</h3>
+              <div className="spec-block">
+                <div className="spec-name">Consistency</div>
+                <Spectrum leftLabel="Consistent" rightLabel="Volatile" pos={detail.consistency.pos} />
+              </div>
+              <div className="spec-block">
+                <div className="spec-name">Positional shape</div>
+                <Spectrum leftLabel="Balanced" rightLabel="Hero-led" pos={detail.shape.pos} />
+                <PosBars ratios={detail.shape.ratios} />
+              </div>
+              <div className="spec-foot">markers show where this team sits in the league · bars are per-position output vs. league average</div>
+            </section>
           </>
         )}
       </aside>
     </>
+  );
+}
+
+// A labelled track with a single marker placed at `pos` (0 = left end, 1 = right).
+function Spectrum({ leftLabel, rightLabel, pos }) {
+  const clamped = Math.max(0, Math.min(1, pos ?? 0.5));
+  return (
+    <div className="spectrum">
+      <div className="spec-track">
+        <div className="spec-marker" style={{ left: `${clamped * 100}%` }} />
+      </div>
+      <div className="spec-ends">
+        <span>{leftLabel}</span>
+        <span>{rightLabel}</span>
+      </div>
+    </div>
+  );
+}
+
+// Per-position output vs. league average — a diverging bar from a center baseline.
+// Ratio 1.0 = league average; bars cap at ±60% so outliers stay in frame.
+function PosBars({ ratios }) {
+  const CAP = 0.6;
+  return (
+    <div className="posbars">
+      {POS.map((p) => {
+        const r = ratios?.[p];
+        const delta = r != null ? r - 1 : 0;
+        const pct = Math.round(delta * 100);
+        const half = (Math.min(Math.abs(delta), CAP) / CAP) * 50; // % of full track
+        const up = delta >= 0;
+        return (
+          <div className="posbar-row" key={p}>
+            <span className="posbar-label" style={{ color: POS_COLORS[p] }}>{p}</span>
+            <div className="posbar-track">
+              <div className="posbar-center" />
+              {r != null && (
+                <div
+                  className="posbar-fill"
+                  style={{
+                    [up ? 'left' : 'right']: '50%',
+                    width: `${half}%`,
+                    background: POS_COLORS[p],
+                  }}
+                />
+              )}
+            </div>
+            <span className={`posbar-delta ${up ? 'up' : 'down'}`}>
+              {r == null ? '—' : `${up ? '+' : ''}${pct}%`}
+            </span>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

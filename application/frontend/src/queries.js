@@ -130,6 +130,17 @@ const SQL_PLAYER_WEEK = `
 
 const SQL_SLOTS = `SELECT slot, count, eligible FROM 'slots.parquet'`;
 
+// Per team & position: total starter points and number of starter-slots used,
+// so per-start output can be compared like-for-like against the league.
+const SQL_POS_STARTS = `
+  SELECT roster_id, position,
+         sum(sleeper_points) AS tot,
+         count(*)            AS starts
+  FROM 'season.parquet'
+  WHERE is_starter AND position IN ('QB','RB','WR','TE')
+  GROUP BY roster_id, position
+`;
+
 /** Best achievable points from a roster-week given the league's slot rules.
  *  Greedy by ascending eligibility size: fill the most-constrained slots
  *  (single-position) before flex slots, taking the top scorer available for
@@ -159,10 +170,11 @@ function optimalPoints(players, slots) {
  * @returns {Promise<Object<number, object>>} keyed by roster_id
  */
 export async function loadTeamDetails() {
-  const [teamWeeks, playerWeeks, slotRows] = await Promise.all([
+  const [teamWeeks, playerWeeks, slotRows, posStarts] = await Promise.all([
     query(SQL_TEAM_WEEK),
     query(SQL_PLAYER_WEEK),
     query(SQL_SLOTS),
+    query(SQL_POS_STARTS),
   ]);
 
   // Expand slot config into one entry per physical slot (e.g. FLEX count 2 → two).
@@ -213,6 +225,21 @@ export async function loadTeamDetails() {
     }
   }
 
+  // Per-team, per-position output per starter-slot (neutralises lineup-slot counts
+  // so QB/RB/WR/TE compare like-for-like), then the league per-slot benchmark.
+  const perSlotByTeam = {};
+  const perSlotSums = {};
+  const perSlotN = {};
+  for (const r of posStarts) {
+    const rid = Number(r.roster_id);
+    const perSlot = Number(r.tot) / Number(r.starts);
+    (perSlotByTeam[rid] ??= {})[r.position] = perSlot;
+    perSlotSums[r.position] = (perSlotSums[r.position] ?? 0) + perSlot;
+    perSlotN[r.position] = (perSlotN[r.position] ?? 0) + 1;
+  }
+  const leaguePerSlot = {};
+  for (const p of POS) leaguePerSlot[p] = perSlotSums[p] ? perSlotSums[p] / perSlotN[p] : 0;
+
   const details = {};
   for (const rosterId of Object.keys(byTeam).map(Number)) {
     const weeks = byTeam[rosterId]
@@ -235,6 +262,19 @@ export async function loadTeamDetails() {
     }
     const ap = allPlay[rosterId] ?? { w: 0, l: 0 };
 
+    // Consistency: coefficient of variation of weekly team scores (low = steady).
+    const ptsList = weeks.map((w) => w.pts);
+    const consistencyCv = cv(ptsList);
+
+    // Positional shape: each position's per-slot output as a ratio to the league
+    // benchmark (1.0 = league-average). Concentration of those ratios = hero index.
+    const ratios = {};
+    for (const p of POS) {
+      const v = perSlotByTeam[rosterId]?.[p];
+      ratios[p] = v != null && leaguePerSlot[p] ? v / leaguePerSlot[p] : null;
+    }
+    const heroCv = cv(Object.values(ratios).filter((r) => r != null));
+
     details[rosterId] = {
       allPlay: { wins: ap.w, losses: ap.l, pct: ap.w + ap.l ? ap.w / (ap.w + ap.l) : 0 },
       efficiency: {
@@ -244,9 +284,35 @@ export async function loadTeamDetails() {
         pointsLeft: round1(optimal - actual),
       },
       weeks,
+      consistency: { cv: consistencyCv },
+      shape: { heroCv, ratios },
     };
   }
+
+  // League-relative marker position (0–1) for each spectrum, so a team reads as
+  // "where it sits in this league" rather than against an abstract threshold.
+  attachSpectrumPos(details, (d) => d.consistency.cv, (d, t) => (d.consistency.pos = t));
+  attachSpectrumPos(details, (d) => d.shape.heroCv, (d, t) => (d.shape.pos = t));
+
   return details;
 }
 
 const round1 = (n) => Math.round(n * 10) / 10;
+
+// Coefficient of variation (sample stddev / mean) of a numeric list.
+function cv(xs) {
+  if (xs.length < 2) return 0;
+  const mean = xs.reduce((s, x) => s + x, 0) / xs.length;
+  if (!mean) return 0;
+  const variance = xs.reduce((s, x) => s + (x - mean) ** 2, 0) / (xs.length - 1);
+  return Math.sqrt(variance) / mean;
+}
+
+// Normalise a metric across all teams to a 0–1 position (min → 0, max → 1).
+function attachSpectrumPos(details, get, set) {
+  const vals = Object.values(details).map(get);
+  const lo = Math.min(...vals);
+  const hi = Math.max(...vals);
+  const span = hi - lo;
+  for (const d of Object.values(details)) set(d, span ? (get(d) - lo) / span : 0.5);
+}

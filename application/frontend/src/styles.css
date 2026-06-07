@@ -159,3 +159,31 @@ body {
 .wk-swatch.beat { background: #5fb3a3; }
 .wk-swatch.miss { background: #3a4254; }
 .wk-mean-key { color: var(--accent); }
+
+/* ---- Qualitative spectrums ---- */
+.spec-block { margin-bottom: 18px; }
+.spec-block:last-of-type { margin-bottom: 0; }
+.spec-name { font-size: 13px; margin-bottom: 10px; }
+.spectrum { margin-bottom: 4px; }
+.spec-track {
+  position: relative; height: 4px; border-radius: 999px;
+  background: linear-gradient(90deg, #2f5249, #3a4254, #4d2f3a);
+}
+.spec-marker {
+  position: absolute; top: 50%; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--text); border: 2px solid var(--panel);
+  transform: translate(-50%, -50%); box-shadow: 0 0 0 1px var(--line);
+}
+.spec-ends { display: flex; justify-content: space-between; margin-top: 8px; color: var(--muted); font-size: 11px; }
+
+.posbars { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+.posbar-row { display: grid; grid-template-columns: 28px 1fr 48px; align-items: center; gap: 10px; }
+.posbar-label { font-size: 12px; font-weight: 700; }
+.posbar-track { position: relative; height: 8px; background: var(--panel-2); border-radius: 4px; }
+.posbar-center { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--line); }
+.posbar-fill { position: absolute; top: 0; bottom: 0; border-radius: 3px; opacity: 0.85; }
+.posbar-delta { font-size: 11px; text-align: right; font-variant-numeric: tabular-nums; }
+.posbar-delta.up { color: #5fb3a3; }
+.posbar-delta.down { color: #8b94a3; }
+
+.spec-foot { margin-top: 14px; color: var(--muted); font-size: 11px; font-style: italic; line-height: 1.4; }
