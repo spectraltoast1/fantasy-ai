@@ -38,18 +38,32 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 identity vs. the League drawer: the League tab is **comparative** ("how do I stack
 up?", starters only); the Team tab is **constructive** ("how is THIS team built?")
 and looks *inside* one roster — **bench included**, the data the drawer throws away.
-The page has a **vitals strip** (power rank, record, points/wk ±std, power score)
-and a **"How this team is built"** section combining two lenses: **star reliance**
-(top-3 share of starting points + Top-heavy/Balanced/Deep tag + a 100%-stacked
-contribution bar by player) and a **depth chart** (every skill player as a bar by
-season-window total points on one per-team scale, grouped by position, starters
-solid / bench dimmed — so depth-vs-cliff is visible; e.g. a bench RB scoring as
-much as a starter pops out). New seam: queries.js `loadTeamRosters()` (per-team,
-keyed by roster_id); `POS_COLORS` extracted to `posColors.js` and shared by both
-panels. Bar metric is **total points over the window** (not per-game avg — robust at
-n=4 weeks, where one big game distorts an average). Verified live across teams;
-numbers reconcile with a polars prototype (Tet Lasso top-3 43%, top scorer 18%).
-This is **lens 1 of 2** planned for the Overview — see Next move for the rest.
+The page leads with the answer, then shows the work: **vitals strip** (power rank,
+record, points/wk ±std, power score — a deliberate recap that bridges from the League
+card) → **"How this team is built"** with three pieces:
+- **Star dependence** — single-player exposure (top-1 share of starting points),
+  placed on a **league-relative** Balanced↔Star-led spectrum (chose top-1 over top-3:
+  top-3 barely varied across teams — ~half for everyone with 8 starters — while top-1
+  reads as real character and isn't confounded by lineup churn). Names the star.
+- **Auto-surfaced signals** — the headline. **Lineup** calls (a benched player
+  out-rating a same-position starter by >10% per game → fix in house, e.g. "Gainwell
+  15.9/g > starter Pacheco 6.8/g at RB") and **Holes** (a position whose best current
+  option trails the league benchmark by >15% → outside upgrade). Surfaces the insight
+  rather than leaving the user to hunt the depth chart. "All set" when clean.
+- **Depth chart** — every skill player as a bar by **points per game**, **scaled
+  within each position** (so cliffs read clearly and QBs don't squash TEs). Starter
+  solid / bench dimmed / departed struck-through with "→ new team". ≤1-game samples
+  flagged "1g", hatched, sorted to the bottom, and excluded from signals + bar scale
+  (kills the one-big-week distortion).
+
+New seams: queries.js `loadTeamRosters()` (per-team, keyed by roster_id — depth,
+star dependence, signals, league per-position benchmarks; current-team resolved via
+`arg_max(roster_id, week)` so traded/dropped players are marked departed while still
+credited for weeks played). `POS_COLORS` extracted to `posColors.js`, shared by both
+panels. Roster set is **cumulative season**, departed players retained. Verified live
+across teams; metrics reconcile with a polars prototype (Naber top-1 23%/star-led +
+Gainwell lineup signal; Tet Lasso all-set). This covers **2 of the 4 planned Overview
+lenses** (roster construction + reliance) plus the signals layer — remaining 2 below.
 
 > earlier build
 Tab navigation + the **Team tab** foundation. Introduced the app's first nav layer:
@@ -97,7 +111,7 @@ public/data and registered in db.js.
     - Power Rankings team drill-down drawer — all-play true record, lineup efficiency, weekly scoring, consistency + positional-shape spectrums
     - tab nav shell (League | Team) — App.jsx shell + LeaguePanel/TeamPanel split
     - Team tab foundation — your-team resolver (loadTeams + MY_USERNAME), team switcher, Overview/Players sub-tabs (stubbed)
-    - Team Overview sub-view — vitals strip + "how this team is built" (depth chart + star reliance); loadTeamRosters(), shared posColors.js [lens 1 of 2]
+    - Team Overview sub-view — vitals + "how this team is built": rate-based depth chart, league-relative star dependence, auto-surfaced lineup/hole signals; loadTeamRosters(), shared posColors.js [Overview lenses 1–2 of 4]
 
 > not yet built
     >> backend
@@ -130,9 +144,10 @@ carry the "Powered by LeagueLogs API" attribution.
 
 ## Next single highest-leverage move
 
-The Team Overview now has its **first lens** (roster construction: depth chart + star
-reliance) + vitals strip. The design splits "how is this team built / how is it managed"
-into **4 lenses across 4 sessions**; lens 1 shipped this session. Next sessions, in order:
+The Team Overview now has **lenses 1–2** (roster construction/depth + star dependence)
+plus an **auto-surfaced signals** layer (lineup calls + roster holes) and the vitals
+strip. The design splits "how is this team built / how is it managed" into **4 lenses**;
+two shipped this session. Next sessions, in order:
 
 **Finish the Team Overview — the remaining 2 lenses** (deferred deliberately this
 session; each its own slice, no new fetcher needed):
@@ -143,8 +158,9 @@ session; each its own slice, no new fetcher needed):
   "% / pts on bench" number) into an *actionable* read: which weeks, which slots are
   costing points. Builds on the optimal-lineup calc already in `loadTeamDetails()`.
 
-  (Lens 1 = roster construction/depth, shipped. Lens 2 = star reliance, shipped — folded
-  into lens 1's section this session. The two above are what's left for the Overview.)
+  (Lens 1 = roster construction/depth and lens 2 = star dependence both shipped this
+  session, plus the lineup/hole signals layer. The two above are what's left for the
+  Overview.)
 
 **Then the Players sub-view** (still a stub) — per-player real-world metrics from
 season_2025.parquet (127 cols: passing/rushing/receiving yards, TDs, targets,
