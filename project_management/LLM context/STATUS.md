@@ -22,13 +22,16 @@ Winning a redraft fantasy football championship is about more than just collecti
 
 The project will do this in two ways: a dashboard for user-driven insight and an AI layer for interpretation and decision suggestions. The AI layer is not meant to run the team - it's a consultation, putting data-driven suggestions alongside the user's own analysis to produce better decisions.
 
-IMPORTANT TECH NOTE: The python library nflreadpy is the core data source for this project. It returns polars DataFrames - it is not based on pandas. Any LLM coding instructions working with nflreadpy need to explicitly call out the polars DataFrames so we don't end up with mixed polars/pandas data manipulation syntax.
-
-IMPORTANT TECH NOTE: All data I/O goes through application/data/data_layer.py. Transform scripts and dashboard components read and write via data_layer.py functions only — no script owns its own file paths or parquet logic.
-
-IMPORTANT TECH NOTE: Data-delivery model is decided for V1 — client-side DuckDB-WASM, no server (a server/API was deferred, not ruled out; the src/queries.js data-access layer is the seam to switch later).
+> Tech non-negotiables (polars-only, all I/O through data_layer.py, client-side
+> DuckDB-WASM with src/queries.js as the server seam) live in **CLAUDE.md** and
+> **TECHNICAL_ARCHITECTURE.md** — not restated here.
 
 ## Today (the current status toward v1)
+
+> **Maintenance (rolling log):** keep only the **most recent build + the 2 prior**
+> (3 prose entries max). At closedown, prepend the new build and delete the oldest
+> prose entry. Nothing is lost — the cumulative record lives in `> built` below; this
+> section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
 Tab navigation + the **Team tab** foundation. Introduced the app's first nav layer:
@@ -67,12 +70,6 @@ public/data and registered in db.js.
 > earlier build
 Real team names on the Power Rankings cards. Added sleeper.py fetch_teams() + fetch-teams CLI (resolves the season's league, maps roster_id → team_name/owner_name via /users + /rosters) writing teams_2025.parquet through data_layer; db.js registers it; queries.js LEFT JOINs it and computes the display name (custom team name → Sleeper handle → "Team N" fallback); App.jsx consumes team.name. Verified live (all 10 teams named; null-custom-name fallback confirmed). Also this session: documented the client/server seam invariants in TECHNICAL_ARCHITECTURE.md; established the Code-only session lifecycle (CLAUDE.md + scripts/worktree-setup.sh + scripts/worktree-close.sh + co-build guides/SESSION_GUIDE.md, 3-commit cap); repo cleanup (untracked the two committed parquets, deleted _deprecated and _deferred).
 
-> earlier build
-Built the LeagueLogs market-value fetcher (application/data/fetchers/leaguelogs.py) + a launchd scheduler that snapshots all 5 published profiles (3 redraft, 2 dynasty) daily at 4am ET. Market value is keyed on sleeperPlayerId, so it joins the pipeline with no id mapping; QB/RB/WR/TE only (matches scope). The API serves only "now," so daily snapshots are the only way to build the value time-series — collection started now even though the consuming features (trade analysis) are V4, because history can't be backfilled. Appends to snapshots/leaguelogs/market_values.parquet via data_layer (idempotent dedup on snapshot_date), ~11 MB/year. First snapshot verified (3,409 rows); scheduler tested via launchd (exit 0).
-
-> earlier build
-Built the first skeleton of the production front-end at application/frontend/ (React + Vite + DuckDB-WASM). It runs SQL directly against season_2025.parquet in the browser (no export step) — the same DuckDB-over-parquet approach that carries to production. First panel: Power Rankings — teams ranked by PPG with a QB/RB/WR/TE positional-strength breakdown, record, consistency badge, and a 0–100 power score. Started as a "design playground" to choose a stack; building in the real stack proved easier than a chat artifact, so React is now the decided front-end and this is its first real slice (not throwaway). (Note: required installing Node via Homebrew.)
-
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
@@ -109,15 +106,11 @@ Team overview, league standings, and matchup review. Powered by nflreadpy and Sl
 - **V6+** — More complex analytics (TBD)
 
 ## Known Scope Exclusions
-**DST/K (V1):** DST and kicker positional data is excluded from V1. DSTs are stripped at join time by detecting team abbreviations in the Sleeper matchup data. Kickers are filtered out via the SKILL_POSITIONS filter applied after the join. All V1 transform and dashboard work assumes skill positions only (QB, RB, WR, TE).
-
-**Market value (V1):** LeagueLogs market value is being snapshotted daily now to bank the time-series, but the features that consume it (trade analysis, value-aware rankings) are V4. Any UI that displays it must show the required "Powered by LeagueLogs API" attribution.
-
-**Waiver wire (V1):** Full waiver wire analysis requires querying the full available player pool, not just rostered players. The Sleeper player registry (fetch_players() in sleeper.py, cached at cache/sleeper/players.parquet) now exists and is used by the auditor to resolve unknown-position players at join time. Full waiver wire analysis against the complete available player pool is still V2 scope.
-
-**IR roster overages:** Fantasy managers can use IR slots to carry more than the standard 17 roster spots. This is accurate data — the join reconciliation report handles it correctly and counts whatever Sleeper reports. Expect to see 18-player rosters from 1–2 teams per week during the season, particularly early when injury-stashing is common.
-
-**Zero-stat row context:** Rostered players who did not play in a given week (injured, suspended, inactive, not yet activated) appear in the join output with all stat columns at 0.0. The join correctly includes them, but provides no signal for why they scored 0. Injury status and roster status context would require a separate fetch from Sleeper's injury/status endpoint. This is a known gap — treat 0-stat rows as "rostered, did not contribute" without assuming a specific reason.
+→ Source of truth: **TECHNICAL_ARCHITECTURE.md § Known Scope Exclusions** (DST/K, waiver
+wire / full player pool, IR roster overages, zero-stat rows). One product note kept here:
+**Market value (V1)** is snapshotted daily now to bank the time-series, but the features
+that consume it (trade analysis, value-aware rankings) are V4; any UI showing it must
+carry the "Powered by LeagueLogs API" attribution.
 
 ## Next single highest-leverage move
 
