@@ -127,6 +127,10 @@ function Overview({ vitals, roster }) {
         <h3 className="to-h3">Form</h3>
         <Form form={roster.form} />
       </section>
+      <section className="to-section">
+        <h3 className="to-h3">Where you leave points</h3>
+        <Leakage leakage={roster.leakage} />
+      </section>
     </>
   );
 }
@@ -185,6 +189,97 @@ function Form({ form }) {
     </div>
   );
 }
+
+// Where you leave points: lineup inefficiency made actionable. Leads with the
+// season cost (points left on the bench + efficiency, league-relative), then the
+// per-week leak chart (which weeks) and the biggest specific misses (which calls).
+// This is the manager-skill read — distinct from roster quality.
+function Leakage({ leakage }) {
+  if (!leakage) return <div className="subview-stub">No lineup data for this team.</div>;
+  const pct = Math.round(leakage.pct * 100);
+  const clean = leakage.pointsLeft < 1 || leakage.misses.length === 0;
+
+  return (
+    <div className="to-leak">
+      <div className="to-form-head">
+        <span className={`to-form-word ${clean ? 'up' : 'down'}`}>
+          {clean ? 'Optimal' : `${leakage.pointsLeft.toFixed(1)} pts left on the bench`}
+        </span>
+        <span className="to-form-detail">{pct}% lineup efficiency this season</span>
+      </div>
+
+      <div className="spectrum">
+        <div className="spec-track leak-track">
+          <div
+            className="spec-marker"
+            style={{ left: `${Math.max(0, Math.min(1, leakage.pos ?? 0.5)) * 100}%` }}
+          />
+        </div>
+        <div className="spec-ends">
+          <span>Leaky</span>
+          <span>Optimal</span>
+        </div>
+      </div>
+
+      <WeeklyLeak byWeek={leakage.byWeek} leakMax={leakage.leakMax} />
+
+      {clean ? (
+        <div className="to-signal clean">
+          <span className="to-signal-tag tag-clean">All set</span>
+          <span className="to-signal-text">
+            You’ve been starting your best available lineup — almost nothing left on the bench.
+          </span>
+        </div>
+      ) : (
+        <div className="to-leak-misses">
+          {leakage.misses.map((m) => (
+            <div className="to-signal" key={`${m.week}-${m.benchName}`}>
+              <span className="to-signal-tag tag-lineup">W{m.week}</span>
+              <span className="to-signal-text">
+                started <strong>{m.starterName}</strong> ({m.starterPts}) over{' '}
+                <strong>{m.benchName}</strong> ({m.benchPts}) at{' '}
+                <span style={{ color: POS_COLORS[m.position] ?? 'var(--muted)' }}>{m.position}</span> —{' '}
+                <span className="to-leak-gain">−{round1(m.gain)}</span>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="to-foot">
+        Columns are points left on the bench each week — the gap between your lineup
+        and the best one your roster could have fielded. The misses below are the
+        single costliest start/sit calls; everything reconciles to the season total.
+      </div>
+    </div>
+  );
+}
+
+// Per-week points-left columns — the "which weeks" view. A near-empty column is a
+// week you nailed the lineup; a tall one is points left on the bench.
+function WeeklyLeak({ byWeek, leakMax }) {
+  return (
+    <div className="to-trend leak">
+      {byWeek.map((w) => {
+        const h = leakMax ? Math.max(2, (w.left / leakMax) * 100) : 2;
+        return (
+          <div className="to-trend-col" key={w.week}>
+            <span className="to-trend-pts">{w.left > 0.05 ? `−${w.left.toFixed(1)}` : '0'}</span>
+            <div className="to-trend-bar-wrap">
+              <div
+                className={`to-trend-bar ${w.left > 0.05 ? 'leaked' : 'nailed'}`}
+                style={{ height: `${h}%` }}
+              />
+            </div>
+            <span className="to-trend-wk">W{w.week}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+const round1 = (n) => Math.round(n * 10) / 10;
 
 // Weekly scores as a small column chart — the "show the work" behind the trend.
 // Bars scale within the team; a tick marks the league median that week. The most

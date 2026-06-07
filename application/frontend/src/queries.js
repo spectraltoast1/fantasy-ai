@@ -127,9 +127,10 @@ const SQL_TEAM_WEEK = `
 `;
 
 // Every skill player's weekly line (starters + bench) — the pool the optimal
-// lineup is chosen from.
+// lineup is chosen from. Carries the name so lineup misses can be named.
 const SQL_PLAYER_WEEK = `
-  SELECT roster_id, week, position, sleeper_points AS pts, is_starter
+  SELECT roster_id, week, position, player_display_name AS name,
+         sleeper_points AS pts, is_starter
   FROM 'season.parquet'
   WHERE position IN ('QB','RB','WR','TE')
 `;
@@ -147,25 +148,43 @@ const SQL_POS_STARTS = `
   GROUP BY roster_id, position
 `;
 
-/** Best achievable points from a roster-week given the league's slot rules.
+/** Expand the league's slot config into one entry per physical slot (FLEX count 2
+ *  → two), most-constrained first so dedicated slots claim their position's stars
+ *  before flex slots. Shared by the League drawer (loadTeamDetails) and the Team
+ *  Overview's "where you leave points" lens (loadTeamRosters). */
+function expandSlots(slotRows) {
+  const slots = [];
+  for (const s of slotRows) {
+    const eligible = String(s.eligible).split(',');
+    for (let n = 0; n < Number(s.count); n++) slots.push({ slot: s.slot, eligible });
+  }
+  slots.sort((a, b) => a.eligible.length - b.eligible.length);
+  return slots;
+}
+
+/** Best achievable lineup from a roster-week given the league's slot rules.
  *  Greedy by ascending eligibility size: fill the most-constrained slots
  *  (single-position) before flex slots, taking the top scorer available for
  *  each. Correct when flex eligibility is a superset of dedicated positions
- *  (the standard case), which is why dedicated slots claim their stars first. */
-function optimalPoints(players, slots) {
+ *  (the standard case), which is why dedicated slots claim their stars first.
+ *  Returns the total and the chosen players (each carrying its filled slot), so
+ *  callers can both score the lineup and diff it against who was actually started.
+ *  Each player must carry a stable `_i` to track usage. */
+function optimalLineup(players, slots) {
   const used = new Set();
+  const picks = [];
   let total = 0;
   for (const slot of slots) {
-    // best unused player eligible for this slot (each player carries a stable _i)
     const pick = players
       .filter((p) => !used.has(p._i) && slot.eligible.includes(p.position))
       .sort((a, b) => b.pts - a.pts)[0];
     if (pick) {
       total += pick.pts;
       used.add(pick._i);
+      picks.push({ ...pick, slot: slot.slot });
     }
   }
-  return total;
+  return { total, picks };
 }
 
 /**
@@ -183,14 +202,7 @@ export async function loadTeamDetails() {
     query(SQL_POS_STARTS),
   ]);
 
-  // Expand slot config into one entry per physical slot (e.g. FLEX count 2 → two).
-  const slots = [];
-  for (const s of slotRows) {
-    const eligible = String(s.eligible).split(',');
-    for (let n = 0; n < Number(s.count); n++) slots.push({ slot: s.slot, eligible });
-  }
-  // Most-constrained first so dedicated slots claim their position's stars.
-  slots.sort((a, b) => a.eligible.length - b.eligible.length);
+  const slots = expandSlots(slotRows);
 
   // Index team-week scores by week (for all-play + median) and by team.
   const byWeek = {};
@@ -264,7 +276,7 @@ export async function loadTeamDetails() {
       const key = `${rosterId}|${w.week}`;
       const pool = (playersByTeamWeek[key] ?? []).map((p, i) => ({ ...p, _i: i }));
       actual += actualByTeamWeek[key] ?? 0;
-      optimal += optimalPoints(pool, slots);
+      optimal += optimalLineup(pool, slots).total;
     }
     const ap = allPlay[rosterId] ?? { w: 0, l: 0 };
 
@@ -370,15 +382,34 @@ const MIN_GAMES = 2;
  *   - form: recent trajectory — last-half vs first-half scoring swing (`delta`),
  *     a direction read (rising/fading/steady), the recent-half record, the weekly
  *     series (with beat-median flags), and a league-relative Fading↔Surging marker
+ *   - leakage: lineup inefficiency made actionable — season points left on the
+ *     bench, efficiency % (league-relative Leaky↔Optimal marker), per-week points
+ *     left, and the biggest specific misses (started X over a higher-scoring bench Y)
  * @returns {Promise<Object<number, object>>} keyed by roster_id
  */
 export async function loadTeamRosters() {
-  const [rows, currentRows, teamRows, trajRows] = await Promise.all([
+  const [rows, currentRows, teamRows, trajRows, playerWeeks, slotRows] = await Promise.all([
     query(SQL_ROSTER),
     query(SQL_CURRENT_TEAM),
     query(SQL_TEAM_NAMES),
     query(SQL_TEAM_TRAJECTORY),
+    query(SQL_PLAYER_WEEK),
+    query(SQL_SLOTS),
   ]);
+
+  // Per (team, week) player pool for the optimal-lineup / leakage calc, tagging
+  // each player with whether they were actually started.
+  const slots = expandSlots(slotRows);
+  const poolByTeamWeek = {};
+  for (const p of playerWeeks) {
+    const key = `${Number(p.roster_id)}|${Number(p.week)}`;
+    (poolByTeamWeek[key] ??= []).push({
+      name: p.name,
+      position: p.position,
+      pts: Number(p.pts),
+      started: !!p.is_starter,
+    });
+  }
 
   // Per-week team scores, indexed by team (sorted series) and by week (for the
   // league median, so each week reads beat/below the field).
@@ -504,14 +535,21 @@ export async function loadTeamRosters() {
       reliance: { top1, star: starters[0]?.name ?? null },
       signals: { lineup, holes },
       form: computeForm(weeksByTeam[rid] ?? [], medianByWeek),
+      leakage: computeLeakage(
+        (weeksByTeam[rid] ?? []).map((w) => w.week),
+        poolByTeamWeek,
+        rid,
+        slots,
+      ),
     };
   }
 
   // League-relative markers, so each team reads against the league's actual
-  // spread rather than a fixed threshold: star dependence (balanced ↔ star-led)
-  // and form trajectory (fading ↔ surging, by the recent-vs-early scoring swing).
+  // spread rather than a fixed threshold: star dependence (balanced ↔ star-led),
+  // form trajectory (fading ↔ surging), and lineup efficiency (leaky ↔ optimal).
   attachSpectrumPos(rosters, (d) => d.reliance.top1, (d, t) => (d.reliance.pos = t));
   attachSpectrumPos(rosters, (d) => d.form.delta, (d, t) => (d.form.pos = t));
+  attachSpectrumPos(rosters, (d) => d.leakage.pct, (d, t) => (d.leakage.pos = t));
 
   return rosters;
 }
@@ -590,6 +628,78 @@ function computeForm(series, medianByWeek) {
   };
 
   return { delta: round1(delta), direction, recent: rec, recentCount: half, weeks, weekMax };
+}
+
+// Lineup leakage: where a team left points on the bench, made actionable. For
+// each week, the optimal lineup is diffed against who was actually started —
+// "gems" (optimal picks left on the bench) replace "duds" (started players the
+// optimal lineup drops), paired best-gem-to-worst-dud so the headline miss is the
+// most glaring one (the pairing is sum-exact: it always totals optimal − actual).
+// Returns season points left, efficiency %, the per-week leak series (for a "which
+// weeks" chart), and the biggest specific misses across the season.
+function computeLeakage(weekNums, poolByTeamWeek, rid, slots) {
+  const byWeek = [];
+  const misses = [];
+  let actualTot = 0;
+  let optimalTot = 0;
+  let leakMax = 0;
+
+  for (const wk of weekNums) {
+    const pool = (poolByTeamWeek[`${rid}|${wk}`] ?? []).map((p, i) => ({ ...p, _i: i }));
+    if (!pool.length) continue;
+
+    const started = pool.filter((p) => p.started);
+    const actualPts = started.reduce((s, p) => s + p.pts, 0);
+    const opt = optimalLineup(pool, slots);
+    const left = opt.total - actualPts;
+
+    actualTot += actualPts;
+    optimalTot += opt.total;
+    leakMax = Math.max(leakMax, left);
+    byWeek.push({ week: wk, left: round1(left) });
+
+    if (left > 0.05) {
+      // gems = optimal picks not actually started; duds = starters the optimal
+      // lineup drops. Pair them within swap-eligibility classes so each miss is a
+      // legal start/sit: a QB can only displace a QB, while RB/WR/TE are mutually
+      // interchangeable through FLEX. Counts balance within each class, so zipping
+      // best gem ↔ worst dud stays sum-exact (still totals optimal − actual).
+      const optIdx = new Set(opt.picks.map((p) => p._i));
+      const cls = (pos) => (pos === 'QB' ? 'QB' : 'FLEX');
+      const gemsByCls = {};
+      const dudsByCls = {};
+      for (const p of opt.picks) if (!p.started) (gemsByCls[cls(p.position)] ??= []).push(p);
+      for (const p of started) if (!optIdx.has(p._i)) (dudsByCls[cls(p.position)] ??= []).push(p);
+      for (const c of Object.keys(gemsByCls)) {
+        const gems = gemsByCls[c].sort((a, b) => b.pts - a.pts);
+        const duds = (dudsByCls[c] ?? []).sort((a, b) => a.pts - b.pts);
+        for (let j = 0; j < Math.min(gems.length, duds.length); j++) {
+          const g = gems[j];
+          const d = duds[j];
+          misses.push({
+            week: wk,
+            // same-position swap reads as that position; a cross-position swap is
+            // only possible through the flex slot, so label it FLEX.
+            position: g.position === d.position ? g.position : 'FLEX',
+            benchName: g.name,
+            benchPts: round1(g.pts),
+            starterName: d.name,
+            starterPts: round1(d.pts),
+            gain: g.pts - d.pts,
+          });
+        }
+      }
+    }
+  }
+  misses.sort((a, b) => b.gain - a.gain);
+
+  return {
+    pointsLeft: round1(optimalTot - actualTot),
+    pct: optimalTot ? actualTot / optimalTot : 1,
+    byWeek,
+    leakMax: round1(leakMax),
+    misses: misses.slice(0, 3),
+  };
 }
 
 // Coefficient of variation (sample stddev / mean) of a numeric list.

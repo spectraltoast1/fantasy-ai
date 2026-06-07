@@ -307,3 +307,12 @@ body {
 .to-trend-bar.below { background: #3a4254; }
 .to-trend-wk { font-size: 10px; letter-spacing: 0.04em; color: var(--muted); }
 .to-trend-wk.win { color: #cdd3dc; }
+
+/* ---- Where you leave points (lineup leakage) ---- */
+/* Leaky (warm) → Optimal (green) — warm/good end on the right, like the form track. */
+.spec-track.leak-track { background: linear-gradient(90deg, #5a4030, #44505f, #2f5249); }
+.to-trend.leak { margin-bottom: 20px; }
+.to-trend-bar.leaked { background: #c98a5a; }
+.to-trend-bar.nailed { background: #2f5249; }
+.to-leak-misses { display: flex; flex-direction: column; gap: 10px; }
+.to-leak-gain { color: #c98a5a; font-weight: 600; font-variant-numeric: tabular-nums; }
