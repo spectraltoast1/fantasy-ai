@@ -379,12 +379,14 @@ const MIN_GAMES = 2;
  *   - signals: lineup calls (a benched player out-rating a starter — fixable in
  *     house) and roster holes (a position whose best option trails the league —
  *     needs an outside upgrade)
- *   - form: recent trajectory — last-half vs first-half scoring swing (`delta`),
- *     a direction read (rising/fading/steady), the recent-half record, the weekly
- *     series (with beat-median flags), and a league-relative Fading↔Surging marker
- *   - leakage: lineup inefficiency made actionable — season points left on the
- *     bench, efficiency % (league-relative Leaky↔Optimal marker), per-week points
- *     left, and the biggest specific misses (started X over a higher-scoring bench Y)
+ *   - form: recent trajectory — a recency-weighted (half-life 2wk) points/week
+ *     `slope`, a direction read (rising/fading/steady), the last-two record, the
+ *     weekly series (with beat-median flags + per-week weight), and a league-
+ *     relative Fading↔Surging marker
+ *   - leakage: lineup inefficiency framed for improvement — efficiency % (league-
+ *     relative Leaky↔Optimal marker) leads; the points left split into coachable
+ *     (a repeatable bench-over-starter fix, still rostered) vs variance (one-week
+ *     spikes, not a real mistake); named repeatable fixes; per-week leak series
  * @returns {Promise<Object<number, object>>} keyed by roster_id
  */
 export async function loadTeamRosters() {
@@ -540,6 +542,14 @@ export async function loadTeamRosters() {
         poolByTeamWeek,
         rid,
         slots,
+        // Season-level role + rate per player, so leakage can tell a repeatable
+        // hierarchy error (coachable) from a one-week spike (variance).
+        Object.fromEntries(
+          players.map((p) => [
+            p.name,
+            { rate: p.rate, startShare: p.startShare, lowSample: p.lowSample, current: p.current },
+          ]),
+        ),
       ),
     };
   }
@@ -548,7 +558,7 @@ export async function loadTeamRosters() {
   // spread rather than a fixed threshold: star dependence (balanced ↔ star-led),
   // form trajectory (fading ↔ surging), and lineup efficiency (leaky ↔ optimal).
   attachSpectrumPos(rosters, (d) => d.reliance.top1, (d, t) => (d.reliance.pos = t));
-  attachSpectrumPos(rosters, (d) => d.form.delta, (d, t) => (d.form.pos = t));
+  attachSpectrumPos(rosters, (d) => d.form.slope, (d, t) => (d.form.pos = t));
   attachSpectrumPos(rosters, (d) => d.leakage.pct, (d, t) => (d.leakage.pos = t));
 
   return rosters;
@@ -594,55 +604,88 @@ function median(xs) {
   return m % 2 ? s[(m - 1) / 2] : (s[m / 2 - 1] + s[m / 2]) / 2;
 }
 
-// Recent trajectory from a team's weekly score series. Splits the season into a
-// first half and a last half (non-overlapping; the middle week is dropped when
-// the count is odd) and reads the swing between them — direction, not variance.
-// At 4 weeks this is last-2 vs first-2; it widens automatically as weeks append.
-// `delta` is the points/week change (recent − early); the direction label uses a
-// threshold relative to the team's own scoring so a small wobble stays "steady".
+// Recency-weighted trajectory from a team's weekly score series. Rather than
+// splitting the season into two windows (which discards the middle week and jumps
+// discontinuously each time a new week lands), this fits an exponentially-weighted
+// linear trend: every week's weight halves every HALF_LIFE_WK weeks back from the
+// most recent, so the read is smooth, uses every game, and works from two weeks on.
+// `slope` is that recency-weighted points/week trend (positive = heating up); the
+// direction label thresholds it against the team's own scoring so a small wobble
+// stays "steady". Each week carries its `weight` so the chart can show the decay.
+const HALF_LIFE_WK = 2;
+
 function computeForm(series, medianByWeek) {
   const weeks = series
     .slice()
     .sort((a, b) => a.week - b.week)
-    .map((w) => ({ ...w, beatMedian: w.pts > (medianByWeek[w.week] ?? 0) }));
+    .map((w) => ({ ...w, beatMedian: w.pts > (medianByWeek[w.week] ?? 0), weight: 1 }));
   const n = weeks.length;
   const pts = weeks.map((w) => w.pts);
   const weekMax = pts.length ? Math.max(...pts) : 0;
 
   if (n < 2) {
-    return { delta: 0, direction: 'steady', recent: { w: 0, l: 0 }, weeks, weekMax };
+    return { slope: 0, direction: 'steady', recent: { w: 0, l: 0 }, weeks, weekMax };
   }
-  const half = Math.floor(n / 2);
-  const early = pts.slice(0, half);
-  const recent = pts.slice(n - half);
-  const delta = mean(recent) - mean(early);
 
+  // Exponential weights: most recent week = 1, halving every HALF_LIFE_WK weeks.
+  const decay = Math.pow(0.5, 1 / HALF_LIFE_WK);
+  const wts = weeks.map((_, i) => Math.pow(decay, n - 1 - i));
+  weeks.forEach((w, i) => (w.weight = wts[i]));
+
+  // Weighted least-squares slope of points vs. week index (x = 0..n-1) — pts/week.
+  const W = wts.reduce((s, x) => s + x, 0);
+  const mx = wts.reduce((s, x, i) => s + x * i, 0) / W;
+  const my = wts.reduce((s, x, i) => s + x * pts[i], 0) / W;
+  let num = 0;
+  let den = 0;
+  for (let i = 0; i < n; i++) {
+    num += wts[i] * (i - mx) * (pts[i] - my);
+    den += wts[i] * (i - mx) ** 2;
+  }
+  const slope = den ? num / den : 0;
+
+  // Direction: slope as a fraction of the team's own average scoring, so the
+  // "steady" band scales to how much this team puts up. The ±4%/wk band is tuned
+  // to the per-week slope scale (≈ a 12% swing across a 4-week window) — it catches
+  // a genuine monotonic climb or slide while leaving erratic week-to-week noise
+  // (a one-week spike or dip that doesn't establish a direction) reading steady.
   const avg = mean(pts);
-  const rel = avg ? delta / avg : 0;
-  const direction = rel > 0.06 ? 'rising' : rel < -0.06 ? 'fading' : 'steady';
+  const rel = avg ? slope / avg : 0;
+  const direction = rel > 0.04 ? 'rising' : rel < -0.04 ? 'fading' : 'steady';
 
-  const recentWeeks = weeks.slice(n - half);
+  // Recent record: the last two weeks — a results counterpoint to the scoring trend.
+  const recentCount = Math.min(2, n);
+  const recentWeeks = weeks.slice(n - recentCount);
   const rec = {
     w: recentWeeks.filter((w) => w.result === 'W').length,
     l: recentWeeks.filter((w) => w.result === 'L').length,
   };
 
-  return { delta: round1(delta), direction, recent: rec, recentCount: half, weeks, weekMax };
+  return { slope: round1(slope), direction, recent: rec, weeks, weekMax };
 }
 
-// Lineup leakage: where a team left points on the bench, made actionable. For
-// each week, the optimal lineup is diffed against who was actually started —
-// "gems" (optimal picks left on the bench) replace "duds" (started players the
-// optimal lineup drops), paired best-gem-to-worst-dud so the headline miss is the
-// most glaring one (the pairing is sum-exact: it always totals optimal − actual).
-// Returns season points left, efficiency %, the per-week leak series (for a "which
-// weeks" chart), and the biggest specific misses across the season.
-function computeLeakage(weekNums, poolByTeamWeek, rid, slots) {
+// Lineup leakage, framed for improvement rather than regret. Leads with lineup
+// efficiency (process soundness, placed league-relative elsewhere), then splits the
+// points left into two buckets that mean very different things to a manager:
+//   - coachable: an ONGOING misallocation — a player you habitually bench
+//     (startShare<0.5) out-rates one you habitually start (startShare>=0.5) on the
+//     season and is still rostered. That's a repeatable "start X over Y going
+//     forward" fix (the same structure as the Lens-1 lineup signal), and the points
+//     it cost are recoverable. Aggregated across weeks into named fixes.
+//   - variance: everything else — a bench player who happened to spike a single
+//     week, or a one-off wrong call on a player who's normally your starter. Not a
+//     repeatable mistake; not the manager's fault. This is the reassurance bucket.
+// The two buckets sum to the season points left (every weekly swap routes to one),
+// so the raw total is preserved as supporting evidence rather than the headline.
+// `seasonByName`: name -> { rate, startShare, lowSample, current } for the team.
+function computeLeakage(weekNums, poolByTeamWeek, rid, slots, seasonByName) {
   const byWeek = [];
-  const misses = [];
   let actualTot = 0;
   let optimalTot = 0;
   let leakMax = 0;
+  let coachablePts = 0;
+  let variancePts = 0;
+  const fixAgg = {}; // "gem|dud" -> aggregated repeatable fix across weeks
 
   for (const wk of weekNums) {
     const pool = (poolByTeamWeek[`${rid}|${wk}`] ?? []).map((p, i) => ({ ...p, _i: i }));
@@ -658,47 +701,74 @@ function computeLeakage(weekNums, poolByTeamWeek, rid, slots) {
     leakMax = Math.max(leakMax, left);
     byWeek.push({ week: wk, left: round1(left) });
 
-    if (left > 0.05) {
-      // gems = optimal picks not actually started; duds = starters the optimal
-      // lineup drops. Pair them within swap-eligibility classes so each miss is a
-      // legal start/sit: a QB can only displace a QB, while RB/WR/TE are mutually
-      // interchangeable through FLEX. Counts balance within each class, so zipping
-      // best gem ↔ worst dud stays sum-exact (still totals optimal − actual).
-      const optIdx = new Set(opt.picks.map((p) => p._i));
-      const cls = (pos) => (pos === 'QB' ? 'QB' : 'FLEX');
-      const gemsByCls = {};
-      const dudsByCls = {};
-      for (const p of opt.picks) if (!p.started) (gemsByCls[cls(p.position)] ??= []).push(p);
-      for (const p of started) if (!optIdx.has(p._i)) (dudsByCls[cls(p.position)] ??= []).push(p);
-      for (const c of Object.keys(gemsByCls)) {
-        const gems = gemsByCls[c].sort((a, b) => b.pts - a.pts);
-        const duds = (dudsByCls[c] ?? []).sort((a, b) => a.pts - b.pts);
-        for (let j = 0; j < Math.min(gems.length, duds.length); j++) {
-          const g = gems[j];
-          const d = duds[j];
-          misses.push({
-            week: wk,
-            // same-position swap reads as that position; a cross-position swap is
-            // only possible through the flex slot, so label it FLEX.
+    if (left <= 0.05) continue;
+
+    // gems = optimal picks not actually started; duds = starters the optimal lineup
+    // drops. Pair them within swap-eligibility classes so each swap is a legal
+    // start/sit (a QB can only displace a QB; RB/WR/TE interchange via FLEX). Counts
+    // balance within each class, so zipping best gem ↔ worst dud is sum-exact.
+    const optIdx = new Set(opt.picks.map((p) => p._i));
+    const cls = (pos) => (pos === 'QB' ? 'QB' : 'FLEX');
+    const gemsByCls = {};
+    const dudsByCls = {};
+    for (const p of opt.picks) if (!p.started) (gemsByCls[cls(p.position)] ??= []).push(p);
+    for (const p of started) if (!optIdx.has(p._i)) (dudsByCls[cls(p.position)] ??= []).push(p);
+    for (const c of Object.keys(gemsByCls)) {
+      const gems = gemsByCls[c].sort((a, b) => b.pts - a.pts);
+      const duds = (dudsByCls[c] ?? []).sort((a, b) => a.pts - b.pts);
+      for (let j = 0; j < Math.min(gems.length, duds.length); j++) {
+        const g = gems[j];
+        const d = duds[j];
+        const gain = g.pts - d.pts;
+        const gs = seasonByName[g.name];
+        const ds = seasonByName[d.name];
+
+        // Coachable only if this is a repeatable hierarchy error AND the swap would
+        // actually have helped that week: the benched gem is a habitual bench player
+        // who clearly out-rates the started dud (a habitual starter) over the season
+        // — the same >10% margin as the Lens-1 lineup signal — both reliable samples,
+        // the gem still rostered, and the realized weekly gain positive. Everything
+        // else is variance: a one-week bench spike, a marginal edge, or a week the
+        // habitual starter happened to outscore the better player (gain ≤ 0). We
+        // don't moralize about variance — routing gain>0 only also keeps the
+        // coachable bucket non-negative while staying sum-exact with the total.
+        const coachable =
+          gs && ds && !gs.lowSample && !ds.lowSample && gs.current &&
+          gs.startShare < 0.5 && ds.startShare >= 0.5 && gs.rate > ds.rate * 1.1 &&
+          gain > 0;
+
+        if (coachable) {
+          coachablePts += gain;
+          const key = `${g.name}|${d.name}`;
+          const f = (fixAgg[key] ??= {
             position: g.position === d.position ? g.position : 'FLEX',
             benchName: g.name,
-            benchPts: round1(g.pts),
+            benchRate: round1(gs.rate),
             starterName: d.name,
-            starterPts: round1(d.pts),
-            gain: g.pts - d.pts,
+            starterRate: round1(ds.rate),
+            edge: round1(gs.rate - ds.rate), // repeatable season rate gap (the signal)
+            pts: 0, // realized points recovered, for ranking the fixes
           });
+          f.pts += gain;
+        } else {
+          variancePts += gain;
         }
       }
     }
   }
-  misses.sort((a, b) => b.gain - a.gain);
+
+  const fixes = Object.values(fixAgg)
+    .sort((a, b) => b.pts - a.pts)
+    .map((f) => ({ ...f, pts: round1(f.pts) }));
 
   return {
-    pointsLeft: round1(optimalTot - actualTot),
     pct: optimalTot ? actualTot / optimalTot : 1,
+    pointsLeft: round1(optimalTot - actualTot),
+    coachablePts: round1(coachablePts),
+    variancePts: round1(variancePts),
     byWeek,
     leakMax: round1(leakMax),
-    misses: misses.slice(0, 3),
+    fixes: fixes.slice(0, 2),
   };
 }
 

@@ -135,11 +135,11 @@ function Overview({ vitals, roster }) {
   );
 }
 
-// Form / trajectory: where the team is heading, not how much it bounces. Reads
-// the swing between the season's first half and its last half (at 4 weeks,
-// last-2 vs first-2) and places it on a league-relative Fading↔Surging spectrum,
-// then shows the weekly scores so the shape is legible. Distinct from the League
-// drawer's variance read — this is about direction.
+// Form / trajectory: where the team is heading, not how much it bounces. Reads a
+// recency-weighted trend slope (half-life ~2wk) over the weekly scores — smooth,
+// gap-free, every game counted — and places it on a league-relative Fading↔Surging
+// spectrum, then shows the weekly scores (recent weeks bolder) so the shape is
+// legible. Distinct from the League drawer's variance read — this is about direction.
 const DIRECTION = {
   rising: { word: 'Heating up', cls: 'up' },
   fading: { word: 'Cooling off', cls: 'down' },
@@ -151,13 +151,12 @@ function Form({ form }) {
     return <div className="subview-stub">Not enough games yet to read a trend.</div>;
   }
   const dir = DIRECTION[form.direction];
-  const span = form.recentCount === 1 ? 'week' : `${form.recentCount} weeks`;
-  const sign = form.delta > 0 ? '+' : '';
+  const sign = form.slope > 0 ? '+' : '';
   const detail =
     form.direction === 'steady'
-      ? 'scoring is flat across the season so far'
-      : `${sign}${form.delta.toFixed(1)} pts/wk over the last ${span} vs. the first ${span}`;
-  const rec = `${form.recent.w}–${form.recent.l} recently`;
+      ? 'scoring has held roughly level across the season'
+      : `trending ${sign}${form.slope.toFixed(1)} pts/wk, recent weeks weighted most`;
+  const rec = `${form.recent.w}–${form.recent.l} last two`;
 
   return (
     <div className="to-form">
@@ -179,41 +178,46 @@ function Form({ form }) {
         </div>
       </div>
 
-      <WeeklyTrend weeks={form.weeks} weekMax={form.weekMax} recentCount={form.recentCount} />
+      <WeeklyTrend weeks={form.weeks} weekMax={form.weekMax} />
 
       <div className="to-foot">
         Columns are weekly points; green beat the league median that week, grey
-        fell below it. The shaded weeks on the right are the recent window the
-        trend compares against the earlier ones.
+        fell below it. More recent weeks are drawn bolder — they carry more weight
+        in the trend, which fades older games rather than cutting them off.
       </div>
     </div>
   );
 }
 
-// Where you leave points: lineup inefficiency made actionable. Leads with the
-// season cost (points left on the bench + efficiency, league-relative), then the
-// per-week leak chart (which weeks) and the biggest specific misses (which calls).
-// This is the manager-skill read — distinct from roster quality.
+// Where you leave points, framed for improvement not regret. Leads with the
+// league-relative process verdict (lineup efficiency) — most teams are sound — then
+// splits the points left into variance (one-week bench spikes, not your fault) and
+// coachable (a repeatable bench-over-starter fix still on your roster). The raw
+// points-left total and per-week chart are demoted to supporting evidence. No
+// retrospective "you blew week N" calls — only the one tendency worth changing.
 function Leakage({ leakage }) {
   if (!leakage) return <div className="subview-stub">No lineup data for this team.</div>;
   const pct = Math.round(leakage.pct * 100);
-  const clean = leakage.pointsLeft < 1 || leakage.misses.length === 0;
+  const clean = leakage.pointsLeft < 1;
+  const pos = Math.max(0, Math.min(1, leakage.pos ?? 0.5));
+  // League-relative process read — where this team's efficiency sits in the field.
+  const verdict =
+    pos >= 0.6
+      ? { word: 'Sharp lineups', cls: 'up' }
+      : pos >= 0.35
+      ? { word: 'Sound process', cls: 'flat' }
+      : { word: 'Room to tighten', cls: 'down' };
 
   return (
     <div className="to-leak">
       <div className="to-form-head">
-        <span className={`to-form-word ${clean ? 'up' : 'down'}`}>
-          {clean ? 'Optimal' : `${leakage.pointsLeft.toFixed(1)} pts left on the bench`}
-        </span>
-        <span className="to-form-detail">{pct}% lineup efficiency this season</span>
+        <span className={`to-form-word ${verdict.cls}`}>{verdict.word}</span>
+        <span className="to-form-detail">{pct}% lineup efficiency this season, league-relative below</span>
       </div>
 
       <div className="spectrum">
         <div className="spec-track leak-track">
-          <div
-            className="spec-marker"
-            style={{ left: `${Math.max(0, Math.min(1, leakage.pos ?? 0.5)) * 100}%` }}
-          />
+          <div className="spec-marker" style={{ left: `${pos * 100}%` }} />
         </div>
         <div className="spec-ends">
           <span>Leaky</span>
@@ -221,36 +225,77 @@ function Leakage({ leakage }) {
         </div>
       </div>
 
-      <WeeklyLeak byWeek={leakage.byWeek} leakMax={leakage.leakMax} />
-
       {clean ? (
         <div className="to-signal clean">
-          <span className="to-signal-tag tag-clean">All set</span>
+          <span className="to-signal-tag tag-clean">Optimal</span>
           <span className="to-signal-text">
-            You’ve been starting your best available lineup — almost nothing left on the bench.
+            You’ve started essentially your best lineup all season — almost nothing
+            left on the bench.
           </span>
         </div>
       ) : (
-        <div className="to-leak-misses">
-          {leakage.misses.map((m) => (
-            <div className="to-signal" key={`${m.week}-${m.benchName}`}>
-              <span className="to-signal-tag tag-lineup">W{m.week}</span>
+        <LeakBreakdown leakage={leakage} />
+      )}
+
+      <WeeklyLeak byWeek={leakage.byWeek} leakMax={leakage.leakMax} />
+
+      <div className="to-foot">
+        Supporting detail: points left on the bench each week — the gap between your
+        lineup and the best one your roster could have fielded. A near-empty column
+        is a week you fielded your best lineup; everything reconciles to the season total.
+      </div>
+    </div>
+  );
+}
+
+// The coachable-vs-variance split: a two-segment bar (most of it is variance, which
+// is the point), then the one repeatable fix worth acting on — or, if there's no
+// recurring hierarchy error, a clean reassurance that the leak was all variance.
+function LeakBreakdown({ leakage }) {
+  const { pointsLeft, coachablePts, variancePts, fixes } = leakage;
+  const cPct = pointsLeft > 0 ? Math.round((coachablePts / pointsLeft) * 100) : 0;
+  const vPct = 100 - cPct;
+  const hasFix = fixes.length > 0;
+
+  return (
+    <div className="to-leak-breakdown">
+      <div className="to-leak-split">
+        <div className="to-leak-seg variance" style={{ width: `${vPct}%` }} />
+        <div className="to-leak-seg coachable" style={{ width: `${cPct}%` }} />
+      </div>
+      <div className="to-leak-split-key">
+        <span><span className="key-dot variance" />{round1(variancePts)} pts variance</span>
+        <span><span className="key-dot coachable" />{round1(coachablePts)} pts coachable</span>
+      </div>
+
+      {hasFix ? (
+        <>
+          <p className="to-leak-lede">
+            Most of the <strong>{round1(pointsLeft)}</strong> pts you left were
+            one-week bench spikes — variance you couldn’t have called.{' '}
+            {fixes.length === 1 ? 'One pattern is' : 'A few patterns are'} repeatable
+            and worth fixing:
+          </p>
+          {fixes.map((f) => (
+            <div className="to-signal" key={`${f.benchName}-${f.starterName}`}>
+              <span className="to-signal-tag tag-lineup">Fix</span>
               <span className="to-signal-text">
-                started <strong>{m.starterName}</strong> ({m.starterPts}) over{' '}
-                <strong>{m.benchName}</strong> ({m.benchPts}) at{' '}
-                <span style={{ color: POS_COLORS[m.position] ?? 'var(--muted)' }}>{m.position}</span> —{' '}
-                <span className="to-leak-gain">−{round1(m.gain)}</span>
+                start <strong>{f.benchName}</strong> ({f.benchRate}/g) over{' '}
+                <strong>{f.starterName}</strong> ({f.starterRate}/g) at{' '}
+                <span style={{ color: POS_COLORS[f.position] ?? 'var(--muted)' }}>{f.position}</span>{' '}
+                going forward — <span className="to-leak-gain">+{f.edge}/g</span> on the season.
               </span>
             </div>
           ))}
-        </div>
+        </>
+      ) : (
+        <p className="to-leak-lede">
+          Your lineup calls have been sound — essentially all{' '}
+          <strong>{round1(pointsLeft)}</strong> pts left were bench players who
+          happened to spike a single week, not a recurring start/sit you’d change
+          going forward.
+        </p>
       )}
-
-      <div className="to-foot">
-        Columns are points left on the bench each week — the gap between your lineup
-        and the best one your roster could have fielded. The misses below are the
-        single costliest start/sit calls; everything reconciles to the season total.
-      </div>
     </div>
   );
 }
@@ -282,22 +327,21 @@ function WeeklyLeak({ byWeek, leakMax }) {
 const round1 = (n) => Math.round(n * 10) / 10;
 
 // Weekly scores as a small column chart — the "show the work" behind the trend.
-// Bars scale within the team; a tick marks the league median that week. The most
-// recent half is shaded so the comparison the delta describes is visible.
-function WeeklyTrend({ weeks, weekMax, recentCount }) {
-  const n = weeks.length;
-  const recentFrom = n - recentCount;
+// Bars scale within the team; green = beat the league median that week. Each bar's
+// opacity tracks its recency weight (most recent solid, older faded), making the
+// trend's recency-weighting legible rather than implying a hard cutoff.
+function WeeklyTrend({ weeks, weekMax }) {
   return (
     <div className="to-trend">
-      {weeks.map((w, i) => {
+      {weeks.map((w) => {
         const h = weekMax ? Math.max(4, (w.pts / weekMax) * 100) : 0;
         return (
-          <div className={`to-trend-col ${i >= recentFrom ? 'recent' : ''}`} key={w.week}>
+          <div className="to-trend-col" key={w.week}>
             <span className="to-trend-pts">{Math.round(w.pts)}</span>
             <div className="to-trend-bar-wrap">
               <div
                 className={`to-trend-bar ${w.beatMedian ? 'beat' : 'below'}`}
-                style={{ height: `${h}%` }}
+                style={{ height: `${h}%`, opacity: 0.4 + 0.6 * (w.weight ?? 1) }}
               />
             </div>
             <span className={`to-trend-wk ${w.result === 'W' ? 'win' : 'loss'}`}>
