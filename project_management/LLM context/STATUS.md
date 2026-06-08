@@ -175,10 +175,36 @@ All Team-tab work should respect the team switcher already wired in.
 These refine shipped lenses; pick up alongside or after the Players sub-view.
 
 > ✅ **Done (2026-06-07):** Lens-4 reframe (retrospective → improvement) and the Form
-> lens EWMA switch both shipped — see the most-recent maintenance entry above. One
-> backlog item remains:
+> lens EWMA switch both shipped — see the most-recent maintenance entry above. Two
+> backlog items remain:
 
-1. **Per-panel readiness gate (build the seam now; flip panels on later).** Give every
+1. **Reframe the Lens-4 "coachable" fix from confident imperative → advisory question
+   (and own its predictive weakness).** The shipped coachable fix says *"start X over Y
+   going forward — +N/g on the season,"* which silently converts a tiny realized sample
+   into a forward claim it can't support. **Worked example that exposes it:** at the wk-4
+   freeze, Cousin 'Chilling's roster fired *"start Keenan Allen (16.3/g) over A.J. Brown
+   (8.8/g) at WR going forward."* Pulling the *actual* rest-of-season from
+   `nfl_stats_2025.parquet`: **Brown W5+ = 16.8/g, Allen W5+ = 9.0/g** — a near-total
+   reversal; Brown won 7 of the next 10 head-to-heads by +67.7 pts. The call would have
+   been backwards. Mechanism: 4 games, equal-weighted, **no talent prior** — Brown's two
+   near-zero early games were noise a prior would discount; stars are the *worst* case for
+   realized-rate reads. The leakage total is descriptively true (you did leave those
+   points in wks 1–3); only the **forward language** overreaches. Directions:
+   - **Language (near-term, cheap):** drop the imperative + "+N/g going forward." Pose it
+     as a **question the manager adjudicates**, per the project mission (consultation, not
+     autopilot): *"Is it time to pivot off Brown? He's scored 8.8/g to Allen's 16.3 over
+     4 weeks — past fluke territory; decide if you still believe in him."* Surfaces the
+     decision point; defers the call to the user.
+   - **Trade-timing angle (V4):** a sustained underperformance isn't only a start/sit
+     question — even if you *don't* believe the player rebounds, selling while perceived
+     value is high (≈$0.85 on the dollar) beats holding until the market reprices
+     (≈$0.35). Ties to the **LeagueLogs market-value** layer (V4). The signal's real job
+     is to flag "make a call here," not to make it.
+   - **Real fix (V3):** regress realized rate toward a forward prior (FantasyPros
+     projections / ADP) before calling anything coachable; gate the language on sample
+     size (see item 2). Until then, keep coachable **retrospective**, not predictive.
+
+2. **Per-panel readiness gate (build the seam now; flip panels on later).** Give every
    panel a self-declared **readiness check** that decides whether it has enough data to
    turn on, else renders a **"too early"** state. Regimes: **structural** (ready at roster
    lock), **point-in-time** (ready week 1, confidence grows with weeks), **trend** (ready
@@ -189,7 +215,8 @@ These refine shipped lenses; pick up alongside or after the Players sub-view.
    scheme/surrounding-talent changes). Early-season value is a forward-looking problem —
    current-year projections/ADP/odds (FantasyPros V3, The Odds unbuilt) or AI (V5);
    preseason content is undesigned, deferred. Cross-cutting: compute early, but calibrate
-   the language to the sample size.
+   the language to the sample size. **(Item 1's coachable fix is the first concrete
+   consumer of this "calibrate language to sample size" rule.)**
 
 ## The step after (unconfirmed, subject to change)
 
