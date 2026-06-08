@@ -162,6 +162,7 @@ fantasy-ai/
                     └── ... # matchup and transaction parquet files for each week of the 2025 season
     ├── shared/                     # league detection, config loaders
     ├── transforms/ # one Python script per join/transform
+        ├── _analytics.py              # shared pure helpers (round1, mean, median, spectrum_positions)
         ├── join_nfl_sleeper_weekly.py # ✅ built
         ├── audit_join.py              # ✅ built — resolves unknown-position remainders
         ├── derive_lineup_slots.py     # ✅ built — roster_positions → lineup_slots (starting skill slots)
@@ -300,6 +301,15 @@ via data_layer.py, performs a single join, and writes via data_layer.py.
 - `audit_join.py` — audits and repairs the weekly join output for unresolved players. Reads the remainders file, checks the Sleeper player registry (refreshing it if stale), classifies each remainder as skill (appended to joined file with 0 stats), K/DEF (confirmed and discarded), or truly unknown (left in remainders for manual review). Idempotent — safe to re-run. Called automatically by join_nfl_sleeper_weekly.py; can also be run standalone with --season and --week args.
 
 - `compute_team_form.py` / `compute_team_leakage.py` — **derived-analytics transforms.** They read the season join (+ lineup_slots for leakage) and write one pre-computed row per roster_id to `snapshots/derived/`. These promote the heaviest Team Overview math out of the front-end seam (`queries.js`): the EWMA trajectory read and the optimal-lineup / leakage read, respectively, plus the tuning constants and signal thresholds they own (`HALF_LIFE_WK`/`DIRECTION_BAND`; `MIN_GAMES`/`COACHABLE_RATE_MARGIN`/`HABITUAL_STARTER_THRESHOLD`). Rationale: a Python server is the eventual architecture, so the analytics live in Python now — the front end reads pre-shaped parquet, and the server migration becomes "transform → API serves same parquet" rather than "rewrite JS math in Python." Re-run with `--season` after a join refresh. Faithful ports of the prior JS; output reconciles exactly. Accept `--season` as a required CLI arg.
+
+  **SOLID shape (per principle #9):** each per-team analytic is a pure function
+  (`_team_form`, `_team_leakage`) that **receives its tuning constants as injected
+  keyword args** — `compute(season)` is the composition root that owns the module
+  constants and passes them down (DIP: the pure logic depends on parameters, not
+  globals, so it tests in isolation at any parameterisation). Shared numeric helpers
+  (`round1`, `mean`, `median`, and the league-relative `spectrum_positions`
+  normaliser — the Python mirror of the front-end's old `attachSpectrumPos`) live
+  once in **`transforms/_analytics.py`** rather than being copy-pasted per transform.
 
 ## Technical Principles
 

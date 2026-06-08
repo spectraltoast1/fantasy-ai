@@ -132,6 +132,9 @@ const SQL_TEAM_WEEK = `
 // blobs carry view-ready camelCase keys so consuming them is JSON.parse, nothing more.
 const SQL_TEAM_FORM = `SELECT * FROM 'team_form.parquet'`;
 const SQL_TEAM_LEAKAGE = `SELECT * FROM 'team_leakage.parquet'`;
+// The drawer only displays efficiency, so it reads just those two columns rather
+// than the full leakage row (which the Team Overview lens needs in whole).
+const SQL_TEAM_EFFICIENCY = `SELECT roster_id, pct, points_left FROM 'team_leakage.parquet'`;
 
 // Per team & position: total starter points and number of starter-slots used,
 // so per-start output can be compared like-for-like against the league.
@@ -154,15 +157,15 @@ const SQL_POS_STARTS = `
  * @returns {Promise<Object<number, object>>} keyed by roster_id
  */
 export async function loadTeamDetails() {
-  const [teamWeeks, posStarts, leakRows] = await Promise.all([
+  const [teamWeeks, posStarts, effRows] = await Promise.all([
     query(SQL_TEAM_WEEK),
     query(SQL_POS_STARTS),
-    query(SQL_TEAM_LEAKAGE),
+    query(SQL_TEAM_EFFICIENCY),
   ]);
 
   // Efficiency (actual vs optimal lineup) is pre-computed by compute_team_leakage.py.
-  const leakByTeam = {};
-  for (const r of leakRows) leakByTeam[Number(r.roster_id)] = r;
+  const effByTeam = {};
+  for (const r of effRows) effByTeam[Number(r.roster_id)] = r;
 
   // Index team-week scores by week (for all-play + median) and by team.
   const byWeek = {};
@@ -236,12 +239,12 @@ export async function loadTeamDetails() {
     }
     const heroCv = cv(Object.values(ratios).filter((r) => r != null));
 
-    const lk = leakByTeam[rosterId];
+    const eff = effByTeam[rosterId];
     details[rosterId] = {
       allPlay: { wins: ap.w, losses: ap.l, pct: ap.w + ap.l ? ap.w / (ap.w + ap.l) : 0 },
       efficiency: {
-        pct: lk ? Number(lk.pct) : 0,
-        pointsLeft: lk ? Number(lk.points_left) : 0,
+        pct: eff ? Number(eff.pct) : 0,
+        pointsLeft: eff ? Number(eff.points_left) : 0,
       },
       weeks,
       consistency: { cv: consistencyCv },

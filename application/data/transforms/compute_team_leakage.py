@@ -35,8 +35,11 @@ from pathlib import Path
 
 import polars as pl
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+_TRANSFORMS_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(_TRANSFORMS_DIR.parent))  # application/data → data_layer
+sys.path.insert(0, str(_TRANSFORMS_DIR))          # transforms → _analytics
 import data_layer
+from _analytics import round1, spectrum_positions
 
 SKILL_POSITIONS = ["QB", "RB", "WR", "TE"]
 
@@ -49,10 +52,6 @@ COACHABLE_RATE_MARGIN = 1.1
 # Start share at/above this marks a "habitual starter"; below it, a "habitual bench"
 # player. The coachable signal is a habitual-bench gem out-rating a habitual starter.
 HABITUAL_STARTER_THRESHOLD = 0.5
-
-
-def _round1(n: float) -> float:
-    return round(n, 1)
 
 
 def _expand_slots(slot_rows):
@@ -93,11 +92,15 @@ def _cls(pos):
     return "QB" if pos == "QB" else "FLEX"
 
 
-def _team_leakage(week_nums, pool_by_week, slots, season_by_name):
+def _team_leakage(
+    week_nums, pool_by_week, slots, season_by_name, *, rate_margin, habitual_starter_threshold
+):
     """Port of queries.js computeLeakage for one team.
 
     `pool_by_week`: week -> list of {name, position, pts, started} for this team.
     `season_by_name`: name -> {rate, startShare, lowSample, current} for this team.
+    `rate_margin` and `habitual_starter_threshold` are injected (not read from module
+    globals) so the coachable criteria are parameterisable and testable in isolation.
     """
     by_week = []
     actual_tot = 0.0
@@ -120,7 +123,7 @@ def _team_leakage(week_nums, pool_by_week, slots, season_by_name):
         actual_tot += actual_pts
         optimal_tot += opt["total"]
         leak_max = max(leak_max, left)
-        by_week.append({"week": wk, "left": _round1(left)})
+        by_week.append({"week": wk, "left": round1(left)})
 
         if left <= 0.05:
             continue
@@ -161,9 +164,9 @@ def _team_leakage(week_nums, pool_by_week, slots, season_by_name):
                     and not gs["lowSample"]
                     and not ds["lowSample"]
                     and gs["current"]
-                    and gs["startShare"] < HABITUAL_STARTER_THRESHOLD
-                    and ds["startShare"] >= HABITUAL_STARTER_THRESHOLD
-                    and gs["rate"] > ds["rate"] * COACHABLE_RATE_MARGIN
+                    and gs["startShare"] < habitual_starter_threshold
+                    and ds["startShare"] >= habitual_starter_threshold
+                    and gs["rate"] > ds["rate"] * rate_margin
                     and gain > 0
                 )
 
@@ -175,10 +178,10 @@ def _team_leakage(week_nums, pool_by_week, slots, season_by_name):
                         f = {
                             "position": g["position"] if g["position"] == d["position"] else "FLEX",
                             "benchName": g["name"],
-                            "benchRate": _round1(gs["rate"]),
+                            "benchRate": round1(gs["rate"]),
                             "starterName": d["name"],
-                            "starterRate": _round1(ds["rate"]),
-                            "edge": _round1(gs["rate"] - ds["rate"]),  # repeatable season rate gap
+                            "starterRate": round1(ds["rate"]),
+                            "edge": round1(gs["rate"] - ds["rate"]),  # repeatable season rate gap
                             "pts": 0.0,  # realized points recovered, for ranking the fixes
                         }
                         fix_agg[key] = f
@@ -187,14 +190,14 @@ def _team_leakage(week_nums, pool_by_week, slots, season_by_name):
                     variance_pts += gain
 
     fixes = sorted(fix_agg.values(), key=lambda f: f["pts"], reverse=True)
-    fixes = [{**f, "pts": _round1(f["pts"])} for f in fixes][:2]
+    fixes = [{**f, "pts": round1(f["pts"])} for f in fixes][:2]
 
     return {
         "pct": actual_tot / optimal_tot if optimal_tot else 1.0,
-        "points_left": _round1(optimal_tot - actual_tot),
-        "coachable_pts": _round1(coachable_pts),
-        "variance_pts": _round1(variance_pts),
-        "leak_max": _round1(leak_max),
+        "points_left": round1(optimal_tot - actual_tot),
+        "coachable_pts": round1(coachable_pts),
+        "variance_pts": round1(variance_pts),
+        "leak_max": round1(leak_max),
         "by_week": by_week,
         "fixes": fixes,
     }
@@ -260,18 +263,21 @@ def compute(season: int) -> pl.DataFrame:
     for rid, pool_by_week in pool_by_team_week.items():
         week_nums = sorted(pool_by_week.keys())
         lk = _team_leakage(
-            week_nums, pool_by_week, slots, season_by_name_by_team.get(rid, {})
+            week_nums,
+            pool_by_week,
+            slots,
+            season_by_name_by_team.get(rid, {}),
+            rate_margin=COACHABLE_RATE_MARGIN,
+            habitual_starter_threshold=HABITUAL_STARTER_THRESHOLD,
         )
         records.append({"roster_id": rid, **lk})
 
-    # League-relative spectrum position (0–1, min→max efficiency across all teams).
-    # Matches attachSpectrumPos: a flat field collapses everyone to the 0.5 midpoint.
-    pcts = [r["pct"] for r in records]
-    lo, hi = min(pcts), max(pcts)
-    span = hi - lo
+    # League-relative spectrum position (0–1, min→max efficiency across all teams), via
+    # the shared normaliser so the rule has one home across the two transforms.
+    positions = spectrum_positions([r["pct"] for r in records])
 
     rows = []
-    for r in records:
+    for r, pos in zip(records, positions):
         rows.append(
             {
                 "roster_id": r["roster_id"],
@@ -280,7 +286,7 @@ def compute(season: int) -> pl.DataFrame:
                 "coachable_pts": r["coachable_pts"],
                 "variance_pts": r["variance_pts"],
                 "leak_max": r["leak_max"],
-                "spectrum_pos": (r["pct"] - lo) / span if span else 0.5,
+                "spectrum_pos": pos,
                 # View-ready camelCase so the front-end seam can JSON.parse and pass
                 # straight to the chart/fix-list with no per-item remapping.
                 "by_week_json": json.dumps(r["by_week"]),

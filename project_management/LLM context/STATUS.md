@@ -59,6 +59,14 @@ in-scope construction-depth and consistency reads, not just the moved analytics)
 Verified live across all 10 teams + the drawer: every lens reconciles exactly with
 the prior JS (Cousin 127 = 42.8 coachable + 84.2 variance with the Allen↔Brown
 fixes; Tet Lasso 82.1 all-variance / 86% efficiency; Bourne 54.2; Deb fading).
+**SOLID follow-up (same session, principle #9):** tuning constants are now **injected**
+into the pure `_team_form`/`_team_leakage` functions (DIP — `compute()` is the
+composition root, no globals reached inside the analytics); shared helpers
+(`round1`/`mean`/`median`/`spectrum_positions`) lifted into `transforms/_analytics.py`
+(DRY — one home for the spectrum-normalisation rule); the League drawer reads a
+**narrowed** `SELECT roster_id, pct, points_left` rather than the full leakage row
+(ISP). Parquet output is **byte-identical** before/after (md5-verified) — the cleanup
+is provably behaviour-preserving.
 
 > earlier build
 **Team Overview refinements — Form → EWMA slope + Lens-4 reframe.** Two
