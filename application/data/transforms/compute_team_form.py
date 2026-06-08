@@ -1,0 +1,190 @@
+"""
+Compute per-team trajectory (form) analytics from the weekly join.
+
+Promotes the front-end `computeForm` shaping (formerly in queries.js) into a polars
+transform. "Form" reframes weekly scoring from variance to *direction*: is the team
+trending up or fading? Rather than a last-half-vs-first-half split (which discards
+the middle week and jumps discontinuously as weeks append), it fits an
+exponentially-weighted linear trend — every week's weight halves every
+HALF_LIFE_WK weeks back from the most recent — so the read is smooth, uses every
+game, and works from two weeks on.
+
+Per team it derives:
+  - slope: recency-weighted points/week trend (positive = heating up)
+  - direction: rising / fading / steady, thresholded against the team's own average
+    scoring (±DIRECTION_BAND/wk) so a small wobble stays "steady"
+  - recent: the last two weeks' W/L — a results counterpoint to the scoring trend
+  - spectrum_pos: league-relative 0–1 marker (min→max slope across all teams) for
+    the Fading↔Surging spectrum
+  - weeks: the per-week series (pts, result, beat-median flag, recency weight) the
+    chart draws
+
+Output: snapshots/derived/team_form_{season}.parquet, one row per roster_id.
+
+Usage:
+    python compute_team_form.py --season 2025
+"""
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+import polars as pl
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import data_layer
+
+# Recency weighting: each week's weight halves every HALF_LIFE_WK weeks back from the
+# most recent, so the trend leans on recent form without cutting older games off.
+HALF_LIFE_WK = 2
+# Direction band: a slope within ±DIRECTION_BAND of the team's own avg scoring (per
+# week) reads "steady". Tuned to the per-week slope scale (≈ a 12% swing over a
+# 4-week window) — catches a monotonic climb/slide, leaves week-to-week noise steady.
+DIRECTION_BAND = 0.04
+
+
+def _round1(n: float) -> float:
+    return round(n, 1)
+
+
+def _mean(xs):
+    return sum(xs) / len(xs) if xs else 0.0
+
+
+def _median(xs):
+    s = sorted(xs)
+    m = len(s)
+    if not m:
+        return 0.0
+    return s[(m - 1) // 2] if m % 2 else (s[m // 2 - 1] + s[m // 2]) / 2
+
+
+def _team_form(weeks, median_by_week):
+    """Port of queries.js computeForm for one team.
+
+    `weeks`: list of {"week", "pts", "result"} sorted by week. Returns a dict with
+    slope, direction, recent W/L, and the per-week series carrying beat-median +
+    weight. `slope` is rounded to one decimal to match the front-end value the
+    spectrum normalises over.
+    """
+    weeks = [
+        {
+            "week": w["week"],
+            "pts": w["pts"],
+            "result": w["result"],
+            "beatMedian": w["pts"] > median_by_week.get(w["week"], 0.0),
+            "weight": 1.0,
+        }
+        for w in sorted(weeks, key=lambda w: w["week"])
+    ]
+    n = len(weeks)
+    pts = [w["pts"] for w in weeks]
+
+    if n < 2:
+        return {"slope": 0.0, "direction": "steady", "recent_w": 0, "recent_l": 0, "weeks": weeks}
+
+    # Exponential weights: most recent week = 1, halving every HALF_LIFE_WK weeks.
+    decay = 0.5 ** (1 / HALF_LIFE_WK)
+    wts = [decay ** (n - 1 - i) for i in range(n)]
+    for w, wt in zip(weeks, wts):
+        w["weight"] = wt
+
+    # Weighted least-squares slope of points vs. week index (x = 0..n-1) — pts/week.
+    W = sum(wts)
+    mx = sum(wt * i for i, wt in enumerate(wts)) / W
+    my = sum(wt * pts[i] for i, wt in enumerate(wts)) / W
+    num = sum(wts[i] * (i - mx) * (pts[i] - my) for i in range(n))
+    den = sum(wts[i] * (i - mx) ** 2 for i in range(n))
+    slope = num / den if den else 0.0
+
+    # Direction: slope as a fraction of the team's own average scoring, so the
+    # "steady" band scales to how much this team puts up.
+    avg = _mean(pts)
+    rel = slope / avg if avg else 0.0
+    direction = "rising" if rel > DIRECTION_BAND else "fading" if rel < -DIRECTION_BAND else "steady"
+
+    # Recent record: the last two weeks — a results counterpoint to the scoring trend.
+    recent = weeks[n - min(2, n):]
+    recent_w = sum(1 for w in recent if w["result"] == "W")
+    recent_l = sum(1 for w in recent if w["result"] == "L")
+
+    return {
+        "slope": _round1(slope),
+        "direction": direction,
+        "recent_w": recent_w,
+        "recent_l": recent_l,
+        "weeks": weeks,
+    }
+
+
+def compute(season: int) -> pl.DataFrame:
+    season_df = data_layer.read_join_season(season)
+
+    # Collapse per-player rows to one row per (team, week): the team's total points
+    # and W/L that week (both repeat across a team's players, so first() is exact).
+    team_week = (
+        season_df.group_by("roster_id", "week")
+        .agg(
+            pl.col("roster_total_points").first().alias("pts"),
+            pl.col("matchup_result").first().alias("result"),
+        )
+        .sort("roster_id", "week")
+    )
+
+    # Per-week league median (across all teams that week) — the beat/below line.
+    median_by_week = {
+        int(wk): _median(grp["pts"].to_list())
+        for (wk,), grp in team_week.group_by("week")
+    }
+
+    weeks_by_team = {}
+    for row in team_week.iter_rows(named=True):
+        weeks_by_team.setdefault(int(row["roster_id"]), []).append(
+            {"week": int(row["week"]), "pts": float(row["pts"]), "result": row["result"]}
+        )
+
+    records = []
+    for rid, weeks in weeks_by_team.items():
+        f = _team_form(weeks, median_by_week)
+        records.append({"roster_id": rid, **f})
+
+    # League-relative spectrum position (0–1, min→max slope across all teams). Matches
+    # attachSpectrumPos: a flat field collapses everyone to the 0.5 midpoint.
+    slopes = [r["slope"] for r in records]
+    lo, hi = min(slopes), max(slopes)
+    span = hi - lo
+
+    rows = []
+    for r in records:
+        rows.append(
+            {
+                "roster_id": r["roster_id"],
+                "slope": r["slope"],
+                "direction": r["direction"],
+                "recent_w": r["recent_w"],
+                "recent_l": r["recent_l"],
+                "spectrum_pos": (r["slope"] - lo) / span if span else 0.5,
+                # View-ready camelCase so the front-end seam can JSON.parse and pass
+                # straight to the chart with no per-item remapping.
+                "weeks_json": json.dumps(r["weeks"]),
+            }
+        )
+
+    df = pl.DataFrame(rows).sort("roster_id")
+    print(f"=== Team form: season={season} ===")
+    print(df.select("roster_id", "slope", "direction", "recent_w", "recent_l", "spectrum_pos"))
+    return df
+
+
+def run(season: int) -> None:
+    df = compute(season)
+    data_layer.write_team_form(df, season)
+    print(f"  → snapshots/derived/team_form_{season}.parquet")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Compute per-team trajectory (form) analytics.")
+    parser.add_argument("--season", type=int, required=True)
+    args = parser.parse_args()
+    run(args.season)
