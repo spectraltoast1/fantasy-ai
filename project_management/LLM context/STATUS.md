@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-06-07 (Team Overview refinements — EWMA Form + Lens-4 reframe)
+**Last updated:** 2026-06-08 (queries.js refactor — form + leakage analytics → Python transforms)
 **Target ship:** NFL kickoff, mid August 2026
 
 ---
@@ -34,6 +34,33 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**Architecture: form + leakage analytics extracted from queries.js → Python
+transforms.** `queries.js` was meant to be the client/server seam (data access
+only) but had absorbed analytics, business-logic thresholds, and tuning constants —
+an SRP violation, with the hardest math living in JS despite a polars prototype
+existing. Since a Python server is the eventual architecture, the math went to
+**Python now** (not new JS modules to later discard): every line carries forward as
+"transform → API serves same parquet." Two new transforms mirror
+`derive_lineup_slots.py`: **`compute_team_form.py`** (EWMA scoring slope, direction
+band, recent record, spectrum pos, per-week series — owns `HALF_LIFE_WK`,
+`DIRECTION_BAND`) and **`compute_team_leakage.py`** (greedy optimal lineup,
+efficiency %, coachable-vs-variance split, named fixes, per-week leak, spectrum pos —
+owns `MIN_GAMES`, `COACHABLE_RATE_MARGIN`, `HABITUAL_STARTER_THRESHOLD`). Both write
+`snapshots/derived/team_{form,leakage}_{season}.parquet` via new `data_layer`
+read/write fns. `queries.js` lost **253 net lines**: `computeForm`/`computeLeakage`/
+`optimalLineup`/`expandSlots`/`mean`/`median` gone, replaced by parquet reads +
+thin `formFromRow`/`leakageFromRow` assemblers (JSON.parse + a display-only
+`weekMax`); the JSON blobs carry view-ready camelCase so no per-item remap is
+needed. `loadTeamDetails` (League drawer) consolidated to **read** efficiency from
+the leakage parquet rather than recompute the optimal-lineup pass inline. Function
+signatures + return shapes unchanged — **no view component touched.** Two doc
+deviations: `MIN_GAMES` and `cv` are **kept** in queries.js (still used by the
+in-scope construction-depth and consistency reads, not just the moved analytics).
+Verified live across all 10 teams + the drawer: every lens reconciles exactly with
+the prior JS (Cousin 127 = 42.8 coachable + 84.2 variance with the Allen↔Brown
+fixes; Tet Lasso 82.1 all-variance / 86% efficiency; Bourne 54.2; Deb fading).
+
+> earlier build
 **Team Overview refinements — Form → EWMA slope + Lens-4 reframe.** Two
 refinement-backlog items shipped (backlog item 3 remains). **Form** now reads a
 recency-weighted linear trend (half-life 2wk) instead of the last-half-vs-first-half
@@ -84,30 +111,6 @@ seam; `SQL_PLAYER_WEEK` now carries the player name. Verified live across the sp
 82.1/86%) — every points-left total, efficiency %, per-week leak, and named miss
 reconciles exactly with a polars prototype. **All 4 Overview lenses now shipped.**
 
-> earlier build
-**Team Overview — Lens 3 (Form / trajectory).** New **Form** section under the
-construction block. Reframes weekly scoring from *variance* (the League drawer's
-read) to *direction*: is the team trending up or fading? **Honest with the 4-week
-freeze** — STATUS's planned "last-3 vs first-3" would overlap windows, so the split
-is **last-half vs first-half** (at 4 weeks: last-2 vs first-2, non-overlapping; the
-middle week drops when odd; widens automatically as V1.5 appends weeks). Three
-pieces: a **direction headline** (Heating up / Cooling off / Holding steady — the
-"steady" threshold is ±6% of the team's *own* avg so a wobble isn't called a surge)
-with the recent-half scoring swing (`±pts/wk`) and recent record; a **league-relative
-Fading↔Surging spectrum** (marker by the swing vs the league's actual spread); and a
-**weekly column chart** — the 4 scores, green = beat the league median that week /
-grey = below, recent window shaded so the comparison the delta describes is visible.
-The read deliberately separates *direction* from *results*: e.g. Saquarles is steady
-on scoring but 0–2 (unlucky), which the copy surfaces rather than hides.
-
-New shaping in queries.js `loadTeamRosters()` only (no new fetcher, no new seam):
-`SQL_TEAM_TRAJECTORY` per-week team points + `computeForm()` + `median()`/`mean()`
-helpers; the existing `attachSpectrumPos()` places the Fading↔Surging marker. Verified
-live across all three states (Team SCOOP surging +46.7/2–0; Saquarles steady/0–2; Tet
-Lasso fading −14.1) — every delta, direction, record, and spectrum position reconciles
-with a polars prototype. This is **3 of the 4 planned Overview lenses** (construction +
-reliance + form); only **Lens 4 (where you leave points)** remains.
-
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
@@ -125,6 +128,7 @@ reliance + form); only **Lens 4 (where you leave points)** remains.
     - Team Overview — Where-you-leave-points lens: season points-left + efficiency % on a league-relative Leaky↔Optimal spectrum, per-week leak chart, biggest specific start/sit misses (eligibility-aware pairing); shared optimalLineup()/expandSlots() helpers + computeLeakage() [Overview lens 4 of 4 — Overview complete]
     - Team Overview refinement — Form lens → recency-weighted EWMA slope (half-life 2wk, ±4%/wk direction band, recency-faded weekly bars); computeForm() rewritten [backlog item 2]
     - Team Overview refinement — Lens-4 reframe (retrospective → improvement): efficiency-led, season points-left split into variance vs coachable (repeatable >10% bench-over-starter fix, sum-exact), named-miss list replaced by one rate-gap fix; computeLeakage() takes season role+rate map [backlog item 1]
+    - Architecture refactor — form + leakage analytics extracted from queries.js → Python transforms (compute_team_form.py + compute_team_leakage.py → snapshots/derived/), tuning constants moved with them; queries.js slimmed to a thin read+assemble seam (−253 lines); loadTeamDetails efficiency consolidated to read the leakage parquet. View components untouched.
 
 > not yet built
     >> backend

@@ -2,7 +2,7 @@
 
 > Engineering context document for Claude Code. Describes the stack, folder structure, data layer design, and technical principles. Updated regularly as the project evolves.
 
-**Last reviewed:** 2026-06-07
+**Last reviewed:** 2026-06-08
 
 ---
 
@@ -78,31 +78,39 @@ scope tagging only; the canonical list lives in STATUS.)
 
 ## Front-end shaping — portability & latent assumptions
 
-All dashboard trend/shaping logic lives in **`src/queries.js`** (the seam); panels are
-pure renderers. Three classes of portability to keep straight:
+The heaviest analytics (trajectory + lineup leakage) now live in **Python transforms**
+that pre-compute parquet (`compute_team_form.py` / `compute_team_leakage.py` → `derived/`);
+`src/queries.js` is the thin seam that reads them and the lighter construction/consistency
+shaping it still computes inline (depth, star dependence, lineup/hole signals, all-play,
+spectrums). Panels stay pure renderers. Three classes of portability to keep straight:
 
 **Data-driven, portable (self-correcting — needs no code change):** scoring (baked into
 `sleeper_points` upstream), team count, week count, and lineup-slot config all come from
 the parquets (`season`, `teams`, `lineup_slots`), not code. Week-windowed reads (EWMA
 form, leakage) derive `n` dynamically and widen as weeks append; a new standard Sleeper
-league means new parquets, not new logic.
+league means new parquets + a transform re-run, not new logic.
 
 **Latent assumptions (won't self-correct — silent wrong output, not an error):**
-- **Standard lineup shape.** `computeLeakage`'s swap-class split (`QB` vs `FLEX`=RB/WR/TE)
-  assumes QB-dedicated + standard flex; **superflex/2QB or TE-premium leagues mis-pair
-  misses.** The optimal-lineup/efficiency calc (`expandSlots`) is general; only the
-  leakage miss-attribution carries this.
-- **`MY_USERNAME` identity hardcode** resolves "your team" — replace by baking an `is_me`
-  flag into the teams parquet at fetch time.
+- **Standard lineup shape.** `compute_team_leakage.py`'s swap-class split (`QB` vs
+  `FLEX`=RB/WR/TE) assumes QB-dedicated + standard flex; **superflex/2QB or TE-premium
+  leagues mis-pair misses.** The optimal-lineup/efficiency calc (`_expand_slots`) is
+  general; only the leakage miss-attribution carries this. (Moved with the analytics —
+  this assumption now lives in the Python transform, not the JS seam.)
+- **`MY_USERNAME` identity hardcode** (still in `queries.js`) resolves "your team" —
+  replace by baking an `is_me` flag into the teams parquet at fetch time.
 - **Single-season file addressing in `db.js`** — multi-season/league requires
-  parameterizing the registered parquet names (this is the one place to change it).
+  parameterizing the registered parquet names, now including the two `derived/` parquets
+  (this is the one place to change it).
 
-**Tuning constants → future config seed:** `MIN_GAMES`, EWMA half-life, the ±4%/wk form
-band, the 10%/15% signal thresholds are league-agnostic **magic numbers** centralized in
-`queries.js`. Candidates to become league/user-configurable one day — but document the
-seam, don't build the config now (premature flexibility is its own debt). Keeping them as
-named constants in one place is the prep; lift to a config object when a real second
-consumer appears.
+**Tuning constants → future config seed:** league-agnostic **magic numbers** kept as named
+constants near the logic that uses them. The form/leakage constants moved into their
+transforms (`HALF_LIFE_WK`, `DIRECTION_BAND` in `compute_team_form.py`; `MIN_GAMES`,
+`COACHABLE_RATE_MARGIN`, `HABITUAL_STARTER_THRESHOLD` in `compute_team_leakage.py`);
+`queries.js` still holds its own `MIN_GAMES` and the 10%/15% construction-signal thresholds
+for the inline depth/signals read. Candidates to become league/user-configurable one day —
+document the seam, don't build the config now (premature flexibility is its own debt). Lift
+to a config object when a real second consumer appears. (Note: `MIN_GAMES` is now defined in
+two places for two independent consumers — fold into shared config when that config exists.)
 
 ---
 
@@ -120,7 +128,7 @@ fantasy-ai/
 └── application/
     ├── frontend/                   # production front-end — React + Vite + DuckDB-WASM (Node)
     │   ├── src/                     #   App.jsx (tab shell), LeaguePanel/TeamPanel.jsx (views), queries.js (data-access layer), db.js (DuckDB-WASM loader)
-    │   └── public/data/             #   symlinks → season_2025 + teams_2025 + lineup_slots_2025 parquet (gitignored)
+    │   └── public/data/             #   symlinks → season_2025 + teams_2025 + lineup_slots_2025 + team_form_2025 + team_leakage_2025 parquet (gitignored)
     ├── data/
         ├── data_layer.py           # ✅ built — centralized read/write module
     │   ├── fetchers/               # one Python script per source (tracked in git)
@@ -135,6 +143,9 @@ fantasy-ai/
     │   │   └── sleeper/
     │   │       └── players.parquet    # Sleeper /players/nfl registry, refreshed ≤ once/day
     │   └── snapshots/              # time-series parquet (gitignored)
+            ├── derived/                                 # pre-computed analytics (compute_team_*.py output)
+            │   ├── team_form_2025.parquet               # per-team trajectory: slope, direction, spectrum, weekly series
+            │   └── team_leakage_2025.parquet            # per-team leakage: efficiency %, coachable/variance, named fixes
             ├── leaguelogs/
             │   └── market_values.parquet            # daily market-value history, all profiles
             └── nfl_sleeper_weekly_joined/
@@ -153,7 +164,9 @@ fantasy-ai/
     ├── transforms/ # one Python script per join/transform
         ├── join_nfl_sleeper_weekly.py # ✅ built
         ├── audit_join.py              # ✅ built — resolves unknown-position remainders
-        └── derive_lineup_slots.py     # ✅ built — roster_positions → lineup_slots (starting skill slots)
+        ├── derive_lineup_slots.py     # ✅ built — roster_positions → lineup_slots (starting skill slots)
+        ├── compute_team_form.py       # ✅ built — EWMA trajectory analytics → derived/team_form
+        └── compute_team_leakage.py    # ✅ built — lineup-leakage analytics → derived/team_leakage
     ├── config.example.py
     └── requirements.txt
 ```
@@ -207,6 +220,8 @@ non-negotiable architectural rule.
 - internal
 | nfl_sleeper_weekly_joined transform | snapshots/nfl_sleeper_weekly_joined/ | Joined output — one file per season (season_{season}.parquet), each week appended with a (season, week) dedup guard
 | derive_lineup_slots transform | snapshots/sleeper/{season}/ | lineup_slots_{season}.parquet — starting skill-slot requirements (slot, count, eligible) derived from the league's raw roster_positions; declares the QB/RB/WR/TE + FLEX config so the front-end "perfect lineup" / efficiency calc is exact, not inferred |
+| compute_team_form transform | snapshots/derived/ | team_form_{season}.parquet — one row per roster_id: EWMA scoring slope, direction, recent record, league-relative spectrum pos, per-week series. Pre-computed so the front-end seam just reads it (no JS trajectory math) |
+| compute_team_leakage transform | snapshots/derived/ | team_leakage_{season}.parquet — one row per roster_id: lineup efficiency %, season points-left, coachable/variance split, named fixes, per-week leak, spectrum pos. Pre-computed; feeds both the Team Overview leakage lens and the League drawer's efficiency read |
 
 These assignments reflect current v1 decisions, not permanent rules. Future versions may snapshot additional sources (e.g., odds history for post-hoc analysis).
 
@@ -283,6 +298,8 @@ via data_layer.py, performs a single join, and writes via data_layer.py.
 - `join_nfl_sleeper_weekly.py` — joins nflreadpy weekly stats + Sleeper matchup data on sleeperPlayerId. Sleeper is the authoritative left table — all rostered skill-position players appear in the output regardless of whether nflreadpy has stats for them that week. DSTs are stripped at parse time; kickers are removed by the SKILL_POSITIONS filter after the join. Inactive/injured players appear with 0-stat rows. Appends the week's rows to the single season_{season}.parquet (replacing any existing rows for that (season, week) combo) and writes a remainders file. Calls audit_join automatically on completion. Accepts --season and --week as required CLI args.
 
 - `audit_join.py` — audits and repairs the weekly join output for unresolved players. Reads the remainders file, checks the Sleeper player registry (refreshing it if stale), classifies each remainder as skill (appended to joined file with 0 stats), K/DEF (confirmed and discarded), or truly unknown (left in remainders for manual review). Idempotent — safe to re-run. Called automatically by join_nfl_sleeper_weekly.py; can also be run standalone with --season and --week args.
+
+- `compute_team_form.py` / `compute_team_leakage.py` — **derived-analytics transforms.** They read the season join (+ lineup_slots for leakage) and write one pre-computed row per roster_id to `snapshots/derived/`. These promote the heaviest Team Overview math out of the front-end seam (`queries.js`): the EWMA trajectory read and the optimal-lineup / leakage read, respectively, plus the tuning constants and signal thresholds they own (`HALF_LIFE_WK`/`DIRECTION_BAND`; `MIN_GAMES`/`COACHABLE_RATE_MARGIN`/`HABITUAL_STARTER_THRESHOLD`). Rationale: a Python server is the eventual architecture, so the analytics live in Python now — the front end reads pre-shaped parquet, and the server migration becomes "transform → API serves same parquet" rather than "rewrite JS math in Python." Re-run with `--season` after a join refresh. Faithful ports of the prior JS; output reconciles exactly. Accept `--season` as a required CLI arg.
 
 ## Technical Principles
 
