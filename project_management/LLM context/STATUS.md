@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-06-07 (Team Overview — roster construction)
+**Last updated:** 2026-06-07 (Team Overview — all 4 lenses complete)
 **Target ship:** NFL kickoff, mid August 2026
 
 ---
@@ -34,6 +34,54 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**Team Overview — Lens 4 (Where you leave points).** Completes the Overview's 4
+lenses. New section turning the League drawer's single "% / pts on bench" number
+into an *actionable* manager-skill read. Leads with the season cost (**points left
+on the bench** + **lineup efficiency %**, on a league-relative **Leaky↔Optimal**
+spectrum — Tet Lasso's 86% *looks* fine but ranks 7th of 10 in raw points left, which
+the spectrum exposes), then a **per-week leak chart** (amber columns = points left
+each week; a short one = a week you nailed the lineup) and the **biggest specific
+misses** (e.g. "W2 started Travis Hunter 5.2 over Rome Odunze 31.8 at WR, −26.6").
+Misses are paired within **swap-eligibility classes** (a QB can only displace a QB;
+RB/WR/TE are interchangeable via FLEX, labeled FLEX when cross-position) so every
+call shown is a *legal* start/sit — the naïve best-gem↔worst-dud pairing produced
+nonsense like starting a QB "over" an RB. Pairing stays sum-exact (totals optimal −
+actual). "All set" path exists but no team is clean over 4 weeks (lowest leak ~54 pts).
+
+Per the seam decision, the greedy optimal-lineup calc was **extracted to shared
+helpers** (`optimalLineup()` returning total + chosen picks, and `expandSlots()`) that
+both `loadTeamDetails()` (League drawer) and `loadTeamRosters()` (Team Overview) call —
+no duplicated calc, seams stay separate. New shaping: `computeLeakage()` in the Team
+seam; `SQL_PLAYER_WEEK` now carries the player name. Verified live across the spread
+(Cousin 'Chilling 127 left/75%/Leaky end; Bourne Again 54/87%/Optimal end; Tet Lasso
+82.1/86%) — every points-left total, efficiency %, per-week leak, and named miss
+reconciles exactly with a polars prototype. **All 4 Overview lenses now shipped.**
+
+> earlier build
+**Team Overview — Lens 3 (Form / trajectory).** New **Form** section under the
+construction block. Reframes weekly scoring from *variance* (the League drawer's
+read) to *direction*: is the team trending up or fading? **Honest with the 4-week
+freeze** — STATUS's planned "last-3 vs first-3" would overlap windows, so the split
+is **last-half vs first-half** (at 4 weeks: last-2 vs first-2, non-overlapping; the
+middle week drops when odd; widens automatically as V1.5 appends weeks). Three
+pieces: a **direction headline** (Heating up / Cooling off / Holding steady — the
+"steady" threshold is ±6% of the team's *own* avg so a wobble isn't called a surge)
+with the recent-half scoring swing (`±pts/wk`) and recent record; a **league-relative
+Fading↔Surging spectrum** (marker by the swing vs the league's actual spread); and a
+**weekly column chart** — the 4 scores, green = beat the league median that week /
+grey = below, recent window shaded so the comparison the delta describes is visible.
+The read deliberately separates *direction* from *results*: e.g. Saquarles is steady
+on scoring but 0–2 (unlucky), which the copy surfaces rather than hides.
+
+New shaping in queries.js `loadTeamRosters()` only (no new fetcher, no new seam):
+`SQL_TEAM_TRAJECTORY` per-week team points + `computeForm()` + `median()`/`mean()`
+helpers; the existing `attachSpectrumPos()` places the Fading↔Surging marker. Verified
+live across all three states (Team SCOOP surging +46.7/2–0; Saquarles steady/0–2; Tet
+Lasso fading −14.1) — every delta, direction, record, and spectrum position reconciles
+with a polars prototype. This is **3 of the 4 planned Overview lenses** (construction +
+reliance + form); only **Lens 4 (where you leave points)** remains.
+
+> earlier build
 **Team Overview** sub-view filled in (was a stub). This gives the Team tab its own
 identity vs. the League drawer: the League tab is **comparative** ("how do I stack
 up?", starters only); the Team tab is **constructive** ("how is THIS team built?")
@@ -65,40 +113,6 @@ across teams; metrics reconcile with a polars prototype (Naber top-1 23%/star-le
 Gainwell lineup signal; Tet Lasso all-set). This covers **2 of the 4 planned Overview
 lenses** (roster construction + reliance) plus the signals layer — remaining 2 below.
 
-> earlier build
-Tab navigation + the **Team tab** foundation. Introduced the app's first nav layer:
-`App.jsx` is now a thin shell owning top-level tab state (**League | Team**); the
-Power Rankings content moved into `LeaguePanel.jsx` (owns its own data load). The
-former single panel is the **League** tab (Power Rankings today; manager dossiers +
-other league overviews to follow). New **Team** tab is a single-team drill-down:
-opens on the logged-in user's roster, flips to any team via a switcher, and toggles
-two inner sub-tabs — **Overview** (team strengths/weak spots, to be deepened from the
-League drawer metrics) and **Players** (per-player real-world metrics + interpretive
-viz). Both sub-views are scaffolded/stubbed — content lands in later sessions. New
-seam: queries.js `loadTeams()` + `MY_USERNAME` constant (mirrors
-config.SLEEPER_USERNAME, matched against teams_2025.parquet `owner_name` to resolve
-"your" roster). Identity seam to formalize later: bake an `is_me` flag into the teams
-parquet at fetch time so the constant can go away. Verified live (Team tab opens on
-"Tet Lasso"/roster 8, switcher + sub-tab toggles work, no console errors).
-
-> earlier build
-Power Rankings team drill-down — click a card to open a side drawer that decomposes a
-team's record into its three real drivers: roster quality (all-play "true record" — W/L
-as if each team played all others every week, luck-stripped, with a Lucky/Earned/Unlucky
-tag), manager skill (lineup efficiency vs. the optimal lineup achievable from the roster
-= points left on the bench), and luck (the gap between them). Plus a weekly-scoring chart
-(bars tinted by beat/below league median, mean line) and two qualitative spectrums:
-Consistent↔Volatile (CV of weekly scores) and Balanced↔Hero-led (concentration of
-per-position vs-league output), with per-position vs-league bars. Markers are league-
-relative. All five metrics aggregate over `week` with no hardcoded count, so they sharpen
-automatically as V1.5 appends weeks. Built in 3 passes: (1) roster_positions fetcher +
-derive_lineup_slots transform → declared QB1/RB2/WR2/TE1/FLEX2 config (replaces inference,
-makes the optimal-lineup calc exact); (2) all-play + efficiency + weekly scoring in the
-drawer; (3) the two spectrums. Verified live — every metric reconciles with a polars
-prototype (e.g. Bski: all-play 31–5/Earned, 88% eff; DebTheDeb: 19–17/Lucky, balanced).
-New seam: queries.js `loadTeamDetails()`; lineup_slots_2025.parquet symlinked into
-public/data and registered in db.js.
-
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
@@ -112,6 +126,8 @@ public/data and registered in db.js.
     - tab nav shell (League | Team) — App.jsx shell + LeaguePanel/TeamPanel split
     - Team tab foundation — your-team resolver (loadTeams + MY_USERNAME), team switcher, Overview/Players sub-tabs (stubbed)
     - Team Overview sub-view — vitals + "how this team is built": rate-based depth chart, league-relative star dependence, auto-surfaced lineup/hole signals; loadTeamRosters(), shared posColors.js [Overview lenses 1–2 of 4]
+    - Team Overview — Form / trajectory lens: direction headline (heating up/cooling off/steady), league-relative Fading↔Surging spectrum, weekly column chart (beat/below median); last-half vs first-half scoring swing in loadTeamRosters() [Overview lens 3 of 4]
+    - Team Overview — Where-you-leave-points lens: season points-left + efficiency % on a league-relative Leaky↔Optimal spectrum, per-week leak chart, biggest specific start/sit misses (eligibility-aware pairing); shared optimalLineup()/expandSlots() helpers + computeLeakage() [Overview lens 4 of 4 — Overview complete]
 
 > not yet built
     >> backend
@@ -144,31 +160,49 @@ carry the "Powered by LeagueLogs API" attribution.
 
 ## Next single highest-leverage move
 
-The Team Overview now has **lenses 1–2** (roster construction/depth + star dependence)
-plus an **auto-surfaced signals** layer (lineup calls + roster holes) and the vitals
-strip. The design splits "how is this team built / how is it managed" into **4 lenses**;
-two shipped this session. Next sessions, in order:
+The Team Overview is **complete — all 4 lenses shipped**: roster construction/depth,
+star dependence, form/trajectory, and where-you-leave-points, plus the auto-surfaced
+signals layer (lineup calls + roster holes) and the vitals strip. The whole "how is
+this team built / how is it managed" view is done. Next:
 
-**Finish the Team Overview — the remaining 2 lenses** (deferred deliberately this
-session; each its own slice, no new fetcher needed):
-- **Lens 3 — Form / trajectory.** Reframe weekly scoring from *variance* (what the
-  League drawer shows) to *direction*: is the team trending up or fading? Rolling form,
-  last-3 vs. first-3. Same `season.parquet` per-week data; new shaping in queries.js.
-- **Lens 4 — Where you leave points.** Decompose lineup inefficiency (the drawer's one
-  "% / pts on bench" number) into an *actionable* read: which weeks, which slots are
-  costing points. Builds on the optimal-lineup calc already in `loadTeamDetails()`.
-
-  (Lens 1 = roster construction/depth and lens 2 = star dependence both shipped this
-  session, plus the lineup/hole signals layer. The two above are what's left for the
-  Overview.)
-
-**Then the Players sub-view** (still a stub) — per-player real-world metrics from
+**The Players sub-view** (still a stub) — per-player real-world metrics from
 season_2025.parquet (127 cols: passing/rushing/receiving yards, TDs, targets,
 target_share, air_yards_share, wopr, EPA…) with visualizations that make the stats
 *interpretable*, not a raw table. Needs a new queries.js function (e.g.
 `loadTeamPlayers(rosterId)`). Bigger net-new lift (new query + viz design).
 
 All Team-tab work should respect the team switcher already wired in.
+
+## Refinement backlog — Team Overview (deferred, not blocking)
+
+These refine shipped lenses; pick up alongside or after the Players sub-view.
+
+1. **Reframe Lens 4 (where you leave points) from retrospective → improvement.** Lead
+   with process-soundness (lineup efficiency, league-relative). Split season points-left
+   into **coachable** (a benched player whose *season rate* beats the starter — reuse the
+   Lens-1 lineup-signal logic; a repeatable "start X over Y going forward" tendency) vs
+   **variance** (a one-off bench spike, not the manager's fault). Demote the raw
+   points-left total to supporting evidence. **Direction only — no predictive/weekly
+   start-sit calls** (those depend on projections, V3). Framing target, per the project
+   mission ("fewer decisions driven by anxiety or noise"): *"your process is sound; ~N of
+   the points left were unpredictable variance; here's the one repeatable fix."*
+
+2. **Switch the Form lens to an EWMA.** Replace the last-half-vs-first-half scoring split
+   with an exponentially-weighted moving average (half-life ~2 weeks) for the trend read.
+   Works from 2 weeks of data, uses all weeks, no window discontinuity.
+
+3. **Per-panel readiness gate (build the seam now; flip panels on later).** Give every
+   panel a self-declared **readiness check** that decides whether it has enough data to
+   turn on, else renders a **"too early"** state. Regimes: **structural** (ready at roster
+   lock), **point-in-time** (ready week 1, confidence grows with weeks), **trend** (ready
+   ~week 3–4). We are frozen at week 4, so all panels currently turn on — the point is to
+   build the gate + a designated fallback slot now so trend panels can degrade cleanly and
+   **preseason/qualitative content can drop into the "too early" slot later with no rework.**
+   Do **not** use backward-looking prior-season carryover as a prior (biased by age/injury/
+   scheme/surrounding-talent changes). Early-season value is a forward-looking problem —
+   current-year projections/ADP/odds (FantasyPros V3, The Odds unbuilt) or AI (V5);
+   preseason content is undesigned, deferred. Cross-cutting: compute early, but calibrate
+   the language to the sample size.
 
 ## The step after (unconfirmed, subject to change)
 
