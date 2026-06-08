@@ -202,3 +202,52 @@ def write_leaguelogs_market_snapshot(df: pl.DataFrame, snapshot_date) -> None:
         existing = pl.read_parquet(path).filter(pl.col("snapshot_date") != snapshot_date)
         df = pl.concat([existing, df])
     df.write_parquet(path)
+
+
+# --- Derived Analytics ---
+# Pre-computed Team Overview analytics, promoted out of the front-end seam
+# (queries.js) into polars transforms. Each is a single overwrite file per season
+# (the analytics are a deterministic function of a frozen season's join output), so
+# these mirror the lineup-slots pattern: one row per roster_id, derived columns the
+# front end reads directly. When a server arrives, these become API endpoints that
+# serve the same parquet — no JS math to port.
+
+def _team_form_path(season: int) -> Path:
+    return _SNAPSHOT_DIR / "derived" / f"team_form_{season}.parquet"
+
+
+def write_team_form(df: pl.DataFrame, season: int) -> None:
+    """Write the per-team trajectory (form) analytics for a season (overwrite).
+
+    Output of transforms/compute_team_form.py: one row per roster_id carrying the
+    recency-weighted scoring slope, direction read, recent record, league-relative
+    spectrum position, and the per-week series (serialised JSON).
+    """
+    path = _team_form_path(season)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
+
+def read_team_form(season: int) -> pl.DataFrame:
+    return pl.read_parquet(_team_form_path(season))
+
+
+def _team_leakage_path(season: int) -> Path:
+    return _SNAPSHOT_DIR / "derived" / f"team_leakage_{season}.parquet"
+
+
+def write_team_leakage(df: pl.DataFrame, season: int) -> None:
+    """Write the per-team lineup-leakage analytics for a season (overwrite).
+
+    Output of transforms/compute_team_leakage.py: one row per roster_id carrying
+    lineup efficiency %, season points left, the coachable-vs-variance split,
+    league-relative spectrum position, and the per-week leak + named fixes
+    (serialised JSON).
+    """
+    path = _team_leakage_path(season)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
+
+def read_team_leakage(season: int) -> pl.DataFrame:
+    return pl.read_parquet(_team_leakage_path(season))
