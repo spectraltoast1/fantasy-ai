@@ -173,6 +173,37 @@ target_share, air_yards_share, wopr, EPA…) with visualizations that make the s
 
 All Team-tab work should respect the team switcher already wired in.
 
+## Refinement backlog — Team Overview (deferred, not blocking)
+
+These refine shipped lenses; pick up alongside or after the Players sub-view.
+
+1. **Reframe Lens 4 (where you leave points) from retrospective → improvement.** Lead
+   with process-soundness (lineup efficiency, league-relative). Split season points-left
+   into **coachable** (a benched player whose *season rate* beats the starter — reuse the
+   Lens-1 lineup-signal logic; a repeatable "start X over Y going forward" tendency) vs
+   **variance** (a one-off bench spike, not the manager's fault). Demote the raw
+   points-left total to supporting evidence. **Direction only — no predictive/weekly
+   start-sit calls** (those depend on projections, V3). Framing target, per the project
+   mission ("fewer decisions driven by anxiety or noise"): *"your process is sound; ~N of
+   the points left were unpredictable variance; here's the one repeatable fix."*
+
+2. **Switch the Form lens to an EWMA.** Replace the last-half-vs-first-half scoring split
+   with an exponentially-weighted moving average (half-life ~2 weeks) for the trend read.
+   Works from 2 weeks of data, uses all weeks, no window discontinuity.
+
+3. **Per-panel readiness gate (build the seam now; flip panels on later).** Give every
+   panel a self-declared **readiness check** that decides whether it has enough data to
+   turn on, else renders a **"too early"** state. Regimes: **structural** (ready at roster
+   lock), **point-in-time** (ready week 1, confidence grows with weeks), **trend** (ready
+   ~week 3–4). We are frozen at week 4, so all panels currently turn on — the point is to
+   build the gate + a designated fallback slot now so trend panels can degrade cleanly and
+   **preseason/qualitative content can drop into the "too early" slot later with no rework.**
+   Do **not** use backward-looking prior-season carryover as a prior (biased by age/injury/
+   scheme/surrounding-talent changes). Early-season value is a forward-looking problem —
+   current-year projections/ADP/odds (FantasyPros V3, The Odds unbuilt) or AI (V5);
+   preseason content is undesigned, deferred. Cross-cutting: compute early, but calibrate
+   the language to the sample size.
+
 ## The step after (unconfirmed, subject to change)
 
 Continue down the V1 Dashboard Build Order (standings with trajectory; manager dossiers;
