@@ -76,6 +76,36 @@ scope tagging only; the canonical list lives in STATUS.)
 
 ---
 
+## Front-end shaping — portability & latent assumptions
+
+All dashboard trend/shaping logic lives in **`src/queries.js`** (the seam); panels are
+pure renderers. Three classes of portability to keep straight:
+
+**Data-driven, portable (self-correcting — needs no code change):** scoring (baked into
+`sleeper_points` upstream), team count, week count, and lineup-slot config all come from
+the parquets (`season`, `teams`, `lineup_slots`), not code. Week-windowed reads (EWMA
+form, leakage) derive `n` dynamically and widen as weeks append; a new standard Sleeper
+league means new parquets, not new logic.
+
+**Latent assumptions (won't self-correct — silent wrong output, not an error):**
+- **Standard lineup shape.** `computeLeakage`'s swap-class split (`QB` vs `FLEX`=RB/WR/TE)
+  assumes QB-dedicated + standard flex; **superflex/2QB or TE-premium leagues mis-pair
+  misses.** The optimal-lineup/efficiency calc (`expandSlots`) is general; only the
+  leakage miss-attribution carries this.
+- **`MY_USERNAME` identity hardcode** resolves "your team" — replace by baking an `is_me`
+  flag into the teams parquet at fetch time.
+- **Single-season file addressing in `db.js`** — multi-season/league requires
+  parameterizing the registered parquet names (this is the one place to change it).
+
+**Tuning constants → future config seed:** `MIN_GAMES`, EWMA half-life, the ±4%/wk form
+band, the 10%/15% signal thresholds are league-agnostic **magic numbers** centralized in
+`queries.js`. Candidates to become league/user-configurable one day — but document the
+seam, don't build the config now (premature flexibility is its own debt). Keeping them as
+named constants in one place is the prep; lift to a config object when a real second
+consumer appears.
+
+---
+
 ## Folder Structure
 
 ```
