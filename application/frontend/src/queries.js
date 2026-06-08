@@ -379,9 +379,10 @@ const MIN_GAMES = 2;
  *   - signals: lineup calls (a benched player out-rating a starter — fixable in
  *     house) and roster holes (a position whose best option trails the league —
  *     needs an outside upgrade)
- *   - form: recent trajectory — last-half vs first-half scoring swing (`delta`),
- *     a direction read (rising/fading/steady), the recent-half record, the weekly
- *     series (with beat-median flags), and a league-relative Fading↔Surging marker
+ *   - form: recent trajectory — a recency-weighted (half-life 2wk) points/week
+ *     `slope`, a direction read (rising/fading/steady), the last-two record, the
+ *     weekly series (with beat-median flags + per-week weight), and a league-
+ *     relative Fading↔Surging marker
  *   - leakage: lineup inefficiency made actionable — season points left on the
  *     bench, efficiency % (league-relative Leaky↔Optimal marker), per-week points
  *     left, and the biggest specific misses (started X over a higher-scoring bench Y)
@@ -548,7 +549,7 @@ export async function loadTeamRosters() {
   // spread rather than a fixed threshold: star dependence (balanced ↔ star-led),
   // form trajectory (fading ↔ surging), and lineup efficiency (leaky ↔ optimal).
   attachSpectrumPos(rosters, (d) => d.reliance.top1, (d, t) => (d.reliance.pos = t));
-  attachSpectrumPos(rosters, (d) => d.form.delta, (d, t) => (d.form.pos = t));
+  attachSpectrumPos(rosters, (d) => d.form.slope, (d, t) => (d.form.pos = t));
   attachSpectrumPos(rosters, (d) => d.leakage.pct, (d, t) => (d.leakage.pos = t));
 
   return rosters;
@@ -594,40 +595,64 @@ function median(xs) {
   return m % 2 ? s[(m - 1) / 2] : (s[m / 2 - 1] + s[m / 2]) / 2;
 }
 
-// Recent trajectory from a team's weekly score series. Splits the season into a
-// first half and a last half (non-overlapping; the middle week is dropped when
-// the count is odd) and reads the swing between them — direction, not variance.
-// At 4 weeks this is last-2 vs first-2; it widens automatically as weeks append.
-// `delta` is the points/week change (recent − early); the direction label uses a
-// threshold relative to the team's own scoring so a small wobble stays "steady".
+// Recency-weighted trajectory from a team's weekly score series. Rather than
+// splitting the season into two windows (which discards the middle week and jumps
+// discontinuously each time a new week lands), this fits an exponentially-weighted
+// linear trend: every week's weight halves every HALF_LIFE_WK weeks back from the
+// most recent, so the read is smooth, uses every game, and works from two weeks on.
+// `slope` is that recency-weighted points/week trend (positive = heating up); the
+// direction label thresholds it against the team's own scoring so a small wobble
+// stays "steady". Each week carries its `weight` so the chart can show the decay.
+const HALF_LIFE_WK = 2;
+
 function computeForm(series, medianByWeek) {
   const weeks = series
     .slice()
     .sort((a, b) => a.week - b.week)
-    .map((w) => ({ ...w, beatMedian: w.pts > (medianByWeek[w.week] ?? 0) }));
+    .map((w) => ({ ...w, beatMedian: w.pts > (medianByWeek[w.week] ?? 0), weight: 1 }));
   const n = weeks.length;
   const pts = weeks.map((w) => w.pts);
   const weekMax = pts.length ? Math.max(...pts) : 0;
 
   if (n < 2) {
-    return { delta: 0, direction: 'steady', recent: { w: 0, l: 0 }, weeks, weekMax };
+    return { slope: 0, direction: 'steady', recent: { w: 0, l: 0 }, weeks, weekMax };
   }
-  const half = Math.floor(n / 2);
-  const early = pts.slice(0, half);
-  const recent = pts.slice(n - half);
-  const delta = mean(recent) - mean(early);
 
+  // Exponential weights: most recent week = 1, halving every HALF_LIFE_WK weeks.
+  const decay = Math.pow(0.5, 1 / HALF_LIFE_WK);
+  const wts = weeks.map((_, i) => Math.pow(decay, n - 1 - i));
+  weeks.forEach((w, i) => (w.weight = wts[i]));
+
+  // Weighted least-squares slope of points vs. week index (x = 0..n-1) — pts/week.
+  const W = wts.reduce((s, x) => s + x, 0);
+  const mx = wts.reduce((s, x, i) => s + x * i, 0) / W;
+  const my = wts.reduce((s, x, i) => s + x * pts[i], 0) / W;
+  let num = 0;
+  let den = 0;
+  for (let i = 0; i < n; i++) {
+    num += wts[i] * (i - mx) * (pts[i] - my);
+    den += wts[i] * (i - mx) ** 2;
+  }
+  const slope = den ? num / den : 0;
+
+  // Direction: slope as a fraction of the team's own average scoring, so the
+  // "steady" band scales to how much this team puts up. The ±4%/wk band is tuned
+  // to the per-week slope scale (≈ a 12% swing across a 4-week window) — it catches
+  // a genuine monotonic climb or slide while leaving erratic week-to-week noise
+  // (a one-week spike or dip that doesn't establish a direction) reading steady.
   const avg = mean(pts);
-  const rel = avg ? delta / avg : 0;
-  const direction = rel > 0.06 ? 'rising' : rel < -0.06 ? 'fading' : 'steady';
+  const rel = avg ? slope / avg : 0;
+  const direction = rel > 0.04 ? 'rising' : rel < -0.04 ? 'fading' : 'steady';
 
-  const recentWeeks = weeks.slice(n - half);
+  // Recent record: the last two weeks — a results counterpoint to the scoring trend.
+  const recentCount = Math.min(2, n);
+  const recentWeeks = weeks.slice(n - recentCount);
   const rec = {
     w: recentWeeks.filter((w) => w.result === 'W').length,
     l: recentWeeks.filter((w) => w.result === 'L').length,
   };
 
-  return { delta: round1(delta), direction, recent: rec, recentCount: half, weeks, weekMax };
+  return { slope: round1(slope), direction, recent: rec, weeks, weekMax };
 }
 
 // Lineup leakage: where a team left points on the bench, made actionable. For

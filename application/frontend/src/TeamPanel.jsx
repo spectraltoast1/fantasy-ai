@@ -135,11 +135,11 @@ function Overview({ vitals, roster }) {
   );
 }
 
-// Form / trajectory: where the team is heading, not how much it bounces. Reads
-// the swing between the season's first half and its last half (at 4 weeks,
-// last-2 vs first-2) and places it on a league-relative Fading↔Surging spectrum,
-// then shows the weekly scores so the shape is legible. Distinct from the League
-// drawer's variance read — this is about direction.
+// Form / trajectory: where the team is heading, not how much it bounces. Reads a
+// recency-weighted trend slope (half-life ~2wk) over the weekly scores — smooth,
+// gap-free, every game counted — and places it on a league-relative Fading↔Surging
+// spectrum, then shows the weekly scores (recent weeks bolder) so the shape is
+// legible. Distinct from the League drawer's variance read — this is about direction.
 const DIRECTION = {
   rising: { word: 'Heating up', cls: 'up' },
   fading: { word: 'Cooling off', cls: 'down' },
@@ -151,13 +151,12 @@ function Form({ form }) {
     return <div className="subview-stub">Not enough games yet to read a trend.</div>;
   }
   const dir = DIRECTION[form.direction];
-  const span = form.recentCount === 1 ? 'week' : `${form.recentCount} weeks`;
-  const sign = form.delta > 0 ? '+' : '';
+  const sign = form.slope > 0 ? '+' : '';
   const detail =
     form.direction === 'steady'
-      ? 'scoring is flat across the season so far'
-      : `${sign}${form.delta.toFixed(1)} pts/wk over the last ${span} vs. the first ${span}`;
-  const rec = `${form.recent.w}–${form.recent.l} recently`;
+      ? 'scoring has held roughly level across the season'
+      : `trending ${sign}${form.slope.toFixed(1)} pts/wk, recent weeks weighted most`;
+  const rec = `${form.recent.w}–${form.recent.l} last two`;
 
   return (
     <div className="to-form">
@@ -179,12 +178,12 @@ function Form({ form }) {
         </div>
       </div>
 
-      <WeeklyTrend weeks={form.weeks} weekMax={form.weekMax} recentCount={form.recentCount} />
+      <WeeklyTrend weeks={form.weeks} weekMax={form.weekMax} />
 
       <div className="to-foot">
         Columns are weekly points; green beat the league median that week, grey
-        fell below it. The shaded weeks on the right are the recent window the
-        trend compares against the earlier ones.
+        fell below it. More recent weeks are drawn bolder — they carry more weight
+        in the trend, which fades older games rather than cutting them off.
       </div>
     </div>
   );
@@ -282,22 +281,21 @@ function WeeklyLeak({ byWeek, leakMax }) {
 const round1 = (n) => Math.round(n * 10) / 10;
 
 // Weekly scores as a small column chart — the "show the work" behind the trend.
-// Bars scale within the team; a tick marks the league median that week. The most
-// recent half is shaded so the comparison the delta describes is visible.
-function WeeklyTrend({ weeks, weekMax, recentCount }) {
-  const n = weeks.length;
-  const recentFrom = n - recentCount;
+// Bars scale within the team; green = beat the league median that week. Each bar's
+// opacity tracks its recency weight (most recent solid, older faded), making the
+// trend's recency-weighting legible rather than implying a hard cutoff.
+function WeeklyTrend({ weeks, weekMax }) {
   return (
     <div className="to-trend">
-      {weeks.map((w, i) => {
+      {weeks.map((w) => {
         const h = weekMax ? Math.max(4, (w.pts / weekMax) * 100) : 0;
         return (
-          <div className={`to-trend-col ${i >= recentFrom ? 'recent' : ''}`} key={w.week}>
+          <div className="to-trend-col" key={w.week}>
             <span className="to-trend-pts">{Math.round(w.pts)}</span>
             <div className="to-trend-bar-wrap">
               <div
                 className={`to-trend-bar ${w.beatMedian ? 'beat' : 'below'}`}
-                style={{ height: `${h}%` }}
+                style={{ height: `${h}%`, opacity: 0.4 + 0.6 * (w.weight ?? 1) }}
               />
             </div>
             <span className={`to-trend-wk ${w.result === 'W' ? 'win' : 'loss'}`}>
