@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-06-07 (Team Overview — all 4 lenses complete)
+**Last updated:** 2026-06-07 (Team Overview refinements — EWMA Form + Lens-4 reframe)
 **Target ship:** NFL kickoff, mid August 2026
 
 ---
@@ -34,6 +34,33 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**Team Overview refinements — Form → EWMA slope + Lens-4 reframe.** Two
+refinement-backlog items shipped (backlog item 3 remains). **Form** now reads a
+recency-weighted linear trend (half-life 2wk) instead of the last-half-vs-first-half
+split: a pts/wk `slope` that uses every game, is gap-free, and works from two weeks
+on — no window discontinuity as weeks append. The direction band was recalibrated to
+**±4%/wk** to fit the per-week scale (a slope is ~half a half-vs-half delta), so it
+catches Deb's 150→124 monotonic slide as *Cooling off* while erratic teams (Cousin,
+Saquarles, Bourne, Tet) read *steady*; weekly bars now fade by recency weight so the
+decay is legible rather than implying a hard cutoff. **Lens 4 ("where you leave
+points")** was recast from a regret ledger into a process read: leads with lineup
+efficiency (league-relative Leaky↔Optimal), then splits season points-left into
+**variance** (one-week bench spikes / one-off wrong calls — the reassurance bucket,
+usually most of it) vs **coachable** (a repeatable habitual-bench-over-habitual-starter
+hierarchy error, >10% season-rate edge, still rostered — the Lens-1 signal structure).
+Raw points-left is demoted to supporting evidence; the retrospective named-miss list
+("W2 started X over Y") is gone, replaced by the one repeatable **fix** framed by its
+season rate gap (+N/g), not a noisy one-week realized cost. Robustness: coachable
+counts a swap only when its realized weekly gain is positive, so the bucket stays
+non-negative and no fix ever shows a negative cost; the two buckets stay **sum-exact**
+to the season total. New shaping in queries.js only: `computeForm()` rewritten (slope
++ per-week weight); `computeLeakage()` now takes a per-team season role+rate map and
+returns coachable/variance + named fixes. Verified live across all 10 teams —
+variance+coachable reconciles to each season total (Cousin 127, Tet 82.1, Deb 95.4),
+all-variance teams (Tet Lasso, Bourne) show the clean reassurance path, Form direction
+labels span all three states correctly.
+
+> earlier build
 **Team Overview — Lens 4 (Where you leave points).** Completes the Overview's 4
 lenses. New section turning the League drawer's single "% / pts on bench" number
 into an *actionable* manager-skill read. Leads with the season cost (**points left
@@ -81,38 +108,6 @@ Lasso fading −14.1) — every delta, direction, record, and spectrum position 
 with a polars prototype. This is **3 of the 4 planned Overview lenses** (construction +
 reliance + form); only **Lens 4 (where you leave points)** remains.
 
-> earlier build
-**Team Overview** sub-view filled in (was a stub). This gives the Team tab its own
-identity vs. the League drawer: the League tab is **comparative** ("how do I stack
-up?", starters only); the Team tab is **constructive** ("how is THIS team built?")
-and looks *inside* one roster — **bench included**, the data the drawer throws away.
-The page leads with the answer, then shows the work: **vitals strip** (power rank,
-record, points/wk ±std, power score — a deliberate recap that bridges from the League
-card) → **"How this team is built"** with three pieces:
-- **Star dependence** — single-player exposure (top-1 share of starting points),
-  placed on a **league-relative** Balanced↔Star-led spectrum (chose top-1 over top-3:
-  top-3 barely varied across teams — ~half for everyone with 8 starters — while top-1
-  reads as real character and isn't confounded by lineup churn). Names the star.
-- **Auto-surfaced signals** — the headline. **Lineup** calls (a benched player
-  out-rating a same-position starter by >10% per game → fix in house, e.g. "Gainwell
-  15.9/g > starter Pacheco 6.8/g at RB") and **Holes** (a position whose best current
-  option trails the league benchmark by >15% → outside upgrade). Surfaces the insight
-  rather than leaving the user to hunt the depth chart. "All set" when clean.
-- **Depth chart** — every skill player as a bar by **points per game**, **scaled
-  within each position** (so cliffs read clearly and QBs don't squash TEs). Starter
-  solid / bench dimmed / departed struck-through with "→ new team". ≤1-game samples
-  flagged "1g", hatched, sorted to the bottom, and excluded from signals + bar scale
-  (kills the one-big-week distortion).
-
-New seams: queries.js `loadTeamRosters()` (per-team, keyed by roster_id — depth,
-star dependence, signals, league per-position benchmarks; current-team resolved via
-`arg_max(roster_id, week)` so traded/dropped players are marked departed while still
-credited for weeks played). `POS_COLORS` extracted to `posColors.js`, shared by both
-panels. Roster set is **cumulative season**, departed players retained. Verified live
-across teams; metrics reconcile with a polars prototype (Naber top-1 23%/star-led +
-Gainwell lineup signal; Tet Lasso all-set). This covers **2 of the 4 planned Overview
-lenses** (roster construction + reliance) plus the signals layer — remaining 2 below.
-
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
@@ -128,6 +123,8 @@ lenses** (roster construction + reliance) plus the signals layer — remaining 2
     - Team Overview sub-view — vitals + "how this team is built": rate-based depth chart, league-relative star dependence, auto-surfaced lineup/hole signals; loadTeamRosters(), shared posColors.js [Overview lenses 1–2 of 4]
     - Team Overview — Form / trajectory lens: direction headline (heating up/cooling off/steady), league-relative Fading↔Surging spectrum, weekly column chart (beat/below median); last-half vs first-half scoring swing in loadTeamRosters() [Overview lens 3 of 4]
     - Team Overview — Where-you-leave-points lens: season points-left + efficiency % on a league-relative Leaky↔Optimal spectrum, per-week leak chart, biggest specific start/sit misses (eligibility-aware pairing); shared optimalLineup()/expandSlots() helpers + computeLeakage() [Overview lens 4 of 4 — Overview complete]
+    - Team Overview refinement — Form lens → recency-weighted EWMA slope (half-life 2wk, ±4%/wk direction band, recency-faded weekly bars); computeForm() rewritten [backlog item 2]
+    - Team Overview refinement — Lens-4 reframe (retrospective → improvement): efficiency-led, season points-left split into variance vs coachable (repeatable >10% bench-over-starter fix, sum-exact), named-miss list replaced by one rate-gap fix; computeLeakage() takes season role+rate map [backlog item 1]
 
 > not yet built
     >> backend
@@ -177,21 +174,11 @@ All Team-tab work should respect the team switcher already wired in.
 
 These refine shipped lenses; pick up alongside or after the Players sub-view.
 
-1. **Reframe Lens 4 (where you leave points) from retrospective → improvement.** Lead
-   with process-soundness (lineup efficiency, league-relative). Split season points-left
-   into **coachable** (a benched player whose *season rate* beats the starter — reuse the
-   Lens-1 lineup-signal logic; a repeatable "start X over Y going forward" tendency) vs
-   **variance** (a one-off bench spike, not the manager's fault). Demote the raw
-   points-left total to supporting evidence. **Direction only — no predictive/weekly
-   start-sit calls** (those depend on projections, V3). Framing target, per the project
-   mission ("fewer decisions driven by anxiety or noise"): *"your process is sound; ~N of
-   the points left were unpredictable variance; here's the one repeatable fix."*
+> ✅ **Done (2026-06-07):** Lens-4 reframe (retrospective → improvement) and the Form
+> lens EWMA switch both shipped — see the most-recent maintenance entry above. One
+> backlog item remains:
 
-2. **Switch the Form lens to an EWMA.** Replace the last-half-vs-first-half scoring split
-   with an exponentially-weighted moving average (half-life ~2 weeks) for the trend read.
-   Works from 2 weeks of data, uses all weeks, no window discontinuity.
-
-3. **Per-panel readiness gate (build the seam now; flip panels on later).** Give every
+1. **Per-panel readiness gate (build the seam now; flip panels on later).** Give every
    panel a self-declared **readiness check** that decides whether it has enough data to
    turn on, else renders a **"too early"** state. Regimes: **structural** (ready at roster
    lock), **point-in-time** (ready week 1, confidence grows with weeks), **trend** (ready
