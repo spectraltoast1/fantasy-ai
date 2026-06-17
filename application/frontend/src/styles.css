@@ -326,3 +326,35 @@ body {
 .key-dot.variance { background: #44505f; }
 .key-dot.coachable { background: #c98a5a; }
 .to-leak-lede { font-size: 12.5px; color: var(--text); line-height: 1.5; margin: 4px 0 6px; }
+
+/* Players sub-view — the spike signal-quality read as a sortable table. */
+.players-lede { font-size: 12.5px; color: var(--muted); line-height: 1.6; margin: 0 0 16px; max-width: 60ch; }
+.players-lede strong { color: var(--text); }
+.players-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.players-table th {
+  font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
+  font-weight: 700; padding: 0 12px 10px; border-bottom: 1px solid var(--line);
+  cursor: pointer; user-select: none; white-space: nowrap;
+}
+.players-table th:hover { color: var(--text); }
+.players-table th.sorted { color: var(--text); }
+.players-table .pt-caret { color: var(--accent); }
+.players-table td { padding: 11px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.players-table tbody tr:hover { background: var(--panel-2); }
+.players-table tr.low-sample td { opacity: 0.6; }
+.pt-left { text-align: left; }
+.pt-right { text-align: right; }
+.pt-num { font-variant-numeric: tabular-nums; color: var(--text); }
+.pt-pos { display: inline-block; width: 26px; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; }
+.pt-name { color: var(--text); }
+.pt-read { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.pt-read .pt-arrow { font-size: 10px; }
+.pt-read.up { color: #5fb3a3; }
+.pt-read.down { color: #d2849c; }
+.pt-read.flat { color: #c9a24a; }
+.pt-read.mute { color: var(--muted); }
+.pt-vol { display: flex; align-items: center; gap: 8px; }
+.pt-vol-track { width: 72px; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.pt-vol-fill { height: 100%; border-radius: 3px; }
+.pt-vol-pct { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; width: 22px; }
+.pt-td-hot { color: #d2849c; }
