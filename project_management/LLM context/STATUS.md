@@ -148,17 +148,42 @@ reconciles exactly with a polars prototype. **All 4 Overview lenses now shipped.
           (team drill-down drawer with all-play, efficiency, weekly scoring, two spectrums).
           Remaining: more panels (per the Build Order below), deployment.
 
-## V1 Definition (current build target)
-Team overview, league standings, and matchup review. Powered by nflreadpy and Sleeper data already fetched. Target ship: NFL kickoff, mid-August 2026.
+## Current build target
+**Phase 1 — the spike signal-quality read** (first decision-critique slice); the
+"first usable critique by kickoff" goal (timeline soft — personal project). The
+descriptive dashboard base (Team Overview's 4 lenses + League power rankings) is
+**done (Phase 0)**; the build now turns from *showing team state* to *grading a
+decision against a prior*. Still frozen at Week 4 of 2025 for building; the full
+2025 season (wks 1–18) is the backtest answer key. Phase 1 is gated on that
+backtest beating a naive "recent points" baseline before it ships live.
 
-## Version Roadmap (subject to change)
-- **V1** — Team overview, league standings, matchup review (frozen at Week 4 of the 2025 NFL season)
-- **V1.5** — In-season scheduler: automates weekly data refresh and keeps the dashboard current during an NFL season
-- **V2** — Waiver wire analysis (requires Sleeper full player database fetcher)
-- **V3** — Start/sit recommendations (requires FantasyPros projections fetcher)
-- **V4** — Trade analysis (LeagueLogs market value — data collection started 2026-05-31; features still V4)
-- **V5** — AI-powered insights (major update, builds on complete data layer)
-- **V6+** — More complex analytics (TBD)
+## Version Roadmap
+→ **Source of truth: `scope docs/PRODUCT_ROADMAP.md`** — phase detail, the four
+design laws (grade process not outcome; speak only when confident; borrow the
+substrate; consultation not autopilot), sequencing logic, and the scope filter.
+Summary only here:
+
+- **Phase 0 — Descriptive dashboard** *(done)* — team overview, league standings,
+  power rankings. Frozen at Week 4 of 2025.
+- **Phase 1 — Spike signal-quality slice** *(current; kickoff target)* — "is this
+  production real or noise?" on usage data already fetched; validated against the
+  full-2025 answer key before going live.
+- **Phase 2 — Projections substrate** — FantasyPros fetcher + consensus/disagreement
+  spread (the forward prior; the hinge everything credible depends on). Odds/Vegas
+  an optional cheap add.
+- **Phase 3 — Shared engines + leakage fix** — generalize the slice into
+  signal-quality / context-fit / opponent engines; fix the coachable-claim
+  (process-not-outcome, regress to prior — backlog #1); add start/sit context.
+- **Phase 4 — Go live + opponent modeling** — in-season weekly refresh; opponent
+  reads + manager-dossier infra; waiver and trade surfaces.
+- **Phase 5 — Model of YOU** — graded decisions compound into a per-manager
+  tendency profile that personalizes guidance.
+- **Phase 6 — Forward advisory + AI layer (later)** — real-time "better call now";
+  AI interpretation over the engines; draft & streaming surfaces.
+
+> **Old V# → phase map** (so version references elsewhere in this doc still resolve):
+> V1 dashboard → Phase 0; V1.5 scheduler + V2 waivers → Phase 4; V3 start/sit →
+> Phase 3 (projections = Phase 2); V4 trades → Phase 4; V5 AI → Phase 6.
 
 ## Known Scope Exclusions
 → Source of truth: **TECHNICAL_ARCHITECTURE.md § Known Scope Exclusions** (DST/K, waiver

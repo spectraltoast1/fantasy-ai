@@ -62,8 +62,14 @@ separate decisions doc.
 ---
 
 ## Version Roadmap
-→ Source of truth: **STATUS.md § Version Roadmap**. (Versions are referenced here for
-scope tagging only; the canonical list lives in STATUS.)
+→ Source of truth: **`scope docs/PRODUCT_ROADMAP.md`** (the full phase-based path
+forward). STATUS.md carries a summary + current build target. Phases are referenced
+here for scope tagging only; the canonical list lives in PRODUCT_ROADMAP.
+
+> **Doc roles** (single source of truth per fact — principle #7): **STATUS.md** =
+> current state, recent build history, and immediate upcoming work. **PRODUCT_ROADMAP.md**
+> = the full path forward (phases, design laws, sequencing). **TECHNICAL_ARCHITECTURE.md**
+> (this doc) = under-the-hood stack, data layer, and technical principles.
 
 ## Known Scope Exclusions
 **DST/K (V1):** Excluded from all V1 transforms and dashboard work. DSTs are stripped at join time via team abbreviation detection (Sleeper represents DSTs as all-uppercase team codes in matchup data). Kickers are removed by the SKILL_POSITIONS filter applied after the join. All joins and visualizations assume skill positions only: QB, RB, WR, TE.
