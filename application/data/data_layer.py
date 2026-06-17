@@ -251,3 +251,26 @@ def write_team_leakage(df: pl.DataFrame, season: int) -> None:
 
 def read_team_leakage(season: int) -> pl.DataFrame:
     return pl.read_parquet(_team_leakage_path(season))
+
+
+def _player_signal_path(season: int) -> Path:
+    return _SNAPSHOT_DIR / "derived" / f"player_signal_{season}.parquet"
+
+
+def write_player_signal(df: pl.DataFrame, season: int) -> None:
+    """Write the per-player spike signal-quality read for a season (overwrite).
+
+    Output of transforms/compute_player_signal.py: one row per rostered skill player
+    carrying the recent per-game production, the opportunity vs efficiency
+    decomposition (opp_g, ppo, regression_risk), the TD share of scoring, a
+    sample-gated categorical read, and the per-week points/opportunity series
+    (serialised JSON). The first decision-critique engine slice ("is this production
+    real, or noise?").
+    """
+    path = _player_signal_path(season)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
+
+def read_player_signal(season: int) -> pl.DataFrame:
+    return pl.read_parquet(_player_signal_path(season))
