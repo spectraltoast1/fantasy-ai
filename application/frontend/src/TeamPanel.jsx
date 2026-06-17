@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { loadTeams, loadPowerRankings, loadTeamRosters, loadTeamPlayers, POS } from './queries.js';
 import { POS_COLORS } from './posColors.js';
+import { Gate, REGIME } from './readiness.jsx';
 
 // Team tab: a deep drill-down on ONE team. Opens on the logged-in user's team
 // and can flip to any other via the switcher. Two inner views:
@@ -21,6 +22,7 @@ export default function TeamPanel() {
   const [selected, setSelected] = useState(null); // rosterId in focus
   const [subtab, setSubtab] = useState('overview');
   const [players, setPlayers] = useState(null); // signal read for the selected team
+  const [weeks, setWeeks] = useState(0); // weeks elapsed — drives the readiness gate
   const [error, setError] = useState(null);
 
   useEffect(() => {
@@ -32,6 +34,7 @@ export default function TeamPanel() {
         for (const t of rankings.teams) byId[t.rosterId] = { ...t, teamCount: rankings.teams.length };
         setSummary(byId);
         setRosters(rosterDetail);
+        setWeeks(rankings.weeks?.length ?? 0);
         // Default to the user's own team; fall back to the first roster.
         setSelected(myRosterId ?? teams[0]?.rosterId ?? null);
       })
@@ -68,6 +71,12 @@ export default function TeamPanel() {
   const team = teams.find((t) => t.rosterId === selected);
   const vitals = summary[selected];
   const roster = rosters[selected];
+
+  // Weeks-elapsed drives the readiness gate. A `?weeksOverride=N` query param forces
+  // the clock for QA / in-season rehearsal (see how trend panels degrade at week 1–2);
+  // absent it, the real season clock is used. Frozen at week 4 → every panel reads ready.
+  const override = new URLSearchParams(window.location.search).get('weeksOverride');
+  const weeksElapsed = override != null ? Math.max(0, Number(override)) : weeks;
 
   return (
     <div className="page">
@@ -106,38 +115,47 @@ export default function TeamPanel() {
         ))}
       </div>
 
-      {subtab === 'overview' && <Overview vitals={vitals} roster={roster} />}
-      {subtab === 'players' && <Players players={players} />}
+      {subtab === 'overview' && <Overview vitals={vitals} roster={roster} weeks={weeksElapsed} />}
+      {subtab === 'players' && <Players players={players} weeks={weeksElapsed} />}
     </div>
   );
 }
 
-function Overview({ vitals, roster }) {
+function Overview({ vitals, roster, weeks }) {
   if (!vitals || !roster) {
     return <div className="subview-stub">No data for this team.</div>;
   }
+  // Each section declares its readiness regime; the Gate decides whether it has enough
+  // weeks to turn on. Construction is structural (about who's rostered); Form and
+  // leakage are trend reads that need a few weeks of shape before they mean anything.
   return (
     <>
       <Vitals vitals={vitals} />
       <section className="to-section">
         <h3 className="to-h3">How this team is built</h3>
-        <Reliance reliance={roster.reliance} />
-        <Signals signals={roster.signals} />
-        <DepthChart byPosition={roster.byPosition} posMax={roster.posMax} />
-        <div className="to-foot">
-          Bars are points per game (bench included), scaled within each position —
-          so a drop-off after a starter reads as a cliff. Filled dot = regular
-          starter; dimmed = bench; struck-through = no longer on the roster. “1g”
-          marks a one-game sample (too small to trust, left out of the signals).
-        </div>
+        <Gate regime={REGIME.STRUCTURAL} weeks={weeks} label="This roster read">
+          <Reliance reliance={roster.reliance} />
+          <Signals signals={roster.signals} />
+          <DepthChart byPosition={roster.byPosition} posMax={roster.posMax} />
+          <div className="to-foot">
+            Bars are points per game (bench included), scaled within each position —
+            so a drop-off after a starter reads as a cliff. Filled dot = regular
+            starter; dimmed = bench; struck-through = no longer on the roster. “1g”
+            marks a one-game sample (too small to trust, left out of the signals).
+          </div>
+        </Gate>
       </section>
       <section className="to-section">
         <h3 className="to-h3">Form</h3>
-        <Form form={roster.form} />
+        <Gate regime={REGIME.TREND} weeks={weeks} label="A form trend">
+          <Form form={roster.form} />
+        </Gate>
       </section>
       <section className="to-section">
         <h3 className="to-h3">Where you leave points</h3>
-        <Leakage leakage={roster.leakage} />
+        <Gate regime={REGIME.TREND} weeks={weeks} label="A lineup-efficiency read">
+          <Leakage leakage={roster.leakage} />
+        </Gate>
       </section>
     </>
   );
@@ -476,7 +494,7 @@ const PLAYER_COLS = [
   { key: 'tdShare', label: 'TD-driven', align: 'right' },
 ];
 
-function Players({ players }) {
+function Players({ players, weeks }) {
   const [sort, setSort] = useState({ key: 'recentPpg', dir: 'desc' });
   if (!players) return <div className="subview-stub">Loading players…</div>;
   if (players.length === 0) {
@@ -500,6 +518,7 @@ function Players({ players }) {
   return (
     <section className="to-section">
       <h3 className="to-h3">Players — real or noise?</h3>
+      <Gate regime={REGIME.POINT_IN_TIME} weeks={weeks} label="The signal read">
       <p className="players-lede">
         Each player’s recent scoring, and whether the underlying usage backs it up.
         The signal is a question to weigh, not a call — <strong>you</strong> decide
@@ -534,6 +553,7 @@ function Players({ players }) {
         position (targets / carries — the sticky part); “TD-driven” is the share of
         points from touchdowns (the bounciest part). Thin samples read “Too early.”
       </div>
+      </Gate>
     </section>
   );
 }
