@@ -2,7 +2,7 @@
 
 > Engineering context document for Claude Code. Describes the stack, folder structure, data layer design, and technical principles. Updated regularly as the project evolves.
 
-**Last reviewed:** 2026-06-08
+**Last reviewed:** 2026-06-17
 
 ---
 
@@ -149,9 +149,10 @@ fantasy-ai/
     │   │   └── sleeper/
     │   │       └── players.parquet    # Sleeper /players/nfl registry, refreshed ≤ once/day
     │   └── snapshots/              # time-series parquet (gitignored)
-            ├── derived/                                 # pre-computed analytics (compute_team_*.py output)
+            ├── derived/                                 # pre-computed analytics (compute_*.py output)
             │   ├── team_form_2025.parquet               # per-team trajectory: slope, direction, spectrum, weekly series
-            │   └── team_leakage_2025.parquet            # per-team leakage: efficiency %, coachable/variance, named fixes
+            │   ├── team_leakage_2025.parquet            # per-team leakage: efficiency %, coachable/variance, named fixes
+            │   └── player_signal_2025.parquet           # per-player spike signal: opp vs efficiency split, regression_risk, read
             ├── leaguelogs/
             │   └── market_values.parquet            # daily market-value history, all profiles
             └── nfl_sleeper_weekly_joined/
@@ -173,7 +174,9 @@ fantasy-ai/
         ├── audit_join.py              # ✅ built — resolves unknown-position remainders
         ├── derive_lineup_slots.py     # ✅ built — roster_positions → lineup_slots (starting skill slots)
         ├── compute_team_form.py       # ✅ built — EWMA trajectory analytics → derived/team_form
-        └── compute_team_leakage.py    # ✅ built — lineup-leakage analytics → derived/team_leakage
+        ├── compute_team_leakage.py    # ✅ built — lineup-leakage analytics → derived/team_leakage
+        ├── compute_player_signal.py   # ✅ built — spike signal-quality read (Phase 1) → derived/player_signal
+        └── backtest_player_signal.py  # ✅ built — validates the shipped signal vs naive baseline on the full-2025 answer key
     ├── config.example.py
     └── requirements.txt
 ```
@@ -229,6 +232,7 @@ non-negotiable architectural rule.
 | derive_lineup_slots transform | snapshots/sleeper/{season}/ | lineup_slots_{season}.parquet — starting skill-slot requirements (slot, count, eligible) derived from the league's raw roster_positions; declares the QB/RB/WR/TE + FLEX config so the front-end "perfect lineup" / efficiency calc is exact, not inferred |
 | compute_team_form transform | snapshots/derived/ | team_form_{season}.parquet — one row per roster_id: EWMA scoring slope, direction, recent record, league-relative spectrum pos, per-week series. Pre-computed so the front-end seam just reads it (no JS trajectory math) |
 | compute_team_leakage transform | snapshots/derived/ | team_leakage_{season}.parquet — one row per roster_id: lineup efficiency %, season points-left, coachable/variance split, named fixes, per-week leak, spectrum pos. Pre-computed; feeds both the Team Overview leakage lens and the League drawer's efficiency read |
+| compute_player_signal transform | snapshots/derived/ | player_signal_{season}.parquet — one row per rostered skill player: the spike signal-quality read (Phase 1). Decomposes recent production into sticky opportunity (opp_g) vs fragile efficiency (ppo, shrunk toward the league positional mean); headline regression_risk + a sample-gated read (too_early/spike/mixed/sticky), td_share as evidence, per-week series. The first decision-critique engine slice; not a forward projection |
 
 These assignments reflect current v1 decisions, not permanent rules. Future versions may snapshot additional sources (e.g., odds history for post-hoc analysis).
 
@@ -316,6 +320,34 @@ via data_layer.py, performs a single join, and writes via data_layer.py.
   (`round1`, `mean`, `median`, and the league-relative `spectrum_positions`
   normaliser — the Python mirror of the front-end's old `attachSpectrumPos`) live
   once in **`transforms/_analytics.py`** rather than being copy-pasted per transform.
+
+- `compute_player_signal.py` — **the first decision-critique engine slice (Product
+  Roadmap Phase 1): the spike signal-quality read.** Reads the (frozen) season join,
+  emits one row per rostered skill player to `snapshots/derived/player_signal_`. It
+  characterizes recent production as "real or noise" — *not* a forward projection
+  (design law 3) — by decomposing it into **sticky opportunity** (`opp_g`,
+  position-specific: targets / carries+targets / pass-att+carries, carried forward as
+  the anchor) and **fragile efficiency** (`ppo` = points per opportunity, shrunk
+  toward the league-wide positional mean by sample size, `SHRINK_K` games of prior).
+  Headline `regression_risk = 1 − expected_ppg/recent_ppg`; a sample-gated categorical
+  `read` (`too_early`/`spike`/`mixed`/`sticky`) keeps the language honest (law 2), and
+  `td_share` is carried as the most legible evidence. Same SOLID shape as the team
+  transforms: pure `_player_signal` with injected constants (`SHRINK_K`, `MIN_GAMES`,
+  `SPIKE_BAND`/`STICKY_BAND`, `POS_MEAN_MIN_OPP`), `compute()` the composition root,
+  helpers from `_analytics`. The positional efficiency mean is computed over the full
+  NFL stat pool (the borrowed substrate), not just this league's rostered players.
+
+- `backtest_player_signal.py` — **the validation gate Phase 1 must clear before any
+  engine ships live.** Imports the *same* pure `_player_signal` the transform ships
+  (no parallel re-derivation that could drift) and tests it against the full-2025
+  answer key: input = a recent window (default wks 1–4), truth = rest-of-season
+  per-game PPR. Two verdicts — *predictive* (does the signal beat a naive
+  "recent-points-carry-forward" baseline on MAE/RMSE/corr?) and *decision-relevant*
+  (among hot players, which the naive read can't tell apart, does the `spike` group
+  regress more than the `sticky` group?). Exits 0 only if both pass. Current 2025
+  result: signal cuts rest-of-season MAE ~13% at the W4 freeze (PASS at every freeze
+  W3–W8); hot `spike` group regressed ~3.9 pts/g while `sticky` held flat. This
+  backtest-against-the-answer-key pattern is the template for every future engine slice.
 
 ## Technical Principles
 

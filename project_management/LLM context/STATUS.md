@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-06-08 (queries.js refactor — form + leakage analytics → Python transforms)
+**Last updated:** 2026-06-17 (Phase 1 spike signal-quality engine + backtest gate)
 **Target ship:** NFL kickoff, mid August 2026
 
 ---
@@ -34,6 +34,33 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**Phase 1 — the spike signal-quality engine + its backtest gate (data/backtest
+only; no UI this session).** The first decision-critique slice: "is this production
+real, or is it noise?", built on usage data already fetched (no projections needed).
+New transform **`compute_player_signal.py`** → `snapshots/derived/player_signal_2025.parquet`,
+one row per rostered skill player (172). Same SOLID shape as the team transforms (pure
+`_player_signal` with **injected** constants `SHRINK_K`/`MIN_GAMES`/`SPIKE_BAND`/
+`STICKY_BAND`/`POS_MEAN_MIN_OPP`, `compute()` the composition root, helpers from
+`_analytics`). It decomposes recent production into **sticky opportunity** (`opp_g` —
+targets / carries+targets / pass-att+carries, carried forward) vs **fragile efficiency**
+(`ppo` = points/opportunity, shrunk toward the league-wide positional mean by sample
+size). Headline `regression_risk = 1 − expected_ppg/recent_ppg`; a sample-gated
+categorical `read` (too_early/spike/mixed/sticky) keeps language honest (law 2);
+`td_share` carried as the legible evidence. It is a *characterization of past
+production, not a forward projection* (law 3). New `data_layer` read/write fns; the
+positional efficiency mean is taken over the full NFL stat pool (borrowed substrate),
+not just rostered players. **`backtest_player_signal.py`** imports the *same* shipped
+`_player_signal` and validates it against the full-2025 answer key (input wks 1–4,
+truth wks 5–18): **predictive PASS** — signal cuts rest-of-season MAE 13.2% vs a naive
+"recent-points" baseline (RMSE 3.88→3.42, corr .79→.82), robust at every freeze W3–W8;
+**decision-relevant PASS** — among hot players (which naive can't tell apart) the
+`spike` group regressed −3.9 pts/g (TD-share .38; e.g. Lamar 23.3→13.5, Fields
+20.2→13.7) while the `sticky` group held flat (−0.02, TD-share .16). The engine is
+proven real; this backtest-vs-answer-key pattern is the template for every future
+slice. **Not yet built:** the Players sub-view surface + the per-panel readiness gate
+(Phase 1 parts 3–4).
+
+> earlier build
 **Architecture: form + leakage analytics extracted from queries.js → Python
 transforms.** `queries.js` was meant to be the client/server seam (data access
 only) but had absorbed analytics, business-logic thresholds, and tuning constants —
@@ -95,30 +122,6 @@ variance+coachable reconciles to each season total (Cousin 127, Tet 82.1, Deb 95
 all-variance teams (Tet Lasso, Bourne) show the clean reassurance path, Form direction
 labels span all three states correctly.
 
-> earlier build
-**Team Overview — Lens 4 (Where you leave points).** Completes the Overview's 4
-lenses. New section turning the League drawer's single "% / pts on bench" number
-into an *actionable* manager-skill read. Leads with the season cost (**points left
-on the bench** + **lineup efficiency %**, on a league-relative **Leaky↔Optimal**
-spectrum — Tet Lasso's 86% *looks* fine but ranks 7th of 10 in raw points left, which
-the spectrum exposes), then a **per-week leak chart** (amber columns = points left
-each week; a short one = a week you nailed the lineup) and the **biggest specific
-misses** (e.g. "W2 started Travis Hunter 5.2 over Rome Odunze 31.8 at WR, −26.6").
-Misses are paired within **swap-eligibility classes** (a QB can only displace a QB;
-RB/WR/TE are interchangeable via FLEX, labeled FLEX when cross-position) so every
-call shown is a *legal* start/sit — the naïve best-gem↔worst-dud pairing produced
-nonsense like starting a QB "over" an RB. Pairing stays sum-exact (totals optimal −
-actual). "All set" path exists but no team is clean over 4 weeks (lowest leak ~54 pts).
-
-Per the seam decision, the greedy optimal-lineup calc was **extracted to shared
-helpers** (`optimalLineup()` returning total + chosen picks, and `expandSlots()`) that
-both `loadTeamDetails()` (League drawer) and `loadTeamRosters()` (Team Overview) call —
-no duplicated calc, seams stay separate. New shaping: `computeLeakage()` in the Team
-seam; `SQL_PLAYER_WEEK` now carries the player name. Verified live across the spread
-(Cousin 'Chilling 127 left/75%/Leaky end; Bourne Again 54/87%/Optimal end; Tet Lasso
-82.1/86%) — every points-left total, efficiency %, per-week leak, and named miss
-reconciles exactly with a polars prototype. **All 4 Overview lenses now shipped.**
-
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
@@ -137,6 +140,7 @@ reconciles exactly with a polars prototype. **All 4 Overview lenses now shipped.
     - Team Overview refinement — Form lens → recency-weighted EWMA slope (half-life 2wk, ±4%/wk direction band, recency-faded weekly bars); computeForm() rewritten [backlog item 2]
     - Team Overview refinement — Lens-4 reframe (retrospective → improvement): efficiency-led, season points-left split into variance vs coachable (repeatable >10% bench-over-starter fix, sum-exact), named-miss list replaced by one rate-gap fix; computeLeakage() takes season role+rate map [backlog item 1]
     - Architecture refactor — form + leakage analytics extracted from queries.js → Python transforms (compute_team_form.py + compute_team_leakage.py → snapshots/derived/), tuning constants moved with them; queries.js slimmed to a thin read+assemble seam (−253 lines); loadTeamDetails efficiency consolidated to read the leakage parquet. View components untouched.
+    - Phase 1 spike signal-quality engine — compute_player_signal.py → derived/player_signal_{season}.parquet (opportunity-vs-efficiency decomposition, regression_risk, sample-gated read); backtest_player_signal.py validates the shipped function against the full-2025 answer key (beats naive recent-points 13% on MAE; spike group regresses ~3.9 pts/g while sticky holds). First decision-critique slice; data + backtest only, no UI yet.
 
 > not yet built
     >> backend
@@ -154,8 +158,17 @@ reconciles exactly with a polars prototype. **All 4 Overview lenses now shipped.
 descriptive dashboard base (Team Overview's 4 lenses + League power rankings) is
 **done (Phase 0)**; the build now turns from *showing team state* to *grading a
 decision against a prior*. Still frozen at Week 4 of 2025 for building; the full
-2025 season (wks 1–18) is the backtest answer key. Phase 1 is gated on that
-backtest beating a naive "recent points" baseline before it ships live.
+2025 season (wks 1–18) is the backtest answer key.
+
+**Engine + backtest gate now DONE** (`compute_player_signal.py` +
+`backtest_player_signal.py`): the signal beats the naive "recent points" baseline
+(−13% MAE) and correctly separates hot players that hold from those that regress, so
+it has cleared the gate to ship live. **Remaining in Phase 1:** (3) the **Players
+sub-view surface** — give the stubbed sub-view its purpose by rendering the read per
+player, framed as a question the manager adjudicates (laws 2+4), via a new `queries.js`
+seam fn (e.g. `loadTeamPlayers(rosterId)`, reads the parquet, no math in JS); and (4)
+the cross-cutting **per-panel readiness gate** (structural / point-in-time / trend
+regimes + a "too early" fallback slot).
 
 ## Version Roadmap
 → **Source of truth: `scope docs/PRODUCT_ROADMAP.md`** — phase detail, the four
@@ -194,16 +207,21 @@ carry the "Powered by LeagueLogs API" attribution.
 
 ## Next single highest-leverage move
 
-The Team Overview is **complete — all 4 lenses shipped**: roster construction/depth,
-star dependence, form/trajectory, and where-you-leave-points, plus the auto-surfaced
-signals layer (lineup calls + roster holes) and the vitals strip. The whole "how is
-this team built / how is it managed" view is done. Next:
+**Surface the now-validated spike signal in the Players sub-view** (Phase 1 part 3).
+The engine is built and has cleared its backtest gate (above); the read currently
+ships only to parquet. Give the stubbed Players sub-view its purpose: per player,
+render the signal-quality read — *"this run is volume-driven and looks sticky"* vs
+*"this was three TDs and a busted coverage; the underlying usage is flat"* — leading
+with the evidence (`opp_g`/`opp_pct`, `td_share`, `eff_ratio`) and framing the call as
+a **question the manager adjudicates**, not an imperative (laws 2+4), with language
+gated on `read`/`low_sample`. Needs a new `queries.js` seam fn (e.g.
+`loadTeamPlayers(rosterId)`) that **reads `player_signal_{season}.parquet`** — no math
+in JS (the analytics already live in the transform). This is where the "showing state"
+dashboard becomes a "grades a decision" coach for the first time on the front end.
 
-**The Players sub-view** (still a stub) — per-player real-world metrics from
-season_2025.parquet (127 cols: passing/rushing/receiving yards, TDs, targets,
-target_share, air_yards_share, wopr, EPA…) with visualizations that make the stats
-*interpretable*, not a raw table. Needs a new queries.js function (e.g.
-`loadTeamPlayers(rosterId)`). Bigger net-new lift (new query + viz design).
+Build the **per-panel readiness gate** (Phase 1 part 4) alongside or just after — the
+cheap cross-cutting infra (structural / point-in-time / trend regimes + a "too early"
+fallback slot) so trend reads degrade cleanly and language calibrates to weeks of data.
 
 All Team-tab work should respect the team switcher already wired in.
 
