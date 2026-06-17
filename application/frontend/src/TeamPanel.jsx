@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { loadTeams, loadPowerRankings, loadTeamRosters, POS } from './queries.js';
+import { loadTeams, loadPowerRankings, loadTeamRosters, loadTeamPlayers, POS } from './queries.js';
 import { POS_COLORS } from './posColors.js';
 
 // Team tab: a deep drill-down on ONE team. Opens on the logged-in user's team
@@ -20,6 +20,7 @@ export default function TeamPanel() {
   const [rosters, setRosters] = useState(null); // rosterId -> construction detail
   const [selected, setSelected] = useState(null); // rosterId in focus
   const [subtab, setSubtab] = useState('overview');
+  const [players, setPlayers] = useState(null); // signal read for the selected team
   const [error, setError] = useState(null);
 
   useEffect(() => {
@@ -39,6 +40,18 @@ export default function TeamPanel() {
         setError(e.message ?? String(e));
       });
   }, []);
+
+  // Players signal read is per-team — (re)load it whenever the selected team changes.
+  useEffect(() => {
+    if (selected == null) return;
+    setPlayers(null);
+    loadTeamPlayers(selected)
+      .then(setPlayers)
+      .catch((e) => {
+        console.error(e);
+        setError(e.message ?? String(e));
+      });
+  }, [selected]);
 
   if (error) {
     return (
@@ -94,12 +107,7 @@ export default function TeamPanel() {
       </div>
 
       {subtab === 'overview' && <Overview vitals={vitals} roster={roster} />}
-      {subtab === 'players' && (
-        <div className="subview-stub">
-          Players — per-player real-world metrics with visualizations that make
-          the stats interpretable. Coming next.
-        </div>
-      )}
+      {subtab === 'players' && <Players players={players} />}
     </div>
   );
 }
@@ -445,6 +453,119 @@ function Signals({ signals }) {
         </div>
       ))}
     </div>
+  );
+}
+
+// Players sub-view: the spike signal-quality read per player, as a sortable table.
+// Reads "is this production real or noise?" — recent scoring next to whether the
+// underlying usage backs it up. Framed as a question (the manager adjudicates), and
+// the signal is shown as a direction/verdict, never a points projection. The read is
+// pre-computed in Python (compute_player_signal.py); this is pure rendering.
+const READS = {
+  sticky: { label: 'Looks real', arrow: '▲', cls: 'up', q: 'the volume backs this pace up — the kind that tends to continue' },
+  mixed: { label: 'Toss-up', arrow: '◆', cls: 'flat', q: 'part volume, part luck — a genuine coin-flip, weigh it yourself' },
+  spike: { label: 'Cooling likely', arrow: '▼', cls: 'down', q: 'leaning on touchdowns / efficiency — the bouncy kind that fades' },
+  too_early: { label: 'Too early', arrow: '·', cls: 'mute', q: 'too few games to read the production yet' },
+};
+
+const PLAYER_COLS = [
+  { key: 'name', label: 'Player', align: 'left' },
+  { key: 'recentPpg', label: 'Recent /g', align: 'right' },
+  { key: 'regressionRisk', label: 'Signal', align: 'left' },
+  { key: 'oppPct', label: 'Volume', align: 'left' },
+  { key: 'tdShare', label: 'TD-driven', align: 'right' },
+];
+
+function Players({ players }) {
+  const [sort, setSort] = useState({ key: 'recentPpg', dir: 'desc' });
+  if (!players) return <div className="subview-stub">Loading players…</div>;
+  if (players.length === 0) {
+    return <div className="subview-stub">No rostered skill players for this team.</div>;
+  }
+
+  const sorted = [...players].sort((a, b) => {
+    const av = a[sort.key];
+    const bv = b[sort.key];
+    const cmp = typeof av === 'string' ? av.localeCompare(bv) : av - bv;
+    return sort.dir === 'asc' ? cmp : -cmp;
+  });
+  // Click toggles direction on the active column; a new column starts desc (asc for name).
+  const toggle = (key) =>
+    setSort((s) =>
+      s.key === key
+        ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
+        : { key, dir: key === 'name' ? 'asc' : 'desc' },
+    );
+
+  return (
+    <section className="to-section">
+      <h3 className="to-h3">Players — real or noise?</h3>
+      <p className="players-lede">
+        Each player’s recent scoring, and whether the underlying usage backs it up.
+        The signal is a question to weigh, not a call — <strong>you</strong> decide
+        whether to trust the run. Tap any column to sort.
+      </p>
+      <table className="players-table">
+        <thead>
+          <tr>
+            {PLAYER_COLS.map((c) => (
+              <th
+                key={c.key}
+                className={`pt-${c.align} ${sort.key === c.key ? 'sorted' : ''}`}
+                onClick={() => toggle(c.key)}
+              >
+                {c.label}
+                {sort.key === c.key && <span className="pt-caret">{sort.dir === 'asc' ? ' ▲' : ' ▼'}</span>}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((p) => (
+            <PlayerRow key={p.name} p={p} />
+          ))}
+        </tbody>
+      </table>
+      <div className="to-foot">
+        “Recent /g” is fantasy points per game so far — what’s already happened.
+        “Signal” asks whether that pace is backed by repeatable usage or by
+        regression-prone efficiency; it’s a read on the past, shown as a direction,
+        not a points projection. “Volume” is opportunity rank within the player’s
+        position (targets / carries — the sticky part); “TD-driven” is the share of
+        points from touchdowns (the bounciest part). Thin samples read “Too early.”
+      </div>
+    </section>
+  );
+}
+
+function PlayerRow({ p }) {
+  const r = READS[p.read] ?? READS.too_early;
+  const volPct = Math.round(p.oppPct * 100);
+  const tdPct = Math.round(p.tdShare * 100);
+  return (
+    <tr className={p.lowSample ? 'low-sample' : ''}>
+      <td className="pt-left">
+        <span className="pt-pos" style={{ color: POS_COLORS[p.position] }}>{p.position}</span>
+        <span className="pt-name">{p.name}</span>
+        {p.lowSample && <span className="to-depth-flag">{p.games}g</span>}
+      </td>
+      <td className="pt-right pt-num">{p.recentPpg.toFixed(1)}</td>
+      <td className="pt-left">
+        <span className={`pt-read ${r.cls}`} title={r.q}>
+          <span className="pt-arrow">{r.arrow}</span>
+          {r.label}
+        </span>
+      </td>
+      <td className="pt-left">
+        <div className="pt-vol">
+          <div className="pt-vol-track">
+            <div className="pt-vol-fill" style={{ width: `${volPct}%`, background: POS_COLORS[p.position] }} />
+          </div>
+          <span className="pt-vol-pct">{volPct}</span>
+        </div>
+      </td>
+      <td className={`pt-right pt-num ${p.tdShare >= 0.33 ? 'pt-td-hot' : ''}`}>{tdPct}%</td>
+    </tr>
   );
 }
 

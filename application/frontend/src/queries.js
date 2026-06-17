@@ -493,6 +493,57 @@ function leakageFromRow(r) {
 }
 
 // ---------------------------------------------------------------------------
+// Team tab — Players sub-view (the spike signal-quality read, per player).
+// ---------------------------------------------------------------------------
+
+// Pre-computed by compute_player_signal.py — one row per rostered skill player,
+// the opportunity-vs-efficiency decomposition already done. This seam only reads
+// and assembles; there is no signal math in JS (it lives in the Python transform,
+// validated by backtest_player_signal.py). Default order puts the highest recent
+// scorers first — the players a manager is most likely weighing a move on.
+const SQL_PLAYER_SIGNAL = `
+  SELECT player_display_name, position, games, low_sample,
+         recent_ppg, td_share, opp_pct, eff_ratio, regression_risk, read, weeks_json
+  FROM 'player_signal.parquet'
+  WHERE roster_id = $rid
+  ORDER BY recent_ppg DESC
+`;
+
+/**
+ * The spike signal-quality read for one team's rostered skill players. Answers,
+ * per player, "is the recent production real, or noise?" — a characterization of
+ * past production (not a forward projection). `read` is the sample-gated verdict
+ * (sticky / mixed / spike / too_early); `regressionRisk` is the share of recent
+ * scoring the sustainable-usage picture doesn't support (the direction behind the
+ * verdict); `oppPct` (volume rank in position) and `tdShare` are the evidence.
+ * @param {number} rosterId
+ * @returns {Promise<object[]>} view-ready player rows, highest recent PPG first
+ */
+export async function loadTeamPlayers(rosterId) {
+  const rows = await query(SQL_PLAYER_SIGNAL.replace('$rid', Number(rosterId)));
+  return rows.map(playerSignalFromRow);
+}
+
+// Assemble the view-ready player object from a pre-computed player_signal row. The
+// per-week (pts, opp) series is stored as view-ready JSON, so this is parse + Number
+// coercion — no analytics.
+function playerSignalFromRow(r) {
+  return {
+    name: r.player_display_name,
+    position: r.position,
+    games: Number(r.games),
+    lowSample: Boolean(r.low_sample),
+    recentPpg: Number(r.recent_ppg),
+    tdShare: Number(r.td_share),
+    oppPct: Number(r.opp_pct),
+    effRatio: Number(r.eff_ratio),
+    regressionRisk: Number(r.regression_risk),
+    read: r.read,
+    weeks: JSON.parse(r.weeks_json),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Team tab — the roster picker (who's in the league + which one is "you").
 // ---------------------------------------------------------------------------
 
