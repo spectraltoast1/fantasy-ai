@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-06-17 (Phase 1 Players sub-view — signal read surfaced)
+**Last updated:** 2026-06-17 (per-panel readiness gate — Phase 1 complete)
 **Target ship:** NFL kickoff, mid August 2026
 
 ---
@@ -34,6 +34,24 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**Phase 1 — the per-panel readiness gate (part 4). Phase 1 is now complete.** A
+cross-cutting front-end seam so panels degrade cleanly when data is thin, rather than
+each hard-coding its own week check. New **`readiness.jsx`**: `assessReadiness(regime,
+weeks)` — a single home for the rule — maps a panel's **regime** (structural /
+point-in-time / trend) + weeks elapsed to **ready / building / tooEarly**; a **`Gate`**
+wrapper renders the content (with a subtle "early read — weight it lightly" note when
+*building*, per law 2) or a **"too early" fallback slot** that accepts custom children
+(the hook for preseason/qualitative content later, no rework). Wired into the Team tab:
+construction = structural, Form + leakage = trend, Players = point-in-time. **Frozen at
+week 4 → everything reads `ready`, no UX change** (exactly the spec's intent). A
+`?weeksOverride=N` query param drives the clock for QA / in-season rehearsal. Verified
+live across the clock: wk4 all ready (no regressions); wk3 trend panels show the
+building note + content; wk2 trend panels hand off to the too-early slot while
+structural stays on; wk0 Players shows the slot. No console errors. **Phase 1 (spike
+signal-quality slice) is now end-to-end: engine + backtest gate + Players surface +
+readiness gate — all four parts shipped.**
+
+> earlier build
 **Phase 1 — the Players sub-view: the spike signal surfaced on the front end.** The
 engine shipped last session as parquet only; this session gives the stubbed Players
 sub-tab its purpose. Per rostered skill player, a **sortable table** answers "is this
@@ -77,41 +95,6 @@ proven real; this backtest-vs-answer-key pattern is the template for every futur
 slice. **Not yet built:** the Players sub-view surface + the per-panel readiness gate
 (Phase 1 parts 3–4).
 
-> earlier build
-**Architecture: form + leakage analytics extracted from queries.js → Python
-transforms.** `queries.js` was meant to be the client/server seam (data access
-only) but had absorbed analytics, business-logic thresholds, and tuning constants —
-an SRP violation, with the hardest math living in JS despite a polars prototype
-existing. Since a Python server is the eventual architecture, the math went to
-**Python now** (not new JS modules to later discard): every line carries forward as
-"transform → API serves same parquet." Two new transforms mirror
-`derive_lineup_slots.py`: **`compute_team_form.py`** (EWMA scoring slope, direction
-band, recent record, spectrum pos, per-week series — owns `HALF_LIFE_WK`,
-`DIRECTION_BAND`) and **`compute_team_leakage.py`** (greedy optimal lineup,
-efficiency %, coachable-vs-variance split, named fixes, per-week leak, spectrum pos —
-owns `MIN_GAMES`, `COACHABLE_RATE_MARGIN`, `HABITUAL_STARTER_THRESHOLD`). Both write
-`snapshots/derived/team_{form,leakage}_{season}.parquet` via new `data_layer`
-read/write fns. `queries.js` lost **253 net lines**: `computeForm`/`computeLeakage`/
-`optimalLineup`/`expandSlots`/`mean`/`median` gone, replaced by parquet reads +
-thin `formFromRow`/`leakageFromRow` assemblers (JSON.parse + a display-only
-`weekMax`); the JSON blobs carry view-ready camelCase so no per-item remap is
-needed. `loadTeamDetails` (League drawer) consolidated to **read** efficiency from
-the leakage parquet rather than recompute the optimal-lineup pass inline. Function
-signatures + return shapes unchanged — **no view component touched.** Two doc
-deviations: `MIN_GAMES` and `cv` are **kept** in queries.js (still used by the
-in-scope construction-depth and consistency reads, not just the moved analytics).
-Verified live across all 10 teams + the drawer: every lens reconciles exactly with
-the prior JS (Cousin 127 = 42.8 coachable + 84.2 variance with the Allen↔Brown
-fixes; Tet Lasso 82.1 all-variance / 86% efficiency; Bourne 54.2; Deb fading).
-**SOLID follow-up (same session, principle #9):** tuning constants are now **injected**
-into the pure `_team_form`/`_team_leakage` functions (DIP — `compute()` is the
-composition root, no globals reached inside the analytics); shared helpers
-(`round1`/`mean`/`median`/`spectrum_positions`) lifted into `transforms/_analytics.py`
-(DRY — one home for the spectrum-normalisation rule); the League drawer reads a
-**narrowed** `SELECT roster_id, pct, points_left` rather than the full leakage row
-(ISP). Parquet output is **byte-identical** before/after (md5-verified) — the cleanup
-is provably behaviour-preserving.
-
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
@@ -132,6 +115,7 @@ is provably behaviour-preserving.
     - Architecture refactor — form + leakage analytics extracted from queries.js → Python transforms (compute_team_form.py + compute_team_leakage.py → snapshots/derived/), tuning constants moved with them; queries.js slimmed to a thin read+assemble seam (−253 lines); loadTeamDetails efficiency consolidated to read the leakage parquet. View components untouched.
     - Phase 1 spike signal-quality engine — compute_player_signal.py → derived/player_signal_{season}.parquet (opportunity-vs-efficiency decomposition, regression_risk, sample-gated read); backtest_player_signal.py validates the shipped function against the full-2025 answer key (beats naive recent-points 13% on MAE; spike group regresses ~3.9 pts/g while sticky holds). First decision-critique slice; data + backtest only, no UI yet.
     - Phase 1 Players sub-view — sortable table surfacing the signal read per player (recent /g, directional verdict, volume rank, TD share); loadTeamPlayers(rosterId) seam reads player_signal.parquet (no JS math); direction-not-projection, question-framed (laws 2+4), sample-gated. The front end's first decision-coach surface.
+    - Phase 1 per-panel readiness gate — readiness.jsx (assessReadiness + Gate): per-panel regime (structural/point-in-time/trend) → ready/building/tooEarly, with a "too early" fallback slot (accepts preseason content later) and an early-read note when building; wired into the Team tab (?weeksOverride=N for QA). Closes Phase 1.
 
 > not yet built
     >> backend
@@ -144,23 +128,22 @@ is provably behaviour-preserving.
           Remaining: more panels (per the Build Order below), deployment.
 
 ## Current build target
-**Phase 1 — the spike signal-quality read** (first decision-critique slice); the
-"first usable critique by kickoff" goal (timeline soft — personal project). The
-descriptive dashboard base (Team Overview's 4 lenses + League power rankings) is
-**done (Phase 0)**; the build now turns from *showing team state* to *grading a
-decision against a prior*. Still frozen at Week 4 of 2025 for building; the full
-2025 season (wks 1–18) is the backtest answer key.
+**Phase 1 (the spike signal-quality slice) is COMPLETE** — all four parts shipped:
+(1) the engine (`compute_player_signal.py`), (2) the backtest gate (beats naive
+recent-points −13% MAE on the full-2025 answer key), (3) the Players sub-view surface
+(sortable table, direction-not-projection, question-framed), and (4) the per-panel
+readiness gate (`readiness.jsx` — regimes + fallback slot). The descriptive dashboard
+(Phase 0) plus the first decision-critique engine are both done; the project has made
+the leap from *showing team state* to *grading a decision against a prior*. Still
+frozen at Week 4 of 2025 for building.
 
-**Engine + backtest gate (parts 1–2) and the Players sub-view surface (part 3) now
-DONE.** The signal beats the naive "recent points" baseline (−13% MAE), cleared its
-backtest gate, and is now live on the front end as a sortable per-player table
-(`loadTeamPlayers` reading `player_signal.parquet`; direction-not-projection,
-question-framed, sample-gated). **Remaining in Phase 1:** (4) the cross-cutting
-**per-panel readiness gate** — give every panel a self-declared readiness regime
-(structural / point-in-time / trend) and a "too early" fallback slot, so trend reads
-degrade cleanly and language calibrates to weeks of data. Build the seam now (frozen at
-week 4, so all panels turn on anyway); it's also the right home for the
-"don't speak confidently after 1–2 live weeks" calibration. That closes Phase 1.
+**Next: Phase 2 — the projections substrate** (see Version Roadmap / PRODUCT_ROADMAP).
+A `fantasypros.py` fetcher → current projections, plus a transform producing a
+**consensus + disagreement (spread)** read. This is the hinge: it supplies the forward
+prior every later decision slice rests on, calibrates the spike read's *forward*
+language, and fixes the engine's one honest blind spot (the Kamara-style decline that
+usage alone can't see — a real backtest miss this session surfaced). The spread itself
+becomes the law-2 confidence signal (tight consensus = act, wide = coin-flip).
 
 ## Version Roadmap
 → **Source of truth: `scope docs/PRODUCT_ROADMAP.md`** — phase detail, the four
@@ -199,24 +182,23 @@ carry the "Powered by LeagueLogs API" attribution.
 
 ## Next single highest-leverage move
 
-**The per-panel readiness gate — the last piece of Phase 1 (part 4).** The signal
-engine and its Players-sub-view surface are now shipped; what's left to *close* Phase 1
-is the cross-cutting readiness infra. Give every panel a self-declared **readiness
-regime** — structural (ready at roster lock), point-in-time (ready week 1, confidence
-grows), trend (ready ~week 3–4) — and a designated **"too early" fallback slot** it
-renders when it doesn't yet have enough data. We're frozen at week 4 so every panel
-turns on regardless; the point is to **build the seam + slot now** so trend reads
-degrade cleanly later and preseason/qualitative content can drop in with no rework.
-Cross-cutting consumer: the conversation-surfaced insight that a read shouldn't *speak
-confidently after only 1–2 live weeks* — the gate is where that sample-size calibration
-lives. Do **not** use prior-season carryover as a prior (that's the Phase 2 projections
-job). This is mostly a small front-end seam (a readiness check + a fallback component),
-not new analytics.
+**Phase 2 — the projections substrate.** With Phase 1 complete (engine + backtest +
+Players surface + readiness gate), the next hinge is the forward prior every later
+decision slice rests on. Build a **`fantasypros.py` fetcher** → current-season
+projections (all I/O through `data_layer.py`; keyed on `sleeperPlayerId`), and a
+transform producing a **consensus + disagreement (spread)** read across whatever
+sources are pulled. Two payoffs: (a) the spread is the law-2 confidence signal — tight
+consensus = act, wide = coin-flip; (b) it gives the spike read a *forward* prior to
+regress toward, fixing the one honest blind spot the backtest surfaced (Kamara: usage
+looked fine, the player declined — usage alone can't see talent/situation change).
+Vegas game totals via an `odds.py` fetcher are an optional cheap add here (game
+environment). Do **not** use prior-season carryover as the prior (biased by
+age/injury/scheme). This is back to **Python/data-layer work** (fetcher + transform),
+not front-end.
 
-After this, Phase 1 is complete and the next move is **Phase 2 — the projections
-substrate** (FantasyPros fetcher → forward prior), the hinge everything credible
-depends on, and the fix for the engine's one honest blind spot (the Kamara-style
-decline that usage alone can't see).
+The readiness gate's `building`/`tooEarly` language is the first consumer waiting on
+this: once a forward prior exists, early-season reads can be *calibrated* rather than
+merely *gated*.
 
 All Team-tab work should respect the team switcher already wired in.
 
@@ -225,8 +207,8 @@ All Team-tab work should respect the team switcher already wired in.
 These refine shipped lenses; pick up alongside or after the Players sub-view.
 
 > ✅ **Done (2026-06-07):** Lens-4 reframe (retrospective → improvement) and the Form
-> lens EWMA switch both shipped — see the most-recent maintenance entry above. Two
-> backlog items remain:
+> lens EWMA switch both shipped. ✅ **Done (2026-06-17):** item 2 (per-panel readiness
+> gate) shipped as `readiness.jsx` — see the maintenance log. **One backlog item remains:**
 
 1. **Reframe the Lens-4 "coachable" fix from confident imperative → advisory question
    (and own its predictive weakness).** The shipped coachable fix says *"start X over Y
@@ -254,19 +236,15 @@ These refine shipped lenses; pick up alongside or after the Players sub-view.
      projections / ADP) before calling anything coachable; gate the language on sample
      size (see item 2). Until then, keep coachable **retrospective**, not predictive.
 
-2. **Per-panel readiness gate (build the seam now; flip panels on later).** Give every
-   panel a self-declared **readiness check** that decides whether it has enough data to
-   turn on, else renders a **"too early"** state. Regimes: **structural** (ready at roster
-   lock), **point-in-time** (ready week 1, confidence grows with weeks), **trend** (ready
-   ~week 3–4). We are frozen at week 4, so all panels currently turn on — the point is to
-   build the gate + a designated fallback slot now so trend panels can degrade cleanly and
-   **preseason/qualitative content can drop into the "too early" slot later with no rework.**
-   Do **not** use backward-looking prior-season carryover as a prior (biased by age/injury/
-   scheme/surrounding-talent changes). Early-season value is a forward-looking problem —
-   current-year projections/ADP/odds (FantasyPros V3, The Odds unbuilt) or AI (V5);
-   preseason content is undesigned, deferred. Cross-cutting: compute early, but calibrate
-   the language to the sample size. **(Item 1's coachable fix is the first concrete
-   consumer of this "calibrate language to sample size" rule.)**
+2. ✅ **DONE (2026-06-17) — Per-panel readiness gate.** Shipped as `readiness.jsx`:
+   `assessReadiness(regime, weeks)` + a `Gate` wrapper. Regimes — **structural** (ready at
+   roster lock), **point-in-time** (ready week 1, confidence grows), **trend** (ready
+   ~week 3–4) — map to ready / building / tooEarly; a **"too early" fallback slot** accepts
+   custom children (the preseason-content hook, no rework) and a *building* note calibrates
+   language on thin samples. Wired into the Team tab (construction = structural, Form +
+   leakage = trend, Players = point-in-time). Frozen at week 4 → all ready; `?weeksOverride=N`
+   drives the clock for QA. The deeper "calibrate to a forward prior" half is **Phase 2**
+   (projections) — the gate is the seam; the prior that sharpens it comes next.
 
 ## The step after (unconfirmed, subject to change)
 

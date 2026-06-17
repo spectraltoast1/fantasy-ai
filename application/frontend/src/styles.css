@@ -358,3 +358,21 @@ body {
 .pt-vol-fill { height: 100%; border-radius: 3px; }
 .pt-vol-pct { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; width: 22px; }
 .pt-td-hot { color: #d2849c; }
+
+/* Per-panel readiness gate — the "too early" fallback slot + the early-read note. */
+.ready-toosoon {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 14px 16px; border: 1px dashed var(--line); border-radius: 8px;
+  background: var(--panel-2);
+}
+.ready-toosoon-tag {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--muted); background: var(--panel); border: 1px solid var(--line);
+  padding: 3px 8px; border-radius: 6px; white-space: nowrap; flex-shrink: 0; margin-top: 1px;
+}
+.ready-toosoon-text { font-size: 12.5px; color: var(--muted); line-height: 1.6; }
+.ready-building {
+  font-size: 11px; font-style: italic; color: var(--muted);
+  margin-bottom: 12px; padding-left: 10px; border-left: 2px solid var(--line);
+}
+.ready-slot { width: 100%; }
