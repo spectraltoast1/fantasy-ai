@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-06-18 (Season-replay Session A — the `as_of_week` backend — landed)
+**Last updated:** 2026-06-18 (Season-replay Session B — the front-end week selector — landed; the build grouping is COMPLETE)
 **Target ship:** NFL kickoff, mid August 2026
 
 ---
@@ -34,6 +34,30 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**Season-replay Session B — the front-end week selector (part 4). The whole Season-replay
+build grouping is now COMPLETE.** A global "As of" week dropdown in the App shell topnav
+(`App.jsx`) sets the active `as_of_week`; one selection applies across League + Team and
+persists across tab switches (state lives in the shell, editable from every current/future
+tab). It threads through `queries.js` via two SQL fragments: `asOfSlice(table, n)` picks
+week N's slice from the tall derived parquets (form/leakage/player_signal), and
+`weekCutoff(n)` bounds the still-in-JS `season.parquet` reads to `week ≤ N` — including
+`SQL_CURRENT_TEAM`'s `arg_max(roster_id, week)`, so the front-end roster resolution becomes
+"latest week ≤ N" too (the JS half of the roster-as-of-N fix; departed/current depth-chart
+flags are now correct as-of-N, not just as-of-latest). `n == null` ⇒ latest, so every read's
+default is unchanged. New `loadWeeks()` feeds the dropdown (weeks 1..latest); **default =
+latest** (today week 4 — a live app opens on the real current week; the selector only travels
+*back*). The readiness gate now runs off the real selected week (`weeksElapsed = asOfWeek`),
+and the temporary **`?weeksOverride` QA param is retired** (the selector is the real driver).
+Verified live across the clock: default opens on week 4 (no regression — Bski #1 @ 151.4,
+"Weeks 1–4"); week-2 League reshuffles to the 2-week cutoff ("Weeks 1–2", Tet Lasso #1 @
+153.3, records ≤ 2 games); week persists across League↔Team; Team Overview Form + leakage
+(trend) render "Too early" at week 2 while construction (structural) stays on; Players
+(point-in-time) shows the "Early read… weight it lightly" note at week 1; roster-as-of-N
+departed flag visible (Jauan Jennings → Bourne Again); no console errors. **Out of scope
+(unchanged):** not past week 4; no prior-season selector; not Phase 2. **Next: Phase 2 —
+the projections substrate** (FantasyPros fetcher → consensus/spread forward prior).
+
+> earlier build
 **Season-replay Session A — the `as_of_week` snapshot dimension (backend; parts 1–3 of
 the build grouping).** Lets every derived analytic be recomputed as of any past week N —
 the tool exactly as it would have read through week N, every analytic on weeks ≤ N.
@@ -81,24 +105,6 @@ session, so tomorrow's 4am launchd run picks up the patch automatically. Histori
 schedule off the laptop to an always-on host — the real fix for both API flakiness and
 sleep-coalescing.
 
-> earlier build
-**Phase 1 — the per-panel readiness gate (part 4). Phase 1 is now complete.** A
-cross-cutting front-end seam so panels degrade cleanly when data is thin, rather than
-each hard-coding its own week check. New **`readiness.jsx`**: `assessReadiness(regime,
-weeks)` — a single home for the rule — maps a panel's **regime** (structural /
-point-in-time / trend) + weeks elapsed to **ready / building / tooEarly**; a **`Gate`**
-wrapper renders the content (with a subtle "early read — weight it lightly" note when
-*building*, per law 2) or a **"too early" fallback slot** that accepts custom children
-(the hook for preseason/qualitative content later, no rework). Wired into the Team tab:
-construction = structural, Form + leakage = trend, Players = point-in-time. **Frozen at
-week 4 → everything reads `ready`, no UX change** (exactly the spec's intent). A
-`?weeksOverride=N` query param drives the clock for QA / in-season rehearsal. Verified
-live across the clock: wk4 all ready (no regressions); wk3 trend panels show the
-building note + content; wk2 trend panels hand off to the too-early slot while
-structural stays on; wk0 Players shows the slot. No console errors. **Phase 1 (spike
-signal-quality slice) is now end-to-end: engine + backtest gate + Players surface +
-readiness gate — all four parts shipped.**
-
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
@@ -121,7 +127,8 @@ readiness gate — all four parts shipped.**
     - Phase 1 Players sub-view — sortable table surfacing the signal read per player (recent /g, directional verdict, volume rank, TD share); loadTeamPlayers(rosterId) seam reads player_signal.parquet (no JS math); direction-not-projection, question-framed (laws 2+4), sample-gated. The front end's first decision-coach surface.
     - Phase 1 per-panel readiness gate — readiness.jsx (assessReadiness + Gate): per-panel regime (structural/point-in-time/trend) → ready/building/tooEarly, with a "too early" fallback slot (accepts preseason content later) and an early-read note when building; wired into the Team tab (?weeksOverride=N for QA). Closes Phase 1.
     - leaguelogs snapshot reliability — snapshot() rewritten to write incrementally (cumulative today's-rows persisted after each profile) so a mid-run API failure leaves a recoverable partial day instead of discarding the whole run; idempotent re-run replaces a partial day (dedup on snapshot_date). 2026-06-18 captured (5 profiles, 3,409 rows; history → 14 dates). Follow-up still open: retry/backoff + off-laptop host.
-    - Season-replay backend (Session A; parts 1–3) — `as_of_week` first-class column on the three derived analytics; tall grain `(season, as_of_week, entity)` materialized N=1..maxweek (each transform loops, filtering input to `week ≤ N`). Roster-as-of-N correctness fix falls out of that filter (`arg_max(week)` → "latest week ≤ N"). Per-analytic windowing framework: injected EWMA half-life via shared `_weighted_rates`; `backtest_player_signal.py --sweep` tunes the opportunity half-life on the 2025 answer key → ships cumulative (tested, not guessed). `data_layer` reads take optional `as_of_week` (default latest); `queries.js` default-latest guard keeps the front end on week 4. **Front-end week selector is Session B (not yet built).**
+    - Season-replay backend (Session A; parts 1–3) — `as_of_week` first-class column on the three derived analytics; tall grain `(season, as_of_week, entity)` materialized N=1..maxweek (each transform loops, filtering input to `week ≤ N`). Roster-as-of-N correctness fix falls out of that filter (`arg_max(week)` → "latest week ≤ N"). Per-analytic windowing framework: injected EWMA half-life via shared `_weighted_rates`; `backtest_player_signal.py --sweep` tunes the opportunity half-life on the 2025 answer key → ships cumulative (tested, not guessed). `data_layer` reads take optional `as_of_week` (default latest); `queries.js` default-latest guard keeps the front end on week 4. **Front-end week selector is Session B.**
+    - Season-replay front-end (Session B; part 4 — grouping COMPLETE) — global "As of" week dropdown in the App shell (`App.jsx`); one selection drives League + Team and persists across tabs. `queries.js` threads `asOfWeek` via `asOfSlice(table, n)` (pick the week-N slice of the tall derived parquets) + `weekCutoff(n)` (bound inline `season.parquet` reads to `week ≤ N`, including `SQL_CURRENT_TEAM`'s `arg_max(roster_id, week)` → front-end roster-as-of-N); `n == null` ⇒ latest, so defaults are unchanged. New `loadWeeks()` feeds the dropdown (weeks 1..latest, default = latest = current week; travels back only). Readiness gate now runs off the selected week (`weeksElapsed = asOfWeek`); the temporary `?weeksOverride` QA param is retired. Verified live across weeks 1–4 (cutoff reshuffles rankings; trend panels degrade to too-early; roster-as-of-N departed flags; no console errors).
 
 > not yet built
     >> backend
@@ -143,19 +150,18 @@ readiness gate (`readiness.jsx` — regimes + fallback slot). The descriptive da
 the leap from *showing team state* to *grading a decision against a prior*. Still
 frozen at Week 4 of 2025 for building.
 
-**Next, before Phase 2: the Season-replay build grouping — Session B (front-end).**
-Session A (the `as_of_week` backend — parts 1–3) **is done** (see the most-recent build
-log): the three derived analytics are tall snapshots over weeks 1–4, roster-as-of-N is
-fixed, windowing is declared+tuned per analytic, and `queries.js` defaults to the latest
-week via a guard. **Session B is the only remaining piece:** the front-end **week
-selector** (part 4) — thread `as_of_week` through `queries.js` (derived reads pick the
-matching slice; the still-in-JS SQL reads filter `WHERE week ≤ N`), wire it into the
-**readiness gate** so past-week views render the real `building`/`tooEarly` states, and
-**retire the temporary `?weeksOverride` QA param** for the real selector. Default = latest
-week. **Open decision for the builder:** selector placement — lean **global header**
-(applies across League + Team) vs per-tab. **Then Phase 2 — the projections substrate**
-(FantasyPros fetcher → consensus/spread forward prior; the hinge, and the fix for the
-Kamara-style blind spot). See "The step after".
+**The Season-replay build grouping is COMPLETE (both sessions shipped).** Session A (the
+`as_of_week` backend — parts 1–3) and Session B (the front-end week selector — part 4) are
+both done (see the build log): the three derived analytics are tall snapshots over weeks
+1–4, roster-as-of-N is fixed (backend + front-end), windowing is declared+tuned per analytic,
+and a **global "As of" week dropdown** in the App shell threads the selected week through
+`queries.js` (derived reads pick the matching slice; inline SQL reads filter `WHERE week ≤ N`),
+drives the readiness gate, and retired the `?weeksOverride` param. Default = latest week
+(today week 4); the selector travels back only.
+
+**Next: Phase 2 — the projections substrate** (FantasyPros fetcher → consensus/spread forward
+prior; the hinge everything credible depends on, and the fix for the Kamara-style blind spot).
+See "The step after". This is back to Python/data-layer work.
 
 ## Version Roadmap
 → **Source of truth: `scope docs/PRODUCT_ROADMAP.md`** — phase detail, the four
@@ -192,21 +198,20 @@ wire / full player pool, IR roster overages, zero-stat rows). One product note k
 that consume it (trade analysis, value-aware rankings) are V4; any UI showing it must
 carry the "Powered by LeagueLogs API" attribution.
 
-## Next single highest-leverage move — the Season-replay build grouping
+## Season-replay build grouping — COMPLETE (design record)
 
-**One build grouping, two sessions, before Phase 2.** Let the user view the dashboard
+**One build grouping, two sessions, done before Phase 2.** Lets the user view the dashboard
 *as of any past week N* — the tool exactly as it would have looked through week N, every
-analytic recomputed on weeks ≤ N. A real product feature (a week selector), the in-season
+analytic recomputed on weeks ≤ N. A real product feature (the week selector), the in-season
 "now advances each week" mechanism, and the QA instrument for every future engine. We are
-**still frozen at week 4** — this does NOT expand the data; it lets us inspect weeks 1–3
-states.
+**still frozen at week 4** — this did NOT expand the data; it lets us inspect weeks 1–3 states.
 
-> **STATUS (2026-06-18):** ✅ **Session A (parts 1–3) is DONE** — `as_of_week` dimension
-> + roster-as-of-N + windowing framework, all backend, verified and merged. The part 1–3
-> text below is now *built*, kept as the design record. **Only Part 4 (Session B,
-> front-end selector) remains** — see it below; that is the next session's whole job.
+> **STATUS (2026-06-18):** ✅ **DONE — both sessions shipped & merged.** Session A (parts
+> 1–3, the `as_of_week` backend + roster-as-of-N + windowing framework) and Session B (part
+> 4, the front-end week selector) are complete and verified. The parts 1–4 text below is kept
+> as the design record. **Next is Phase 2 (projections substrate)** — see "The step after".
 
-> **Decided design (don't re-litigate; built reasons in chat 2026-06-18):**
+> **Decided design (built reasons in chat 2026-06-18):**
 
 **Part 1 — `as_of_week`, a temporal-snapshot dimension (backend).** Add `as_of_week`
 as a first-class **column** on the three derived analytics (`player_signal`,
@@ -245,15 +250,15 @@ roster a player belonged to in their latest week **≤ N**." Thread the cutoff t
 at week N (trades/adds), not just their numbers. This is the cleanest proof `as_of_week`
 is a true dimension; fix it as part of this work.
 
-**Part 4 — the week selector (front-end product feature).** A selector that sets the
-active `as_of_week`; thread it through `queries.js` — derived reads pick the matching
-`as_of_week` slice, the still-in-JS SQL reads (power rankings, construction, vitals,
-all-play) filter `WHERE week ≤ N`. Wire it into the **readiness gate** so past-week
-views render the real `building`/`tooEarly` states, and **retire the temporary
-`?weeksOverride` QA param** in favour of the real selector. Default = latest week.
-Build as a real product feature (not throwaway — backend is identical either way).
-**Open decision for the builder:** selector placement — lean **global header** (applies
-across League + Team consistently) vs per-tab.
+**Part 4 — the week selector (front-end product feature). ✅ BUILT (Session B).** A
+selector that sets the active `as_of_week`, threaded through `queries.js` — derived reads
+pick the matching `as_of_week` slice (`asOfSlice`), the still-in-JS SQL reads (power
+rankings, construction, vitals, all-play) filter `WHERE week ≤ N` (`weekCutoff`, including
+`SQL_CURRENT_TEAM` for front-end roster-as-of-N). Folded into the **readiness gate**
+(`weeksElapsed = asOfWeek`) so past-week views render the real `building`/`tooEarly` states;
+the temporary `?weeksOverride` QA param is **retired**. Default = latest week; travels back
+only. **Resolved decisions:** placement = **global header** (App-shell dropdown, applies
+across League + Team, editable from every tab); control = **dropdown** (weeks 1..latest).
 
 **Suggested sequencing (respect the 3-commit cap):**
 - ✅ **Session A — backend (DONE 2026-06-18):** parts 1–3 shipped. `as_of_week` in the
@@ -264,11 +269,13 @@ across League + Team consistently) vs per-tab.
   parquets are now **tall**, and `queries.js` already has a default-latest guard
   (`WHERE as_of_week = (SELECT max …)`) on the three derived reads — the selector
   parameterises that inner `max(as_of_week)`.
-- **Session B — front-end (NEXT):** part 4. Selector + thread the week through `queries.js`
-  + panels; fold into the readiness gate; remove `?weeksOverride`. Verify live across weeks
-  1–4 (week-2 view shows trend panels as "too early", etc.). **Preview gotcha:** a stray
-  dev server on 5173 serves *main's* frontend — start the worktree's own server on a free
-  port (e.g. `--port 5273`) to see your source.
+- ✅ **Session B — front-end (DONE 2026-06-18):** part 4. Global "As of" dropdown in `App.jsx`
+  + threaded the week through `queries.js` (`asOfSlice`/`weekCutoff` + `loadWeeks()`) + panels;
+  folded into the readiness gate (`weeksElapsed = asOfWeek`); retired `?weeksOverride`. Verified
+  live across weeks 1–4 (week-2 trend panels "too early"; rankings reshuffle to the cutoff;
+  roster-as-of-N departed flags; week persists across tabs; no console errors). **Preview
+  gotcha (confirmed):** point the worktree's `.claude/launch.json` at a free port (`--port 5273`)
+  — a stray 5173 server serves *main's* frontend, not this source.
 
 **Non-goals:** not expanding past week 4; not Phase 2. This is the replay/inspection
 layer that precedes Phase 2.

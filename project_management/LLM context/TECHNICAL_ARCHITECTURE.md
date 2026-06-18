@@ -97,13 +97,16 @@ form, leakage) derive `n` dynamically and widen as weeks append; a new standard 
 league means new parquets + a transform re-run, not new logic.
 
 **Season-replay seam (`as_of_week`):** the three derived parquets are **tall** — one slice
-per as-of week N. `queries.js` reads default to the latest week via a guard
-(`WHERE as_of_week = (SELECT max(as_of_week) FROM …)` on the derived reads), so today's
-behavior is unchanged. The pending **week selector** (Session B) parameterises that inner
-`max(as_of_week)` and adds `WHERE week ≤ N` to the still-in-JS SQL reads (power rankings,
-construction, vitals, all-play); it folds into the readiness gate and retires the
-temporary `?weeksOverride` QA param. This is the one place "which week am I viewing" will
-live behind the seam.
+per as-of week N. A global "As of" **week selector** lives in the App shell (`App.jsx`):
+`App.jsx` owns the `asOfWeek` state and passes it to both panels, so one active week applies
+across League + Team and persists across tab switches. It threads through `queries.js` via two
+helpers — `asOfSlice(table, n)` parameterises the derived reads' inner `max(as_of_week)` (pick
+week N's slice; `n == null` ⇒ latest, the default), and `weekCutoff(n)` adds `WHERE week ≤ N`
+to the still-in-JS SQL reads (power rankings, construction, vitals, all-play — including
+`SQL_CURRENT_TEAM`'s `arg_max(roster_id, week)`, the front-end half of roster-as-of-N).
+`loadWeeks()` feeds the dropdown (weeks 1..latest; default = latest, travels back only). The
+selector drives the readiness gate (`weeksElapsed = asOfWeek`) and replaced the temporary
+`?weeksOverride` QA param. This is the one place "which week am I viewing" lives behind the seam.
 
 **Latent assumptions (won't self-correct — silent wrong output, not an error):**
 - **Standard lineup shape.** `compute_team_leakage.py`'s swap-class split (`QB` vs

@@ -3,15 +3,16 @@ import { loadPowerRankings, loadTeamDetails, POS } from './queries.js';
 import { POS_COLORS } from './posColors.js';
 
 // League tab: league-wide views. Today that's Power Rankings (cards + drill-down
-// drawer); manager dossiers and other league overviews will join it here.
-export default function LeaguePanel() {
+// drawer); manager dossiers and other league overviews will join it here. `asOfWeek`
+// (from the shell's week selector) sets which week N every read is "as of".
+export default function LeaguePanel({ asOfWeek }) {
   const [data, setData] = useState(null);
   const [details, setDetails] = useState(null);
   const [selected, setSelected] = useState(null); // rosterId of the open drawer
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    Promise.all([loadPowerRankings(), loadTeamDetails()])
+    Promise.all([loadPowerRankings(asOfWeek), loadTeamDetails(asOfWeek)])
       .then(([rankings, detail]) => {
         setData(rankings);
         setDetails(detail);
@@ -20,7 +21,7 @@ export default function LeaguePanel() {
         console.error(e);
         setError(e.message ?? String(e));
       });
-  }, []);
+  }, [asOfWeek]);
 
   if (error) {
     return (

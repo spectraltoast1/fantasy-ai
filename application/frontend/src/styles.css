@@ -33,6 +33,17 @@ body {
 .topnav-tab:hover { color: var(--text); }
 .topnav-tab.active { color: var(--text); border-bottom-color: var(--accent); }
 
+/* Global week selector (Season-replay) — sits at the far right of the top nav,
+   applies the active as-of week across every tab. */
+.week-switch { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.week-switch-label { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.week-switch select {
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 8px;
+  padding: 6px 10px; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.week-switch select:hover { border-color: #3a4254; }
+
 .page { max-width: 880px; margin: 0 auto; padding: 32px 24px 64px; }
 
 .page-head { margin-bottom: 24px; }
