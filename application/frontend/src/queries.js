@@ -19,13 +19,15 @@ export const POS = ['QB', 'RB', 'WR', 'TE'];
 export const MY_USERNAME = 'spectraltoast1';
 
 // Team-week score collapses per-player rows to one row per (team, week), since
-// roster_total_points / matchup_result repeat across a team's players.
-const SQL_TEAMS = `
+// roster_total_points / matchup_result repeat across a team's players. Bounded to
+// weeks ≤ N by the week selector (n == null → all weeks, the latest-week default).
+const SQL_TEAMS = (n) => `
   WITH team_week AS (
     SELECT roster_id, week,
            any_value(roster_total_points) AS team_pts,
            any_value(matchup_result)      AS result
     FROM 'season.parquet'
+    WHERE ${weekCutoff(n)}
     GROUP BY roster_id, week
   ),
   agg AS (
@@ -45,11 +47,11 @@ const SQL_TEAMS = `
 `;
 
 // Average starter points by position per team (QB/RB/WR/TE) — the strength breakdown.
-const SQL_POSITIONS = `
+const SQL_POSITIONS = (n) => `
   WITH pos_week AS (
     SELECT roster_id, week, position, sum(sleeper_points) AS pos_pts
     FROM 'season.parquet'
-    WHERE is_starter AND position IN ('QB','RB','WR','TE')
+    WHERE is_starter AND position IN ('QB','RB','WR','TE') AND ${weekCutoff(n)}
     GROUP BY roster_id, week, position
   )
   SELECT roster_id, position, round(avg(pos_pts), 2) AS avg_pos_pts
@@ -60,13 +62,14 @@ const SQL_POSITIONS = `
 /**
  * Power Rankings: teams ranked by avg PPG, with positional strength breakdown,
  * record, week-to-week consistency, and a 0-100 power score vs. the leader.
+ * @param {number} [asOfWeek] view as of week N (weeks ≤ N); omit for the latest week
  * @returns {Promise<{teams: object[], maxStarterTotal: number, season: number, weeks: number[]}>}
  */
-export async function loadPowerRankings() {
+export async function loadPowerRankings(asOfWeek) {
   const [teams, positions, weekRows, seasonRows] = await Promise.all([
-    query(SQL_TEAMS),
-    query(SQL_POSITIONS),
-    query(`SELECT DISTINCT week FROM 'season.parquet' ORDER BY week`),
+    query(SQL_TEAMS(asOfWeek)),
+    query(SQL_POSITIONS(asOfWeek)),
+    query(`SELECT DISTINCT week FROM 'season.parquet' WHERE ${weekCutoff(asOfWeek)} ORDER BY week`),
     query(`SELECT DISTINCT season FROM 'season.parquet'`),
   ]);
 
@@ -117,11 +120,12 @@ export async function loadPowerRankings() {
 // ---------------------------------------------------------------------------
 
 // One row per (team, week): the team's total points and W/L that week.
-const SQL_TEAM_WEEK = `
+const SQL_TEAM_WEEK = (n) => `
   SELECT roster_id, week,
          any_value(roster_total_points) AS pts,
          any_value(matchup_result)      AS result
   FROM 'season.parquet'
+  WHERE ${weekCutoff(n)}
   GROUP BY roster_id, week
   ORDER BY roster_id, week
 `;
@@ -132,26 +136,26 @@ const SQL_TEAM_WEEK = `
 // blobs carry view-ready camelCase keys so consuming them is JSON.parse, nothing more.
 //
 // These parquets are now tall, grain (as_of_week, roster_id): the Season-replay
-// dimension. Until the week selector lands (Session B), every read defaults to the
-// latest as_of_week, so the dashboard renders the current week exactly as before. The
-// `WHERE as_of_week = (SELECT max …)` clause is the seam the selector will parameterise.
-const SQL_TEAM_FORM = `SELECT * FROM 'team_form.parquet'
-  WHERE as_of_week = (SELECT max(as_of_week) FROM 'team_form.parquet')`;
-const SQL_TEAM_LEAKAGE = `SELECT * FROM 'team_leakage.parquet'
-  WHERE as_of_week = (SELECT max(as_of_week) FROM 'team_leakage.parquet')`;
+// dimension. The week selector parameterises which as-of slice is read — asOfSlice(n)
+// picks week N, and n == null defaults to the latest as_of_week, so the dashboard
+// renders the current week exactly as before.
+const SQL_TEAM_FORM = (n) => `SELECT * FROM 'team_form.parquet'
+  WHERE ${asOfSlice('team_form.parquet', n)}`;
+const SQL_TEAM_LEAKAGE = (n) => `SELECT * FROM 'team_leakage.parquet'
+  WHERE ${asOfSlice('team_leakage.parquet', n)}`;
 // The drawer only displays efficiency, so it reads just those two columns rather
 // than the full leakage row (which the Team Overview lens needs in whole).
-const SQL_TEAM_EFFICIENCY = `SELECT roster_id, pct, points_left FROM 'team_leakage.parquet'
-  WHERE as_of_week = (SELECT max(as_of_week) FROM 'team_leakage.parquet')`;
+const SQL_TEAM_EFFICIENCY = (n) => `SELECT roster_id, pct, points_left FROM 'team_leakage.parquet'
+  WHERE ${asOfSlice('team_leakage.parquet', n)}`;
 
 // Per team & position: total starter points and number of starter-slots used,
 // so per-start output can be compared like-for-like against the league.
-const SQL_POS_STARTS = `
+const SQL_POS_STARTS = (n) => `
   SELECT roster_id, position,
          sum(sleeper_points) AS tot,
          count(*)            AS starts
   FROM 'season.parquet'
-  WHERE is_starter AND position IN ('QB','RB','WR','TE')
+  WHERE is_starter AND position IN ('QB','RB','WR','TE') AND ${weekCutoff(n)}
   GROUP BY roster_id, position
 `;
 
@@ -162,13 +166,14 @@ const SQL_POS_STARTS = `
  *     skill) — read from the pre-computed leakage parquet; the drawer displays it,
  *     it no longer computes it (the optimal-lineup pass lives in Python now)
  *   - weeks: per-week points, result, and whether they beat the league median
+ * @param {number} [asOfWeek] view as of week N (weeks ≤ N); omit for the latest week
  * @returns {Promise<Object<number, object>>} keyed by roster_id
  */
-export async function loadTeamDetails() {
+export async function loadTeamDetails(asOfWeek) {
   const [teamWeeks, posStarts, effRows] = await Promise.all([
-    query(SQL_TEAM_WEEK),
-    query(SQL_POS_STARTS),
-    query(SQL_TEAM_EFFICIENCY),
+    query(SQL_TEAM_WEEK(asOfWeek)),
+    query(SQL_POS_STARTS(asOfWeek)),
+    query(SQL_TEAM_EFFICIENCY(asOfWeek)),
   ]);
 
   // Efficiency (actual vs optimal lineup) is pre-computed by compute_team_leakage.py.
@@ -276,7 +281,7 @@ export async function loadTeamDetails() {
 // whole point of the depth view), so this looks at every skill player who logged
 // a game, not just starters. starter_pts isolates output that actually counted
 // toward the team's score — the basis for the star-dependence read.
-const SQL_ROSTER = `
+const SQL_ROSTER = (n) => `
   SELECT roster_id,
          player_display_name           AS name,
          any_value(position)           AS position,
@@ -285,18 +290,20 @@ const SQL_ROSTER = `
          round(sum(sleeper_points), 1) AS total,
          round(sum(CASE WHEN is_starter THEN sleeper_points ELSE 0 END), 1) AS starter_pts
   FROM 'season.parquet'
-  WHERE position IN ('QB','RB','WR','TE')
+  WHERE position IN ('QB','RB','WR','TE') AND ${weekCutoff(n)}
   GROUP BY roster_id, name
 `;
 
-// Each player's CURRENT team = the roster they belong to in their latest week
-// (arg_max over week). roster_id is per-week in the join, so a traded/dropped
-// player lands here on whoever rosters them now — letting a former team's view
-// mark him as departed while still crediting the weeks he played there.
-const SQL_CURRENT_TEAM = `
+// Each player's CURRENT team = the roster they belong to in their latest week ≤ N
+// (arg_max over week, bounded by the selector). roster_id is per-week in the join, so
+// a traded/dropped player lands here on whoever rostered them as of week N — letting a
+// former team's view mark him as departed while still crediting the weeks he played
+// there. This `week ≤ N` cutoff is the front-end half of the roster-as-of-N fix; it
+// mirrors the same filter the derived transforms apply in Python.
+const SQL_CURRENT_TEAM = (n) => `
   SELECT player_display_name AS name, arg_max(roster_id, week) AS cur_roster
   FROM 'season.parquet'
-  WHERE position IN ('QB','RB','WR','TE')
+  WHERE position IN ('QB','RB','WR','TE') AND ${weekCutoff(n)}
   GROUP BY name
 `;
 
@@ -328,15 +335,16 @@ const MIN_GAMES = 2;
  *     relative Leaky↔Optimal marker) leads; the points left split into coachable
  *     (a repeatable bench-over-starter fix, still rostered) vs variance (one-week
  *     spikes, not a real mistake); named repeatable fixes; per-week leak series
+ * @param {number} [asOfWeek] view as of week N (weeks ≤ N); omit for the latest week
  * @returns {Promise<Object<number, object>>} keyed by roster_id
  */
-export async function loadTeamRosters() {
+export async function loadTeamRosters(asOfWeek) {
   const [rows, currentRows, teamRows, formRows, leakRows] = await Promise.all([
-    query(SQL_ROSTER),
-    query(SQL_CURRENT_TEAM),
+    query(SQL_ROSTER(asOfWeek)),
+    query(SQL_CURRENT_TEAM(asOfWeek)),
     query(SQL_TEAM_NAMES),
-    query(SQL_TEAM_FORM),
-    query(SQL_TEAM_LEAKAGE),
+    query(SQL_TEAM_FORM(asOfWeek)),
+    query(SQL_TEAM_LEAKAGE(asOfWeek)),
   ]);
 
   // Form (trajectory) and leakage are pre-computed by the Python transforms; this
@@ -509,15 +517,14 @@ function leakageFromRow(r) {
 // and assembles; there is no signal math in JS (it lives in the Python transform,
 // validated by backtest_player_signal.py). Default order puts the highest recent
 // scorers first — the players a manager is most likely weighing a move on.
-// Tall, grain (as_of_week, roster_id, player) — Season-replay. Defaults to the latest
-// as_of_week until the week selector lands (Session B); that selector parameterises the
-// inner `max(as_of_week)` clause.
-const SQL_PLAYER_SIGNAL = `
+// Tall, grain (as_of_week, roster_id, player) — Season-replay. The week selector picks
+// the as-of slice via asOfSlice(n); n == null defaults to the latest as_of_week.
+const SQL_PLAYER_SIGNAL = (n) => `
   SELECT player_display_name, position, games, low_sample,
          recent_ppg, td_share, opp_pct, eff_ratio, regression_risk, read, weeks_json
   FROM 'player_signal.parquet'
   WHERE roster_id = $rid
-    AND as_of_week = (SELECT max(as_of_week) FROM 'player_signal.parquet')
+    AND ${asOfSlice('player_signal.parquet', n)}
   ORDER BY recent_ppg DESC
 `;
 
@@ -529,10 +536,11 @@ const SQL_PLAYER_SIGNAL = `
  * scoring the sustainable-usage picture doesn't support (the direction behind the
  * verdict); `oppPct` (volume rank in position) and `tdShare` are the evidence.
  * @param {number} rosterId
+ * @param {number} [asOfWeek] view as of week N; omit for the latest week
  * @returns {Promise<object[]>} view-ready player rows, highest recent PPG first
  */
-export async function loadTeamPlayers(rosterId) {
-  const rows = await query(SQL_PLAYER_SIGNAL.replace('$rid', Number(rosterId)));
+export async function loadTeamPlayers(rosterId, asOfWeek) {
+  const rows = await query(SQL_PLAYER_SIGNAL(asOfWeek).replace('$rid', Number(rosterId)));
   return rows.map(playerSignalFromRow);
 }
 
@@ -584,6 +592,29 @@ export async function loadTeams() {
 }
 
 const round1 = (n) => Math.round(n * 10) / 10;
+
+// Season-replay week-selector seam. Two SQL fragments express "view the dashboard as
+// of week N"; passing n == null means "latest", so existing default behaviour is
+// unchanged. asOfSlice picks one as-of slice from a tall derived parquet; weekCutoff
+// bounds an inline season.parquet read to weeks ≤ N (the point-in-time cutoff — which
+// is also the roster-as-of-N fix where it gates arg_max(roster_id, week)).
+const asOfSlice = (table, n) =>
+  n == null
+    ? `as_of_week = (SELECT max(as_of_week) FROM '${table}')`
+    : `as_of_week = ${Number(n)}`;
+const weekCutoff = (n) => (n == null ? 'TRUE' : `week <= ${Number(n)}`);
+
+/**
+ * The weeks selectable in the week selector, plus the default (latest). Reads the
+ * source of truth for "weeks played" — distinct weeks in the season join. The selector
+ * only travels back: a live app opens on `latest` (today, week 4) and offers weeks 1..N.
+ * @returns {Promise<{weeks: number[], latest: number|null}>}
+ */
+export async function loadWeeks() {
+  const rows = await query(`SELECT DISTINCT week FROM 'season.parquet' ORDER BY week`);
+  const weeks = rows.map((r) => Number(r.week));
+  return { weeks, latest: weeks.length ? weeks[weeks.length - 1] : null };
+}
 
 // Coefficient of variation (sample stddev / mean) of a numeric list.
 function cv(xs) {

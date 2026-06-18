@@ -15,18 +15,19 @@ const SUBTABS = [
   { id: 'players', label: 'Players' },
 ];
 
-export default function TeamPanel() {
+export default function TeamPanel({ asOfWeek }) {
   const [teams, setTeams] = useState(null);
   const [summary, setSummary] = useState(null); // rosterId -> power-ranking vitals
   const [rosters, setRosters] = useState(null); // rosterId -> construction detail
   const [selected, setSelected] = useState(null); // rosterId in focus
   const [subtab, setSubtab] = useState('overview');
   const [players, setPlayers] = useState(null); // signal read for the selected team
-  const [weeks, setWeeks] = useState(0); // weeks elapsed — drives the readiness gate
   const [error, setError] = useState(null);
 
+  // Reload the team-level reads as of the selected week. Preserve the focused team
+  // across a week change (don't reset to "your team") — only default it the first time.
   useEffect(() => {
-    Promise.all([loadTeams(), loadPowerRankings(), loadTeamRosters()])
+    Promise.all([loadTeams(), loadPowerRankings(asOfWeek), loadTeamRosters(asOfWeek)])
       .then(([{ teams, myRosterId }, rankings, rosterDetail]) => {
         setTeams(teams);
         // Index power-ranking vitals (rank, record, PPG, power) by roster.
@@ -34,27 +35,27 @@ export default function TeamPanel() {
         for (const t of rankings.teams) byId[t.rosterId] = { ...t, teamCount: rankings.teams.length };
         setSummary(byId);
         setRosters(rosterDetail);
-        setWeeks(rankings.weeks?.length ?? 0);
         // Default to the user's own team; fall back to the first roster.
-        setSelected(myRosterId ?? teams[0]?.rosterId ?? null);
+        setSelected((cur) => cur ?? myRosterId ?? teams[0]?.rosterId ?? null);
       })
       .catch((e) => {
         console.error(e);
         setError(e.message ?? String(e));
       });
-  }, []);
+  }, [asOfWeek]);
 
-  // Players signal read is per-team — (re)load it whenever the selected team changes.
+  // Players signal read is per-team — (re)load it whenever the selected team or the
+  // as-of week changes.
   useEffect(() => {
     if (selected == null) return;
     setPlayers(null);
-    loadTeamPlayers(selected)
+    loadTeamPlayers(selected, asOfWeek)
       .then(setPlayers)
       .catch((e) => {
         console.error(e);
         setError(e.message ?? String(e));
       });
-  }, [selected]);
+  }, [selected, asOfWeek]);
 
   if (error) {
     return (
@@ -72,11 +73,11 @@ export default function TeamPanel() {
   const vitals = summary[selected];
   const roster = rosters[selected];
 
-  // Weeks-elapsed drives the readiness gate. A `?weeksOverride=N` query param forces
-  // the clock for QA / in-season rehearsal (see how trend panels degrade at week 1–2);
-  // absent it, the real season clock is used. Frozen at week 4 → every panel reads ready.
-  const override = new URLSearchParams(window.location.search).get('weeksOverride');
-  const weeksElapsed = override != null ? Math.max(0, Number(override)) : weeks;
+  // Weeks-elapsed drives the readiness gate: viewing the dashboard as of week N means N
+  // weeks of data have elapsed. The shell's week selector is the real driver (it replaced
+  // the temporary `?weeksOverride` QA param) — select an early week to see trend panels
+  // degrade to their building/too-early states.
+  const weeksElapsed = asOfWeek ?? 0;
 
   return (
     <div className="page">
