@@ -130,11 +130,19 @@ const SQL_TEAM_WEEK = `
 // transforms (compute_team_form.py / compute_team_leakage.py). The front end reads
 // them directly — one row per roster_id, the heavy math already done. The JSON
 // blobs carry view-ready camelCase keys so consuming them is JSON.parse, nothing more.
-const SQL_TEAM_FORM = `SELECT * FROM 'team_form.parquet'`;
-const SQL_TEAM_LEAKAGE = `SELECT * FROM 'team_leakage.parquet'`;
+//
+// These parquets are now tall, grain (as_of_week, roster_id): the Season-replay
+// dimension. Until the week selector lands (Session B), every read defaults to the
+// latest as_of_week, so the dashboard renders the current week exactly as before. The
+// `WHERE as_of_week = (SELECT max …)` clause is the seam the selector will parameterise.
+const SQL_TEAM_FORM = `SELECT * FROM 'team_form.parquet'
+  WHERE as_of_week = (SELECT max(as_of_week) FROM 'team_form.parquet')`;
+const SQL_TEAM_LEAKAGE = `SELECT * FROM 'team_leakage.parquet'
+  WHERE as_of_week = (SELECT max(as_of_week) FROM 'team_leakage.parquet')`;
 // The drawer only displays efficiency, so it reads just those two columns rather
 // than the full leakage row (which the Team Overview lens needs in whole).
-const SQL_TEAM_EFFICIENCY = `SELECT roster_id, pct, points_left FROM 'team_leakage.parquet'`;
+const SQL_TEAM_EFFICIENCY = `SELECT roster_id, pct, points_left FROM 'team_leakage.parquet'
+  WHERE as_of_week = (SELECT max(as_of_week) FROM 'team_leakage.parquet')`;
 
 // Per team & position: total starter points and number of starter-slots used,
 // so per-start output can be compared like-for-like against the league.
@@ -501,11 +509,15 @@ function leakageFromRow(r) {
 // and assembles; there is no signal math in JS (it lives in the Python transform,
 // validated by backtest_player_signal.py). Default order puts the highest recent
 // scorers first — the players a manager is most likely weighing a move on.
+// Tall, grain (as_of_week, roster_id, player) — Season-replay. Defaults to the latest
+// as_of_week until the week selector lands (Session B); that selector parameterises the
+// inner `max(as_of_week)` clause.
 const SQL_PLAYER_SIGNAL = `
   SELECT player_display_name, position, games, low_sample,
          recent_ppg, td_share, opp_pct, eff_ratio, regression_risk, read, weeks_json
   FROM 'player_signal.parquet'
   WHERE roster_id = $rid
+    AND as_of_week = (SELECT max(as_of_week) FROM 'player_signal.parquet')
   ORDER BY recent_ppg DESC
 `;
 

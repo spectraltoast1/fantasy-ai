@@ -106,9 +106,13 @@ def _team_form(weeks, median_by_week, *, half_life, direction_band):
     }
 
 
-def compute(season: int) -> pl.DataFrame:
-    season_df = data_layer.read_join_season(season)
-
+def _compute_as_of(season_df: pl.DataFrame, as_of_week: int) -> list:
+    """Per-team form rows as of one cutoff week N — `season_df` is the join filtered to
+    weeks ≤ N. Returns a list of row dicts tagged `as_of_week = N`. The EWMA trend, the
+    per-week beat-median line, and the league-relative Fading↔Surging spectrum are all
+    recomputed within weeks ≤ N, so the read is the team exactly as it would have looked
+    through week N (Part 2: the cutoff bounds *what data exists*; the EWMA half-life is
+    how data inside the cutoff is weighted — form is a trend read, so it stays decayed)."""
     # Collapse per-player rows to one row per (team, week): the team's total points
     # and W/L that week (both repeat across a team's players, so first() is exact).
     team_week = (
@@ -145,6 +149,7 @@ def compute(season: int) -> pl.DataFrame:
     for r, pos in zip(records, positions):
         rows.append(
             {
+                "as_of_week": as_of_week,
                 "roster_id": r["roster_id"],
                 "slope": r["slope"],
                 "direction": r["direction"],
@@ -156,10 +161,25 @@ def compute(season: int) -> pl.DataFrame:
                 "weeks_json": json.dumps(r["weeks"]),
             }
         )
+    return rows
 
-    df = pl.DataFrame(rows).sort("roster_id")
-    print(f"=== Team form: season={season} ===")
-    print(df.select("roster_id", "slope", "direction", "recent_w", "recent_l", "spectrum_pos"))
+
+def compute(season: int) -> pl.DataFrame:
+    season_df = data_layer.read_join_season(season)
+
+    # Materialize one tall snapshot per as-of week N = 1..maxweek: the team's form
+    # exactly as it would have read through week N. Current (latest) behavior is the
+    # N = maxweek slice. Cheap to materialize all weeks.
+    max_week = int(season_df["week"].max())
+    all_rows = []
+    for n in range(1, max_week + 1):
+        all_rows.extend(_compute_as_of(season_df.filter(pl.col("week") <= n), n))
+
+    df = pl.DataFrame(all_rows).sort("as_of_week", "roster_id")
+    print(f"=== Team form: season={season}  as_of_week 1..{max_week} ===")
+    print(df.filter(pl.col("as_of_week") == max_week).select(
+        "roster_id", "slope", "direction", "recent_w", "recent_l", "spectrum_pos"
+    ))
     return df
 
 

@@ -2,7 +2,7 @@
 
 > Engineering context document for Claude Code. Describes the stack, folder structure, data layer design, and technical principles. Updated regularly as the project evolves.
 
-**Last reviewed:** 2026-06-17
+**Last reviewed:** 2026-06-18
 
 ---
 
@@ -96,6 +96,15 @@ the parquets (`season`, `teams`, `lineup_slots`), not code. Week-windowed reads 
 form, leakage) derive `n` dynamically and widen as weeks append; a new standard Sleeper
 league means new parquets + a transform re-run, not new logic.
 
+**Season-replay seam (`as_of_week`):** the three derived parquets are **tall** — one slice
+per as-of week N. `queries.js` reads default to the latest week via a guard
+(`WHERE as_of_week = (SELECT max(as_of_week) FROM …)` on the derived reads), so today's
+behavior is unchanged. The pending **week selector** (Session B) parameterises that inner
+`max(as_of_week)` and adds `WHERE week ≤ N` to the still-in-JS SQL reads (power rankings,
+construction, vitals, all-play); it folds into the readiness gate and retires the
+temporary `?weeksOverride` QA param. This is the one place "which week am I viewing" will
+live behind the seam.
+
 **Latent assumptions (won't self-correct — silent wrong output, not an error):**
 - **Standard lineup shape.** `compute_team_leakage.py`'s swap-class split (`QB` vs
   `FLEX`=RB/WR/TE) assumes QB-dedicated + standard flex; **superflex/2QB or TE-premium
@@ -149,10 +158,10 @@ fantasy-ai/
     │   │   └── sleeper/
     │   │       └── players.parquet    # Sleeper /players/nfl registry, refreshed ≤ once/day
     │   └── snapshots/              # time-series parquet (gitignored)
-            ├── derived/                                 # pre-computed analytics (compute_*.py output)
-            │   ├── team_form_2025.parquet               # per-team trajectory: slope, direction, spectrum, weekly series
-            │   ├── team_leakage_2025.parquet            # per-team leakage: efficiency %, coachable/variance, named fixes
-            │   └── player_signal_2025.parquet           # per-player spike signal: opp vs efficiency split, regression_risk, read
+            ├── derived/                                 # pre-computed analytics (compute_*.py output); tall, grain (season, as_of_week, entity)
+            │   ├── team_form_2025.parquet               # per (as_of_week, team) trajectory: slope, direction, spectrum, weekly series
+            │   ├── team_leakage_2025.parquet            # per (as_of_week, team) leakage: efficiency %, coachable/variance, named fixes
+            │   └── player_signal_2025.parquet           # per (as_of_week, team, player) spike signal: opp vs efficiency split, regression_risk, read
             ├── leaguelogs/
             │   └── market_values.parquet            # daily market-value history, all profiles
             └── nfl_sleeper_weekly_joined/
@@ -230,9 +239,9 @@ non-negotiable architectural rule.
 - internal
 | nfl_sleeper_weekly_joined transform | snapshots/nfl_sleeper_weekly_joined/ | Joined output — one file per season (season_{season}.parquet), each week appended with a (season, week) dedup guard
 | derive_lineup_slots transform | snapshots/sleeper/{season}/ | lineup_slots_{season}.parquet — starting skill-slot requirements (slot, count, eligible) derived from the league's raw roster_positions; declares the QB/RB/WR/TE + FLEX config so the front-end "perfect lineup" / efficiency calc is exact, not inferred |
-| compute_team_form transform | snapshots/derived/ | team_form_{season}.parquet — one row per roster_id: EWMA scoring slope, direction, recent record, league-relative spectrum pos, per-week series. Pre-computed so the front-end seam just reads it (no JS trajectory math) |
-| compute_team_leakage transform | snapshots/derived/ | team_leakage_{season}.parquet — one row per roster_id: lineup efficiency %, season points-left, coachable/variance split, named fixes, per-week leak, spectrum pos. Pre-computed; feeds both the Team Overview leakage lens and the League drawer's efficiency read |
-| compute_player_signal transform | snapshots/derived/ | player_signal_{season}.parquet — one row per rostered skill player: the spike signal-quality read (Phase 1). Decomposes recent production into sticky opportunity (opp_g) vs fragile efficiency (ppo, shrunk toward the league positional mean); headline regression_risk + a sample-gated read (too_early/spike/mixed/sticky), td_share as evidence, per-week series. The first decision-critique engine slice; not a forward projection |
+| compute_team_form transform | snapshots/derived/ | team_form_{season}.parquet — **tall, grain (as_of_week, roster_id)** (Season-replay): per as-of week N=1..maxweek, one row per roster_id with the EWMA scoring slope, direction, recent record, league-relative spectrum pos, per-week series — all recomputed on weeks ≤ N. Pre-computed so the front-end seam just reads it (no JS trajectory math) |
+| compute_team_leakage transform | snapshots/derived/ | team_leakage_{season}.parquet — **tall, grain (as_of_week, roster_id)**: per as-of week N, lineup efficiency %, season points-left, coachable/variance split, named fixes, per-week leak, spectrum pos — cumulative ledger over weeks ≤ N. Roster-as-of-N: a player's "current team" resolves to his latest week ≤ N. Feeds both the Team Overview leakage lens and the League drawer's efficiency read |
+| compute_player_signal transform | snapshots/derived/ | player_signal_{season}.parquet — **tall, grain (as_of_week, roster_id, player)**: per as-of week N, one row per rostered skill player with the spike signal-quality read (Phase 1), recomputed on weeks ≤ N (roster-as-of-N applies). Decomposes recent production into sticky opportunity (opp_g, EWMA-windowed via injected half-life — ships cumulative, backtest-tuned) vs fragile efficiency (ppo, shrunk toward the league positional mean); headline regression_risk + a sample-gated read (too_early/spike/mixed/sticky), td_share as evidence, per-week series. The first decision-critique engine slice; not a forward projection |
 
 These assignments reflect current v1 decisions, not permanent rules. Future versions may snapshot additional sources (e.g., odds history for post-hoc analysis).
 
@@ -314,7 +323,24 @@ via data_layer.py, performs a single join, and writes via data_layer.py.
 
 - `audit_join.py` — audits and repairs the weekly join output for unresolved players. Reads the remainders file, checks the Sleeper player registry (refreshing it if stale), classifies each remainder as skill (appended to joined file with 0 stats), K/DEF (confirmed and discarded), or truly unknown (left in remainders for manual review). Idempotent — safe to re-run. Called automatically by join_nfl_sleeper_weekly.py; can also be run standalone with --season and --week args.
 
-- `compute_team_form.py` / `compute_team_leakage.py` — **derived-analytics transforms.** They read the season join (+ lineup_slots for leakage) and write one pre-computed row per roster_id to `snapshots/derived/`. These promote the heaviest Team Overview math out of the front-end seam (`queries.js`): the EWMA trajectory read and the optimal-lineup / leakage read, respectively, plus the tuning constants and signal thresholds they own (`HALF_LIFE_WK`/`DIRECTION_BAND`; `MIN_GAMES`/`COACHABLE_RATE_MARGIN`/`HABITUAL_STARTER_THRESHOLD`). Rationale: a Python server is the eventual architecture, so the analytics live in Python now — the front end reads pre-shaped parquet, and the server migration becomes "transform → API serves same parquet" rather than "rewrite JS math in Python." Re-run with `--season` after a join refresh. Faithful ports of the prior JS; output reconciles exactly. Accept `--season` as a required CLI arg.
+- **Season-replay `as_of_week` dimension (all three derived transforms).** Each
+  `compute(season)` loops N=1..maxweek, filters its input join slice to `week ≤ N`, and
+  emits rows tagged `as_of_week = N` — one tall table per analytic at grain
+  `(season, as_of_week, entity)`, the dashboard as it would have read through each week N.
+  That single `week ≤ N` filter does double duty: it is the cutoff (Part 1) **and** the
+  roster-as-of-N correctness fix (Part 3) — the `arg_max(roster_id, week)` "current team"
+  resolution becomes "latest week ≤ N", so a mid-season trade/add changes *who is on the
+  team* at week N, not just the numbers. League-relative spectra (and the player-signal
+  positional efficiency mean) are recomputed within each N cohort. **Windowing (Part 2)
+  is per-analytic, decoupled from the cutoff, by the stationarity principle:** leakage
+  cumulative (ledger), form EWMA half-life 2wk (trend), player-opportunity through an
+  injected EWMA half-life (`OPP_HALF_LIFE_WK`, shared `_weighted_rates`) — backtest-tuned
+  and shipping **cumulative** (the 2025 sweep showed recency hurts rest-of-season MAE).
+  `data_layer.read_team_form/leakage/player_signal` take an optional `as_of_week`
+  (default = latest), and `queries.js` carries a default-latest guard, so existing
+  callers and the front end are unchanged until the Session-B week selector lands.
+
+- `compute_team_form.py` / `compute_team_leakage.py` — **derived-analytics transforms.** They read the season join (+ lineup_slots for leakage) and write one pre-computed row per (as_of_week, roster_id) to `snapshots/derived/`. These promote the heaviest Team Overview math out of the front-end seam (`queries.js`): the EWMA trajectory read and the optimal-lineup / leakage read, respectively, plus the tuning constants and signal thresholds they own (`HALF_LIFE_WK`/`DIRECTION_BAND`; `MIN_GAMES`/`COACHABLE_RATE_MARGIN`/`HABITUAL_STARTER_THRESHOLD`). Rationale: a Python server is the eventual architecture, so the analytics live in Python now — the front end reads pre-shaped parquet, and the server migration becomes "transform → API serves same parquet" rather than "rewrite JS math in Python." Re-run with `--season` after a join refresh. Faithful ports of the prior JS; output reconciles exactly. Accept `--season` as a required CLI arg.
 
   **SOLID shape (per principle #9):** each per-team analytic is a pure function
   (`_team_form`, `_team_leakage`) that **receives its tuning constants as injected
@@ -337,9 +363,12 @@ via data_layer.py, performs a single join, and writes via data_layer.py.
   `read` (`too_early`/`spike`/`mixed`/`sticky`) keeps the language honest (law 2), and
   `td_share` is carried as the most legible evidence. Same SOLID shape as the team
   transforms: pure `_player_signal` with injected constants (`SHRINK_K`, `MIN_GAMES`,
-  `SPIKE_BAND`/`STICKY_BAND`, `POS_MEAN_MIN_OPP`), `compute()` the composition root,
-  helpers from `_analytics`. The positional efficiency mean is computed over the full
-  NFL stat pool (the borrowed substrate), not just this league's rostered players.
+  `SPIKE_BAND`/`STICKY_BAND`, `POS_MEAN_MIN_OPP`, and the `OPP_HALF_LIFE_WK` window),
+  `compute()` the composition root, helpers from `_analytics`. The positional efficiency
+  mean is computed over the full NFL stat pool (the borrowed substrate), not just this
+  league's rostered players. Per-game rates come from the shared pure
+  `_weighted_rates(weeks, half_life)` (EWMA window), so the windowing choice is a single
+  injected parameter and the backtest validates the exact shipped path.
 
 - `backtest_player_signal.py` — **the validation gate Phase 1 must clear before any
   engine ships live.** Imports the *same* pure `_player_signal` the transform ships
@@ -352,6 +381,10 @@ via data_layer.py, performs a single join, and writes via data_layer.py.
   result: signal cuts rest-of-season MAE ~13% at the W4 freeze (PASS at every freeze
   W3–W8); hot `spike` group regressed ~3.9 pts/g while `sticky` held flat. This
   backtest-against-the-answer-key pattern is the template for every future engine slice.
+  **`--sweep`** tunes the opportunity EWMA half-life against the answer key at any freeze
+  (and `--opp-half-life` overrides the verdict run); the 2025 sweep across W4/W6/W8 chose
+  **cumulative** (short half-lives hurt rest-of-season MAE — opportunity is sticky enough
+  that max sample wins), which is why `OPP_HALF_LIFE_WK` ships `None`.
 
 ## Technical Principles
 
