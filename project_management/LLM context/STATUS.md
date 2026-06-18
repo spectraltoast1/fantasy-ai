@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-06-17 (per-panel readiness gate — Phase 1 complete)
+**Last updated:** 2026-06-18 (leaguelogs snapshot reliability — incremental writes + today captured)
 **Target ship:** NFL kickoff, mid August 2026
 
 ---
@@ -34,6 +34,25 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**Maintenance — leaguelogs snapshot reliability (incremental writes) + today captured.**
+The daily market-value snapshot had been silently dropping days; diagnosed as transient
+API failures (ReadTimeout / connection reset / ChunkedEncodingError against
+developer.leaguelogs.com) made fatal by a fragile write path — `snapshot()` collected
+all 5 profiles in memory and wrote **once at the end**, so a single failed request
+discarded every profile already fetched that day (2026-06-14 fetched 2 of 5, saved 0).
+**Fix:** `snapshot()` now persists the cumulative set of today's rows **after each
+profile**, so a mid-run failure leaves a recoverable *partial* day instead of total
+loss; the writer dedupes on snapshot_date, so a re-run cleanly replaces a partial day
+(no duplicates — verified: re-running left 2026-06-18 stable at 3,409 rows). Ran the
+patched fetcher to capture **today (2026-06-18)**, which the scheduled run had lost — 5
+profiles, 3,409 rows; history now **14 dates**. No schedule/plist/host change this
+session, so tomorrow's 4am launchd run picks up the patch automatically. Historical gaps
+2026-06-03/-05/-06/-10/-14 are permanent (API serves only "now"). **Open follow-up
+(see TECHNICAL_ARCHITECTURE → leaguelogs.py Notes):** request retry/backoff + move the
+schedule off the laptop to an always-on host — the real fix for both API flakiness and
+sleep-coalescing.
+
+> earlier build
 **Phase 1 — the per-panel readiness gate (part 4). Phase 1 is now complete.** A
 cross-cutting front-end seam so panels degrade cleanly when data is thin, rather than
 each hard-coding its own week check. New **`readiness.jsx`**: `assessReadiness(regime,
@@ -68,33 +87,6 @@ a state display. Verified live: 19 rows for the user's team, no console errors, 
 toggles, sample-gating correct. **Remaining in Phase 1:** the per-panel readiness gate
 (part 4).
 
-> earlier build
-**Phase 1 — the spike signal-quality engine + its backtest gate (data/backtest
-only; no UI this session).** The first decision-critique slice: "is this production
-real, or is it noise?", built on usage data already fetched (no projections needed).
-New transform **`compute_player_signal.py`** → `snapshots/derived/player_signal_2025.parquet`,
-one row per rostered skill player (172). Same SOLID shape as the team transforms (pure
-`_player_signal` with **injected** constants `SHRINK_K`/`MIN_GAMES`/`SPIKE_BAND`/
-`STICKY_BAND`/`POS_MEAN_MIN_OPP`, `compute()` the composition root, helpers from
-`_analytics`). It decomposes recent production into **sticky opportunity** (`opp_g` —
-targets / carries+targets / pass-att+carries, carried forward) vs **fragile efficiency**
-(`ppo` = points/opportunity, shrunk toward the league-wide positional mean by sample
-size). Headline `regression_risk = 1 − expected_ppg/recent_ppg`; a sample-gated
-categorical `read` (too_early/spike/mixed/sticky) keeps language honest (law 2);
-`td_share` carried as the legible evidence. It is a *characterization of past
-production, not a forward projection* (law 3). New `data_layer` read/write fns; the
-positional efficiency mean is taken over the full NFL stat pool (borrowed substrate),
-not just rostered players. **`backtest_player_signal.py`** imports the *same* shipped
-`_player_signal` and validates it against the full-2025 answer key (input wks 1–4,
-truth wks 5–18): **predictive PASS** — signal cuts rest-of-season MAE 13.2% vs a naive
-"recent-points" baseline (RMSE 3.88→3.42, corr .79→.82), robust at every freeze W3–W8;
-**decision-relevant PASS** — among hot players (which naive can't tell apart) the
-`spike` group regressed −3.9 pts/g (TD-share .38; e.g. Lamar 23.3→13.5, Fields
-20.2→13.7) while the `sticky` group held flat (−0.02, TD-share .16). The engine is
-proven real; this backtest-vs-answer-key pattern is the template for every future
-slice. **Not yet built:** the Players sub-view surface + the per-panel readiness gate
-(Phase 1 parts 3–4).
-
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
@@ -116,6 +108,7 @@ slice. **Not yet built:** the Players sub-view surface + the per-panel readiness
     - Phase 1 spike signal-quality engine — compute_player_signal.py → derived/player_signal_{season}.parquet (opportunity-vs-efficiency decomposition, regression_risk, sample-gated read); backtest_player_signal.py validates the shipped function against the full-2025 answer key (beats naive recent-points 13% on MAE; spike group regresses ~3.9 pts/g while sticky holds). First decision-critique slice; data + backtest only, no UI yet.
     - Phase 1 Players sub-view — sortable table surfacing the signal read per player (recent /g, directional verdict, volume rank, TD share); loadTeamPlayers(rosterId) seam reads player_signal.parquet (no JS math); direction-not-projection, question-framed (laws 2+4), sample-gated. The front end's first decision-coach surface.
     - Phase 1 per-panel readiness gate — readiness.jsx (assessReadiness + Gate): per-panel regime (structural/point-in-time/trend) → ready/building/tooEarly, with a "too early" fallback slot (accepts preseason content later) and an early-read note when building; wired into the Team tab (?weeksOverride=N for QA). Closes Phase 1.
+    - leaguelogs snapshot reliability — snapshot() rewritten to write incrementally (cumulative today's-rows persisted after each profile) so a mid-run API failure leaves a recoverable partial day instead of discarding the whole run; idempotent re-run replaces a partial day (dedup on snapshot_date). 2026-06-18 captured (5 profiles, 3,409 rows; history → 14 dates). Follow-up still open: retry/backoff + off-laptop host.
 
 > not yet built
     >> backend
