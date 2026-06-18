@@ -124,7 +124,19 @@ def _profile_rows(profile_key: str, season: int, week: int,
 
 
 def snapshot() -> None:
-    """Fetch every published profile for today and append to the history file."""
+    """Fetch every published profile for today and append to the history file.
+
+    Writes incrementally: after each profile is fetched, the cumulative set of
+    today's rows is persisted. So if a later profile's API call fails mid-run,
+    the profiles already fetched are on disk instead of being discarded with the
+    whole day. The writer dedupes by snapshot_date, so a later re-run cleanly
+    replaces a partial day with the complete one (no duplicates).
+
+    Caveat until retry/resilience lands: a failed run now leaves a PARTIAL day
+    (e.g. 3 of 5 profiles) rather than no day. That's strictly more recoverable
+    than total loss — re-running completes it — but downstream analysis should
+    treat a day with fewer than the expected profile count as incomplete.
+    """
     now = datetime.now(timezone.utc)
     snapshot_date = now.date()
     snapshot_ts = now.isoformat(timespec="seconds")
@@ -135,19 +147,20 @@ def snapshot() -> None:
           f"— {len(profiles)} profile(s)")
 
     all_rows: list[dict] = []
-    for key in profiles:
+    for i, key in enumerate(profiles, start=1):
         rows = _profile_rows(key, season, week, snapshot_date, snapshot_ts)
         picks = sum(1 for r in rows if r["is_pick"])
-        print(f"  {key}: {len(rows)} rows ({len(rows) - picks} players, {picks} picks)")
         all_rows.extend(rows)
+        # Persist the cumulative set after each profile so a later failure can't
+        # discard profiles already fetched this run. write_leaguelogs_market_snapshot
+        # treats `df` as the full set for snapshot_date and replaces that day, so
+        # each call simply grows today's rows on disk.
+        df = pl.DataFrame(all_rows, schema_overrides=_SCHEMA)
+        data_layer.write_leaguelogs_market_snapshot(df, snapshot_date)
+        print(f"  {key}: {len(rows)} rows ({len(rows) - picks} players, {picks} picks) "
+              f"— saved {i}/{len(profiles)} profiles, {len(all_rows)} rows for {snapshot_date}")
         time.sleep(0.3)  # be polite; limit is generous
 
-    df = pl.DataFrame(all_rows, schema_overrides=_SCHEMA)
-    data_layer.write_leaguelogs_market_snapshot(df, snapshot_date)
-
-    total = data_layer.read_leaguelogs_market()
-    print(f"  Wrote {len(df)} rows for {snapshot_date}. "
-          f"History now: {len(total)} rows across {total['snapshot_date'].n_unique()} date(s).")
     print('  Attribution required on any UI: "Powered by LeagueLogs API" (https://leaguelogs.com)')
 
 
