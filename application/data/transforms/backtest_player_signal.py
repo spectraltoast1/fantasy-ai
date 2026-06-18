@@ -41,51 +41,90 @@ _TRANSFORMS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_TRANSFORMS_DIR.parent))
 sys.path.insert(0, str(_TRANSFORMS_DIR))
 import data_layer
+from _analytics import round1
 from compute_player_signal import (
     MIN_GAMES,
+    OPP_HALF_LIFE_WK,
     POS_MEAN_MIN_OPP,
     SHRINK_K,
     SKILL_POSITIONS,
     SPIKE_BAND,
     STICKY_BAND,
     _player_signal,
+    _weighted_rates,
     opportunity_expr,
+    td_points_expr,
 )
 
 MIN_REST_GAMES = 4  # a player needs a real rest-of-season sample to be a fair test point
+# Opportunity-EWMA half-lives swept against the answer key. None = equal weight
+# (cumulative); the rest are candidate half-lives in weeks. The winner sets
+# OPP_HALF_LIFE_WK in the transform.
+SWEEP_HALF_LIVES = [None, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0]
 
 
-def _agg(df: pl.DataFrame) -> pl.DataFrame:
-    """Per-player recent aggregate from a raw nfl_stats slice (keyed on display name —
-    the backtest validates the scoring math, not the roster plumbing)."""
+def _series(df: pl.DataFrame) -> pl.DataFrame:
+    """Per-player recent series from a raw nfl_stats slice (keyed on display name — the
+    backtest validates the scoring math, not the roster plumbing). Carries the per-week
+    (pts, opp, td_pts) list so `_weighted_rates` can derive EWMA rates at any half-life —
+    the same path the transform ships."""
     return (
-        df.with_columns(opportunity_expr().alias("opp"))
+        df.with_columns(opportunity_expr().alias("opp"), td_points_expr().alias("td_pts"))
         .group_by("player_display_name", "position")
         .agg(
             pl.len().alias("games"),
-            pl.col("fantasy_points_ppr").sum().alias("pts_tot"),
-            pl.col("opp").sum().alias("opp_tot"),
-            (
-                (pl.col("rushing_tds") + pl.col("receiving_tds")) * 6
-                + pl.col("passing_tds") * 4
-            ).sum().alias("td_pts_tot"),
-        )
-        .with_columns(
-            (pl.col("pts_tot") / pl.col("games")).alias("ppg"),
-            (pl.col("opp_tot") / pl.col("games")).alias("opp_g"),
-            (pl.col("td_pts_tot") / pl.col("games")).alias("td_ppg"),
+            pl.struct(
+                "week", pl.col("fantasy_points_ppr").alias("pts"), "opp", "td_pts"
+            ).alias("weeks"),
         )
     )
 
 
-def _pos_mean_ppo(recent: pl.DataFrame) -> dict:
+def _pos_mean_ppo(df: pl.DataFrame) -> dict:
     """League positional mean points-per-opportunity, volume-weighted over players
-    clearing the opportunity floor — identical rule to the production transform."""
-    q = recent.filter(pl.col("opp_g") >= POS_MEAN_MIN_OPP)
+    clearing the opportunity floor — identical rule to the production transform. The
+    structural baseline is cumulative (equal weight, max sample), independent of the
+    opportunity half-life, so it is computed from the raw recent slice."""
+    per_player = (
+        df.with_columns(opportunity_expr().alias("opp"))
+        .group_by("player_display_name", "position")
+        .agg(
+            pl.len().alias("g"),
+            pl.col("fantasy_points_ppr").sum().alias("pts"),
+            pl.col("opp").sum().alias("opp"),
+        )
+    )
+    q = per_player.filter(pl.col("opp") / pl.col("g") >= POS_MEAN_MIN_OPP)
     means = q.group_by("position").agg(
-        (pl.col("pts_tot").sum() / pl.col("opp_tot").sum()).alias("mean_ppo")
+        (pl.col("pts").sum() / pl.col("opp").sum()).alias("mean_ppo")
     )
     return {r["position"]: float(r["mean_ppo"]) for r in means.iter_rows(named=True)}
+
+
+def _predict(series: pl.DataFrame, pos_mean: dict, half_life) -> pl.DataFrame:
+    """Per-player prediction at one opportunity half-life: the signal's expected_ppg /
+    read (via the shipped `_weighted_rates` + `_player_signal`), plus a `naive_ppg`
+    reference that is always equal-weight recent ppg — the literal 'recent points carry
+    forward' baseline, held fixed so the sweep measures the *window's* contribution."""
+    rows = []
+    for r in series.iter_rows(named=True):
+        weeks = [
+            {"week": int(w["week"]), "pts": float(w["pts"]), "opp": float(w["opp"]), "td_pts": float(w["td_pts"])}
+            for w in r["weeks"]
+        ]
+        rates = _weighted_rates(weeks, half_life=half_life)
+        sig = _player_signal(
+            {"position": r["position"], **rates},
+            pos_mean.get(r["position"], 0.0),
+            shrink_k=SHRINK_K, min_games=MIN_GAMES, spike_band=SPIKE_BAND, sticky_band=STICKY_BAND,
+        )
+        rows.append({
+            "player_display_name": r["player_display_name"],
+            "position": r["position"],
+            "naive_ppg": round1(_weighted_rates(weeks, half_life=None)["ppg"]),
+            **sig,
+        })
+    return pl.DataFrame(rows)
 
 
 def _mae(p, y):
@@ -100,9 +139,11 @@ def _corr(p, y):
     return float(pl.DataFrame({"p": p, "y": y}).select(pl.corr("p", "y")).item())
 
 
-def run(season: int, recent_weeks, rest_weeks) -> bool:
-    stats = data_layer.read_nfl_stats(season).filter(pl.col("position").is_in(SKILL_POSITIONS))
-    stats = stats.with_columns(
+def _load(season: int) -> pl.DataFrame:
+    """Cleaned skill-position stats (usage/score nulls → 0) for the season."""
+    return data_layer.read_nfl_stats(season).filter(
+        pl.col("position").is_in(SKILL_POSITIONS)
+    ).with_columns(
         [
             pl.col(c).fill_null(0.0)
             for c in [
@@ -112,39 +153,63 @@ def run(season: int, recent_weeks, rest_weeks) -> bool:
         ]
     )
 
-    recent = _agg(stats.filter(pl.col("week").is_in(recent_weeks)))
-    pos_mean = _pos_mean_ppo(recent)
+
+def _evaluate(stats: pl.DataFrame, recent_weeks, rest_weeks, half_life):
+    """Join per-player predictions at one opportunity half-life to the rest-of-season
+    truth, on the fair-test population (real recent + real rest sample). Returns
+    (df, pos_mean) for both the report and the sweep."""
+    series = _series(stats.filter(pl.col("week").is_in(recent_weeks)))
+    pos_mean = _pos_mean_ppo(stats.filter(pl.col("week").is_in(recent_weeks)))
+    pred = _predict(series, pos_mean, half_life)
 
     rest = (
         stats.filter(pl.col("week").is_in(rest_weeks))
         .group_by("player_display_name")
         .agg(pl.len().alias("rest_games"), pl.col("fantasy_points_ppr").mean().alias("rest_ppg"))
     )
-
-    rows = []
-    for r in recent.iter_rows(named=True):
-        sig = _player_signal(
-            {k: r[k] for k in ("position", "games", "ppg", "opp_g", "td_ppg")},
-            pos_mean.get(r["position"], 0.0),
-            shrink_k=SHRINK_K,
-            min_games=MIN_GAMES,
-            spike_band=SPIKE_BAND,
-            sticky_band=STICKY_BAND,
-        )
-        rows.append({"player_display_name": r["player_display_name"], "position": r["position"], **sig})
-    pred = pl.DataFrame(rows)
-
     df = (
         pred.join(rest, on="player_display_name", how="inner")
         .filter((pl.col("games") >= MIN_GAMES) & (pl.col("rest_games") >= MIN_REST_GAMES) & (pl.col("opp_g") > 0))
     )
+    return df, pos_mean
 
-    naive = df["recent_ppg"]
+
+def sweep(season: int, recent_weeks, rest_weeks) -> None:
+    """Tune the opportunity half-life: for each candidate, report the signal's MAE on the
+    answer key at this freeze. Run across several freezes to choose OPP_HALF_LIFE_WK —
+    the window earns its keep mid/late season, where role drift has had time to show."""
+    stats = _load(season)
+    print(f"=== Half-life sweep: season={season}  input wks {recent_weeks[0]}–{recent_weeks[-1]}  "
+          f"truth wks {rest_weeks[0]}–{rest_weeks[-1]} ===")
+    print(f"  {'half_life':<12}{'signal MAE':>12}{'corr':>8}   (naive MAE held fixed = equal-weight recent)")
+    base = None
+    best = (None, float("inf"))
+    for hl in SWEEP_HALF_LIVES:
+        df, _ = _evaluate(stats, recent_weeks, rest_weeks, hl)
+        if base is None:
+            base = _mae(df["naive_ppg"], df["rest_ppg"])
+        mae = _mae(df["expected_ppg"], df["rest_ppg"])
+        corr = _corr(df["expected_ppg"], df["rest_ppg"])
+        label = "cumulative" if hl is None else f"{hl:g}wk"
+        flag = " ←best" if mae < best[1] else ""
+        if mae < best[1]:
+            best = (hl, mae)
+        print(f"  {label:<12}{mae:>12.3f}{corr:>8.3f}{flag}")
+    print(f"  naive (equal-weight recent) MAE = {base:.3f}")
+    print(f"  → best half-life at this freeze: {'cumulative' if best[0] is None else f'{best[0]:g}wk'} (MAE {best[1]:.3f})")
+
+
+def run(season: int, recent_weeks, rest_weeks, half_life=OPP_HALF_LIFE_WK) -> bool:
+    stats = _load(season)
+    df, pos_mean = _evaluate(stats, recent_weeks, rest_weeks, half_life)
+
+    naive = df["naive_ppg"]
     signal = df["expected_ppg"]
     truth = df["rest_ppg"]
 
+    hl_label = "cumulative" if half_life is None else f"{half_life:g}wk half-life"
     print(f"=== Backtest: season={season}  input wks {recent_weeks[0]}–{recent_weeks[-1]}  "
-          f"truth wks {rest_weeks[0]}–{rest_weeks[-1]}  (n={df.height}) ===")
+          f"truth wks {rest_weeks[0]}–{rest_weeks[-1]}  opp window: {hl_label}  (n={df.height}) ===")
     print(f"  positional mean pts/opp: " + ", ".join(f"{p} {v:.3f}" for p, v in sorted(pos_mean.items())))
     print()
     print(f"  {'predictor':<10}{'MAE':>8}{'RMSE':>8}{'corr':>8}")
@@ -201,8 +266,18 @@ if __name__ == "__main__":
     parser.add_argument("--season", type=int, required=True)
     parser.add_argument("--recent", default="1-4", help="input week range, e.g. 1-4")
     parser.add_argument("--rest", default=None, help="truth week range, e.g. 5-18 (default: after recent)")
+    parser.add_argument("--sweep", action="store_true",
+                        help="sweep the opportunity half-life against the answer key instead of running the verdict")
+    parser.add_argument("--opp-half-life", default=None,
+                        help="override the opportunity half-life for the verdict run, e.g. 3 or 'none' (cumulative)")
     args = parser.parse_args()
     recent = _parse_weeks(args.recent)
     rest = _parse_weeks(args.rest) if args.rest else list(range(recent[-1] + 1, 19))
-    ok = run(args.season, recent, rest)
+    if args.sweep:
+        sweep(args.season, recent, rest)
+        sys.exit(0)
+    hl = OPP_HALF_LIFE_WK
+    if args.opp_half_life is not None:
+        hl = None if args.opp_half_life.lower() in ("none", "cumulative", "inf") else float(args.opp_half_life)
+    ok = run(args.season, recent, rest, hl)
     sys.exit(0 if ok else 1)

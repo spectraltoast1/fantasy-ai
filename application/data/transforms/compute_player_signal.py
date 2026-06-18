@@ -70,6 +70,24 @@ POS_MEAN_MIN_OPP = 3.0
 # middle is genuinely mixed and should be framed as such, not as a confident call.
 SPIKE_BAND = 0.15
 STICKY_BAND = 0.05
+# Opportunity windowing (Season-replay Part 2). The per-game rates (opportunity, ppg,
+# TD ppg) are read off a player's recent weeks through an injected EWMA half-life:
+# each week's weight halves every OPP_HALF_LIFE_WK weeks back from his most recent game;
+# `None` = equal weight (cumulative). This is the per-analytic *window*, declared by the
+# stationarity principle (how fast does the measured quantity drift?) and decoupled from
+# the as_of_week cutoff. The design intuition was that a player's role drifts (a back
+# loses a committee, a WR's target share climbs) and so recent usage should be weighted
+# up — but that's a bet, and the project validates bets rather than guessing.
+#
+# The 2025 answer-key sweep (backtest_player_signal.py --sweep, freezes W4/W6/W8) is
+# decisive and runs *against* that intuition: short half-lives hurt rest-of-season MAE
+# monotonically, and cumulative wins outright at W6/W8 (a ~6wk half-life ties it at W4).
+# For the rest-of-season horizon, opportunity is sticky enough that max sample beats
+# recency. So the window ships cumulative — the empirically-best choice, not the guessed
+# one. The half-life stays an injected parameter (not hard-coded) so it is re-tunable
+# in-season against a nearer-horizon truth without touching the read; flip this constant
+# and re-run the sweep to revisit.
+OPP_HALF_LIFE_WK = None
 
 
 def opportunity_expr() -> pl.Expr:
@@ -85,6 +103,39 @@ def opportunity_expr() -> pl.Expr:
         .then(pl.col("carries") + pl.col("targets"))
         .otherwise(pl.col("attempts") + pl.col("carries"))  # QB
     )
+
+
+def _weighted_rates(weeks, *, half_life):
+    """EWMA-weighted per-game rates from a player's per-week series.
+
+    `weeks`: list of {week, pts, opp, td_pts} (any order). Each week's weight halves
+    every `half_life` weeks back from the player's most recent game, so a drifting role
+    is read off recent usage without discarding older games — a half-life, not a hard
+    window. `half_life=None` → equal weight (cumulative). The half-life is injected (not
+    a module global) so the analytic is parameterisable and testable in isolation: the
+    backtest sweeps it through this same function.
+
+    Returns {games, ppg, opp_g, td_ppg}. `games` is the raw count — sample size for the
+    low-sample gate, which is about confidence, not recency, so it is never weighted.
+    The weights are normalised, so only their *relative* size within the player's own
+    games matters (a player whose games are all old is not down-levelled — a per-game
+    rate is a per-game rate; staleness is the sample gate's job, not the rate's).
+    """
+    ws = sorted(weeks, key=lambda w: w["week"])
+    n = len(ws)
+    if half_life is None or n <= 1:
+        wts = [1.0] * n
+    else:
+        last = ws[-1]["week"]
+        decay = 0.5 ** (1.0 / half_life)
+        wts = [decay ** (last - w["week"]) for w in ws]
+    tw = sum(wts) or 1.0
+    return {
+        "games": n,
+        "ppg": sum(wt * w["pts"] for wt, w in zip(wts, ws)) / tw,
+        "opp_g": sum(wt * w["opp"] for wt, w in zip(wts, ws)) / tw,
+        "td_ppg": sum(wt * w["td_pts"] for wt, w in zip(wts, ws)) / tw,
+    }
 
 
 def _player_signal(agg, pos_mean_ppo, *, shrink_k, min_games, spike_band, sticky_band):
@@ -137,29 +188,29 @@ def _player_signal(agg, pos_mean_ppo, *, shrink_k, min_games, spike_band, sticky
     }
 
 
+def td_points_expr() -> pl.Expr:
+    """Fantasy points from touchdowns (per row): rushing + receiving at 6, passing at 4.
+    The most legible evidence in the read, carried per week so it can be recency-weighted
+    on the same EWMA path as opportunity."""
+    return (pl.col("rushing_tds") + pl.col("receiving_tds")) * 6 + pl.col("passing_tds") * 4
+
+
 def _recent_aggregate(df: pl.DataFrame) -> pl.DataFrame:
-    """Collapse per-week skill rows to one recent-window aggregate per player: games,
-    per-game fantasy points (PPR — the league's scoring), per-game opportunity, and
-    per-game TD points. Plus the per-week (pts, opp) series for an evidence sparkline."""
+    """Collapse per-week skill rows to one per-player record: the raw game count and the
+    per-week (pts, opp, td_pts) series. The per-game rates (ppg, opp_g, td_ppg) are
+    derived from this series by `_weighted_rates` (EWMA half-life), so the windowing
+    choice lives in one injected-parameter place rather than baked into the aggregation —
+    and the same series drives the evidence sparkline."""
     return (
-        df.with_columns(opportunity_expr().alias("opp"))
+        df.with_columns(opportunity_expr().alias("opp"), td_points_expr().alias("td_pts"))
         .group_by("sleeper_player_id", "player_display_name", "position")
         .agg(
             pl.len().alias("games"),
-            pl.col("fantasy_points_ppr").sum().alias("pts_tot"),
-            pl.col("opp").sum().alias("opp_tot"),
-            (
-                (pl.col("rushing_tds") + pl.col("receiving_tds")) * 6
-                + pl.col("passing_tds") * 4
-            ).sum().alias("td_pts_tot"),
-            pl.struct("week", pl.col("fantasy_points_ppr").alias("pts"), "opp")
+            pl.struct(
+                "week", pl.col("fantasy_points_ppr").alias("pts"), "opp", "td_pts"
+            )
             .sort_by("week")
             .alias("weeks"),
-        )
-        .with_columns(
-            (pl.col("pts_tot") / pl.col("games")).alias("ppg"),
-            (pl.col("opp_tot") / pl.col("games")).alias("opp_g"),
-            (pl.col("td_pts_tot") / pl.col("games")).alias("td_ppg"),
         )
     )
 
@@ -193,7 +244,7 @@ def positional_mean_ppo(season: int, weeks) -> dict:
     return {row["position"]: float(row["mean_ppo"]) for row in means.iter_rows(named=True)}
 
 
-def _compute_as_of(season_df: pl.DataFrame, pos_mean: dict, as_of_week: int) -> list:
+def _compute_as_of(season_df: pl.DataFrame, pos_mean: dict, as_of_week: int, *, opp_half_life) -> list:
     """The per-player signal rows as of one cutoff week N — `season_df` is the join
     already filtered to weeks ≤ N (skill positions, nulls filled). Returns a list of
     row dicts tagged `as_of_week = N`.
@@ -220,14 +271,15 @@ def _compute_as_of(season_df: pl.DataFrame, pos_mean: dict, as_of_week: int) -> 
     records = []
     for row in agg.iter_rows(named=True):
         pos = row["position"]
+        series = [
+            {"week": int(w["week"]), "pts": float(w["pts"]), "opp": float(w["opp"]), "td_pts": float(w["td_pts"])}
+            for w in row["weeks"]
+        ]
+        # EWMA-weighted per-game rates (opportunity is the drifting half — recency-tilted);
+        # the read then splits these into sticky opportunity vs efficiency-regressed ppo.
+        rates = _weighted_rates(series, half_life=opp_half_life)
         sig = _player_signal(
-            {
-                "position": pos,
-                "games": int(row["games"]),
-                "ppg": float(row["ppg"]),
-                "opp_g": float(row["opp_g"]),
-                "td_ppg": float(row["td_ppg"]),
-            },
+            {"position": pos, **rates},
             pos_mean.get(pos, 0.0),
             shrink_k=SHRINK_K,
             min_games=MIN_GAMES,
@@ -243,8 +295,8 @@ def _compute_as_of(season_df: pl.DataFrame, pos_mean: dict, as_of_week: int) -> 
                 "position": pos,
                 **sig,
                 "weeks": [
-                    {"week": int(w["week"]), "pts": round1(float(w["pts"])), "opp": round1(float(w["opp"]))}
-                    for w in row["weeks"]
+                    {"week": w["week"], "pts": round1(w["pts"]), "opp": round1(w["opp"])}
+                    for w in series
                 ],
             }
         )
@@ -300,7 +352,7 @@ def compute(season: int) -> pl.DataFrame:
         # Structural efficiency baseline: cumulative over weeks ≤ N (max sample within
         # the cutoff), never peeking past N.
         pos_mean = positional_mean_ppo(season, list(range(1, n + 1)))
-        all_rows.extend(_compute_as_of(sub, pos_mean, n))
+        all_rows.extend(_compute_as_of(sub, pos_mean, n, opp_half_life=OPP_HALF_LIFE_WK))
 
     df = pl.DataFrame(all_rows).sort(
         "as_of_week", "roster_id", "regression_risk", descending=[False, False, True]
