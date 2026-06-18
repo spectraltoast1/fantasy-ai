@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-06-18 (leaguelogs snapshot reliability — incremental writes + today captured)
+**Last updated:** 2026-06-18 (spec'd the Season-replay build grouping as next, before Phase 2)
 **Target ship:** NFL kickoff, mid August 2026
 
 ---
@@ -130,13 +130,16 @@ readiness gate (`readiness.jsx` — regimes + fallback slot). The descriptive da
 the leap from *showing team state* to *grading a decision against a prior*. Still
 frozen at Week 4 of 2025 for building.
 
-**Next: Phase 2 — the projections substrate** (see Version Roadmap / PRODUCT_ROADMAP).
-A `fantasypros.py` fetcher → current projections, plus a transform producing a
-**consensus + disagreement (spread)** read. This is the hinge: it supplies the forward
-prior every later decision slice rests on, calibrates the spike read's *forward*
-language, and fixes the engine's one honest blind spot (the Kamara-style decline that
-usage alone can't see — a real backtest miss this session surfaced). The spread itself
-becomes the law-2 confidence signal (tight consensus = act, wide = coin-flip).
+**Next, before Phase 2: the Season-replay build grouping** (full spec in "Next single
+highest-leverage move" below) — an `as_of_week` snapshot dimension on the derived
+analytics + a per-analytic windowing framework (cumulative vs EWMA) + a roster-as-of-N
+correctness fix + a front-end week selector. Lets the tool be viewed as-of any past
+week (1–4 now), which is both a real product feature and the in-season "now advances
+each week" mechanism, and turns the readiness gate's states from theoretical to live.
+The user has chosen to do this **before** Phase 2 (it also becomes the QA instrument
+for every later engine). **Then Phase 2 — the projections substrate** (FantasyPros
+fetcher → consensus/spread forward prior; the hinge, and the fix for the Kamara-style
+blind spot). See "The step after".
 
 ## Version Roadmap
 → **Source of truth: `scope docs/PRODUCT_ROADMAP.md`** — phase detail, the four
@@ -173,27 +176,75 @@ wire / full player pool, IR roster overages, zero-stat rows). One product note k
 that consume it (trade analysis, value-aware rankings) are V4; any UI showing it must
 carry the "Powered by LeagueLogs API" attribution.
 
-## Next single highest-leverage move
+## Next single highest-leverage move — the Season-replay build grouping
 
-**Phase 2 — the projections substrate.** With Phase 1 complete (engine + backtest +
-Players surface + readiness gate), the next hinge is the forward prior every later
-decision slice rests on. Build a **`fantasypros.py` fetcher** → current-season
-projections (all I/O through `data_layer.py`; keyed on `sleeperPlayerId`), and a
-transform producing a **consensus + disagreement (spread)** read across whatever
-sources are pulled. Two payoffs: (a) the spread is the law-2 confidence signal — tight
-consensus = act, wide = coin-flip; (b) it gives the spike read a *forward* prior to
-regress toward, fixing the one honest blind spot the backtest surfaced (Kamara: usage
-looked fine, the player declined — usage alone can't see talent/situation change).
-Vegas game totals via an `odds.py` fetcher are an optional cheap add here (game
-environment). Do **not** use prior-season carryover as the prior (biased by
-age/injury/scheme). This is back to **Python/data-layer work** (fetcher + transform),
-not front-end.
+**One build grouping (likely two sessions), to be done before Phase 2.** Let the user
+view the dashboard *as of any past week N* — the tool exactly as it would have looked
+through week N, every analytic recomputed on weeks ≤ N. It is a real product feature
+(a week selector), the in-season "now advances each week" mechanism, and the QA
+instrument for every future engine. We are **still frozen at week 4** — this does NOT
+expand the data; it lets us inspect weeks 1–3 states.
 
-The readiness gate's `building`/`tooEarly` language is the first consumer waiting on
-this: once a forward prior exists, early-season reads can be *calibrated* rather than
-merely *gated*.
+> **Decided design (don't re-litigate; built reasons in chat 2026-06-18):**
 
-All Team-tab work should respect the team switcher already wired in.
+**Part 1 — `as_of_week`, a temporal-snapshot dimension (backend).** Add `as_of_week`
+as a first-class **column** on the three derived analytics (`player_signal`,
+`team_form`, `team_leakage`). Grain becomes `(season, as_of_week, entity)` — one tall
+table per analytic, NOT a file-per-week. This is the warehouse-correct modelling
+(survives the eventual DuckDB→SQLite→server migrations) and matches the project's
+existing append-snapshot pattern (leaguelogs by `snapshot_date`, the join by `week`) —
+the column is *right*, not just convenient; file-per-week is the parquet-tied choice
+that a SQLite layer would force you to undo. Each transform gains an as-of-week param:
+filter the join to `week ≤ N` **before** computing, emit rows tagged `as_of_week = N`,
+materialize all N=1..maxweek (cheap). data_layer read fns take an optional `as_of_week`
+(default = latest). Current behavior = `WHERE as_of_week = max(as_of_week)` — nothing
+existing breaks.
+
+**Part 2 — windowing, per-analytic, decoupled from the cutoff.** `as_of_week` ⊥
+window: the cutoff is *what data exists*; the window is *how data inside the cutoff is
+weighted*. Each analytic declares its window by the **stationarity principle** (a
+window is a bet about how fast the measured quantity actually drifts):
+  - **Cumulative** (all weeks ≤ N, equal weight) → accounting/ledger metrics (leakage
+    season points-left; record/all-play) and **structural baselines** (the league
+    efficiency mean the spike signal regresses toward — ~stationary, wants max sample).
+  - **Decayed (EWMA / half-life)** → state & trend reads: form (already EWMA, half-life
+    2wk) and the spike signal's **player role/opportunity** component (role drifts).
+  Where decayed, use a **half-life, not a hard rolling window** (smooth, no edge
+  discontinuity, uses all data, graceful early-season). Half-life is a per-transform
+  injected tuning constant (like `HALF_LIFE_WK`). The decayed windows are
+  **backtest-tunable** — extend `backtest_player_signal.py` to sweep the opportunity
+  half-life against the 2025 answer key and pick the best; don't guess. (At N ≤ ~2,
+  cumulative and decayed converge anyway; the window mostly matters mid/late season.)
+
+**Part 3 — roster-as-of-N (correctness fix; latent bug even today).** The transforms
+currently resolve "current team" as `arg_max(roster_id, week)` = the *latest* week (4)
+— that's "latest", not "as-of". Under `as_of_week`, roster membership must be "the
+roster a player belonged to in their latest week **≤ N**." Thread the cutoff through
+**roster resolution**, not just stat aggregation — it changes *who is even on the team*
+at week N (trades/adds), not just their numbers. This is the cleanest proof `as_of_week`
+is a true dimension; fix it as part of this work.
+
+**Part 4 — the week selector (front-end product feature).** A selector that sets the
+active `as_of_week`; thread it through `queries.js` — derived reads pick the matching
+`as_of_week` slice, the still-in-JS SQL reads (power rankings, construction, vitals,
+all-play) filter `WHERE week ≤ N`. Wire it into the **readiness gate** so past-week
+views render the real `building`/`tooEarly` states, and **retire the temporary
+`?weeksOverride` QA param** in favour of the real selector. Default = latest week.
+Build as a real product feature (not throwaway — backend is identical either way).
+**Open decision for the builder:** selector placement — lean **global header** (applies
+across League + Team consistently) vs per-tab.
+
+**Suggested sequencing (respect the 3-commit cap):**
+- **Session A — backend:** parts 1–3. `as_of_week` in the three transforms + roster-as-of-N
+  + windowing decisions + data_layer; re-run to materialize all weeks; extend the backtest
+  to tune the decayed half-life. Verify per-week parquet contents (e.g. a week-2 slice has
+  only weeks 1–2 inside, fewer players past `low_sample`, roster = as-of-2).
+- **Session B — front-end:** part 4. Selector + thread the week through `queries.js` +
+  panels; fold into the readiness gate; remove `?weeksOverride`. Verify live across weeks 1–4
+  (week-2 view shows trend panels as "too early", etc.).
+
+**Non-goals:** not expanding past week 4; not Phase 2. This is the replay/inspection
+layer that precedes Phase 2.
 
 ## Refinement backlog — Team Overview (deferred, not blocking)
 
@@ -239,10 +290,23 @@ These refine shipped lenses; pick up alongside or after the Players sub-view.
    drives the clock for QA. The deeper "calibrate to a forward prior" half is **Phase 2**
    (projections) — the gate is the seam; the prior that sharpens it comes next.
 
-## The step after (unconfirmed, subject to change)
+## The step after — Phase 2: the projections substrate
 
-Continue down the V1 Dashboard Build Order (standings with trajectory; manager dossiers;
-positional strength vs. league average; head-to-head matchup breakdown).
+Once the Season-replay grouping lands, the next hinge is **Phase 2 — the forward
+prior** every later decision slice rests on. Build a **`fantasypros.py` fetcher** →
+current-season projections (all I/O through `data_layer.py`; keyed on
+`sleeperPlayerId`), plus a transform producing a **consensus + disagreement (spread)**
+read. Two payoffs: (a) the spread is the law-2 confidence signal — tight consensus =
+act, wide = coin-flip; (b) it gives the spike read a *forward* prior to regress toward,
+fixing the one honest blind spot the backtest surfaced (Kamara: usage looked fine, the
+player declined — usage alone can't see talent/situation change). It also lets the
+readiness gate *calibrate* early-season language rather than merely gate it. Vegas game
+totals via an `odds.py` fetcher are an optional cheap add. Do **not** use prior-season
+carryover as the prior (biased by age/injury/scheme). Back to Python/data-layer work.
+
+(Older note, lower priority: continue the V1 Dashboard Build Order — standings with
+trajectory; manager dossiers; positional strength vs. league average; head-to-head
+matchup breakdown — now reframed under the phase roadmap below.)
 
 ## V1 Dashboard Build Order
 
