@@ -164,14 +164,15 @@ def _recent_aggregate(df: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def positional_mean_ppo(season: int) -> dict:
+def positional_mean_ppo(season: int, weeks) -> dict:
     """League-wide mean points-per-opportunity per position, from the full NFL stat pool
     (not just this league's rostered players) so the efficiency norm is stable — this is
     the borrowed substrate the per-player read regresses toward. Volume-weighted (total
     points / total opportunity) over players clearing POS_MEAN_MIN_OPP per game, across
-    the same recent weeks the join carries.
+    the given `weeks` (the weeks ≤ the as-of cutoff). The norm is a structural baseline,
+    so it is cumulative within the cutoff (max sample available as of week N) — never
+    peeking past N.
     """
-    weeks = data_layer.read_join_season(season)["week"].unique().to_list()
     pool = (
         data_layer.read_nfl_stats(season)
         .filter(pl.col("position").is_in(SKILL_POSITIONS) & pl.col("week").is_in(weeks))
@@ -192,28 +193,21 @@ def positional_mean_ppo(season: int) -> dict:
     return {row["position"]: float(row["mean_ppo"]) for row in means.iter_rows(named=True)}
 
 
-def compute(season: int) -> pl.DataFrame:
-    # Recent window = the weeks the (frozen) join carries — the simulated "present".
-    season_df = data_layer.read_join_season(season).filter(
-        pl.col("position").is_in(SKILL_POSITIONS)
-    )
-    # Usage/score columns can be null for a player who didn't record that stat type;
-    # treat as zero so opportunity and TD points are well-defined.
-    season_df = season_df.with_columns(
-        [
-            pl.col(c).fill_null(0.0)
-            for c in [
-                "carries", "targets", "attempts", "fantasy_points_ppr",
-                "rushing_tds", "receiving_tds", "passing_tds",
-            ]
-        ]
-    )
+def _compute_as_of(season_df: pl.DataFrame, pos_mean: dict, as_of_week: int) -> list:
+    """The per-player signal rows as of one cutoff week N — `season_df` is the join
+    already filtered to weeks ≤ N (skill positions, nulls filled). Returns a list of
+    row dicts tagged `as_of_week = N`.
 
-    pos_mean = positional_mean_ppo(season)
-
-    # roster_id per player = the team they belong to in their latest week (a mid-season
-    # acquisition is credited to their current roster), mirroring the leakage transform's
-    # current-team rule. One row per rostered skill player.
+    Both the cutoff (Part 1) and roster-as-of-N (Part 3) fall out of the filtered slice:
+    `roster_id` per player resolves to the team they belonged to in their latest week
+    **≤ N** (arg_max over the slice), so a mid-season trade/add changes *who is on the
+    team* at week N, not just their numbers. The opportunity-percentile spectrum is
+    recomputed within this cohort, so it reads "where this player sits in the league as
+    of week N".
+    """
+    # roster_id per player = the team they belong to in their latest week ≤ N (a
+    # mid-season acquisition is credited to their as-of-N roster), mirroring the leakage
+    # transform's current-team rule. One row per rostered skill player.
     current_roster = {
         row["sleeper_player_id"]: int(row["roster_id"])
         for row in season_df.group_by("sleeper_player_id")
@@ -242,6 +236,7 @@ def compute(season: int) -> pl.DataFrame:
         )
         records.append(
             {
+                "as_of_week": as_of_week,
                 "roster_id": current_roster.get(row["sleeper_player_id"]),
                 "sleeper_player_id": row["sleeper_player_id"],
                 "player_display_name": row["player_display_name"],
@@ -277,12 +272,43 @@ def compute(season: int) -> pl.DataFrame:
                 "weeks_json": json.dumps(weeks),
             }
         )
+    return rows
 
-    df = pl.DataFrame(rows).sort("roster_id", "regression_risk", descending=[False, True])
-    print(f"=== Player signal: season={season} ===")
-    print(f"  positional mean points/opportunity: "
-          + ", ".join(f"{p} {v:.3f}" for p, v in sorted(pos_mean.items())))
-    print(df.select(
+
+def compute(season: int) -> pl.DataFrame:
+    # Full (frozen) join; usage/score columns can be null for a player who didn't record
+    # that stat type, so treat as zero so opportunity and TD points are well-defined.
+    full = data_layer.read_join_season(season).filter(
+        pl.col("position").is_in(SKILL_POSITIONS)
+    ).with_columns(
+        [
+            pl.col(c).fill_null(0.0)
+            for c in [
+                "carries", "targets", "attempts", "fantasy_points_ppr",
+                "rushing_tds", "receiving_tds", "passing_tds",
+            ]
+        ]
+    )
+
+    # Materialize one tall snapshot per as-of week N = 1..maxweek: the dashboard exactly
+    # as it would have read through week N, every player recomputed on weeks ≤ N. Current
+    # (latest) behavior is the N = maxweek slice. Cheap to materialize all weeks.
+    max_week = int(full["week"].max())
+    all_rows = []
+    for n in range(1, max_week + 1):
+        sub = full.filter(pl.col("week") <= n)
+        # Structural efficiency baseline: cumulative over weeks ≤ N (max sample within
+        # the cutoff), never peeking past N.
+        pos_mean = positional_mean_ppo(season, list(range(1, n + 1)))
+        all_rows.extend(_compute_as_of(sub, pos_mean, n))
+
+    df = pl.DataFrame(all_rows).sort(
+        "as_of_week", "roster_id", "regression_risk", descending=[False, False, True]
+    )
+    print(f"=== Player signal: season={season}  as_of_week 1..{max_week} ===")
+    latest = df.filter(pl.col("as_of_week") == max_week)
+    print(f"  latest (week {max_week}) — {latest.height} players:")
+    print(latest.select(
         "player_display_name", "position", "recent_ppg", "opp_g",
         "td_share", "regression_risk", "read",
     ))

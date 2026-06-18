@@ -206,11 +206,20 @@ def write_leaguelogs_market_snapshot(df: pl.DataFrame, snapshot_date) -> None:
 
 # --- Derived Analytics ---
 # Pre-computed Team Overview analytics, promoted out of the front-end seam
-# (queries.js) into polars transforms. Each is a single overwrite file per season
-# (the analytics are a deterministic function of a frozen season's join output), so
-# these mirror the lineup-slots pattern: one row per roster_id, derived columns the
-# front end reads directly. When a server arrives, these become API endpoints that
-# serve the same parquet — no JS math to port.
+# (queries.js) into polars transforms. Each is now a tall snapshot file per season,
+# grain (season, as_of_week, entity): the dashboard as it would have read through each
+# week N, every analytic recomputed on weeks ≤ N (the Season-replay dimension). One row
+# per (as_of_week, roster_id/player), derived columns the front end reads directly. The
+# read fns below take an optional `as_of_week` (default = latest), so existing callers
+# get the current-week slice unchanged. When a server arrives, these become API
+# endpoints that serve the same parquet — no JS math to port.
+
+
+def _as_of_slice(df: pl.DataFrame, as_of_week) -> pl.DataFrame:
+    """Filter a tall derived-analytics frame to a single as-of week (default = latest)."""
+    if as_of_week is None:
+        as_of_week = df["as_of_week"].max()
+    return df.filter(pl.col("as_of_week") == as_of_week)
 
 def _team_form_path(season: int) -> Path:
     return _SNAPSHOT_DIR / "derived" / f"team_form_{season}.parquet"
@@ -228,8 +237,9 @@ def write_team_form(df: pl.DataFrame, season: int) -> None:
     df.write_parquet(path)
 
 
-def read_team_form(season: int) -> pl.DataFrame:
-    return pl.read_parquet(_team_form_path(season))
+def read_team_form(season: int, as_of_week=None) -> pl.DataFrame:
+    """Read the per-team form analytics for one as-of week (default = latest)."""
+    return _as_of_slice(pl.read_parquet(_team_form_path(season)), as_of_week)
 
 
 def _team_leakage_path(season: int) -> Path:
@@ -249,8 +259,9 @@ def write_team_leakage(df: pl.DataFrame, season: int) -> None:
     df.write_parquet(path)
 
 
-def read_team_leakage(season: int) -> pl.DataFrame:
-    return pl.read_parquet(_team_leakage_path(season))
+def read_team_leakage(season: int, as_of_week=None) -> pl.DataFrame:
+    """Read the per-team leakage analytics for one as-of week (default = latest)."""
+    return _as_of_slice(pl.read_parquet(_team_leakage_path(season)), as_of_week)
 
 
 def _player_signal_path(season: int) -> Path:
@@ -272,5 +283,6 @@ def write_player_signal(df: pl.DataFrame, season: int) -> None:
     df.write_parquet(path)
 
 
-def read_player_signal(season: int) -> pl.DataFrame:
-    return pl.read_parquet(_player_signal_path(season))
+def read_player_signal(season: int, as_of_week=None) -> pl.DataFrame:
+    """Read the per-player signal-quality read for one as-of week (default = latest)."""
+    return _as_of_slice(pl.read_parquet(_player_signal_path(season)), as_of_week)

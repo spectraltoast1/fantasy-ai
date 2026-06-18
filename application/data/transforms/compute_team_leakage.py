@@ -203,13 +203,17 @@ def _team_leakage(
     }
 
 
-def compute(season: int) -> pl.DataFrame:
-    season_df = data_layer.read_join_season(season).filter(
-        pl.col("position").is_in(SKILL_POSITIONS)
-    )
-    slot_rows = data_layer.read_lineup_slots(season).to_dicts()
-    slots = _expand_slots(slot_rows)
+def _compute_as_of(season_df: pl.DataFrame, slots, as_of_week: int) -> list:
+    """Per-team leakage rows as of one cutoff week N — `season_df` is the join filtered
+    to weeks ≤ N (skill positions). Returns a list of row dicts tagged `as_of_week = N`.
 
+    Leakage is a cumulative ledger (Part 2: every weekly swap is summed with equal
+    weight — season points-left is an accounting metric, not a trend), so the cutoff is
+    the only thing N changes: the optimal-lineup pass, the coachable/variance split, and
+    the season role+rate map are all recomputed over weeks ≤ N. Roster-as-of-N (Part 3)
+    falls out for free: `current_team` is arg_max(roster_id, week) over the slice, so it
+    resolves to a player's latest week ≤ N — a player traded away by week N no longer
+    counts as 'current' on the old roster's coachable test."""
     # Per (team, week) player pool for the optimal-lineup / leakage calc, tagging each
     # player with whether they were actually started.
     pool_by_team_week = {}
@@ -280,6 +284,7 @@ def compute(season: int) -> pl.DataFrame:
     for r, pos in zip(records, positions):
         rows.append(
             {
+                "as_of_week": as_of_week,
                 "roster_id": r["roster_id"],
                 "pct": r["pct"],
                 "points_left": r["points_left"],
@@ -293,11 +298,27 @@ def compute(season: int) -> pl.DataFrame:
                 "fixes_json": json.dumps(r["fixes"]),
             }
         )
+    return rows
 
-    df = pl.DataFrame(rows).sort("roster_id")
-    print(f"=== Team leakage: season={season} ===")
+
+def compute(season: int) -> pl.DataFrame:
+    season_df = data_layer.read_join_season(season).filter(
+        pl.col("position").is_in(SKILL_POSITIONS)
+    )
+    slots = _expand_slots(data_layer.read_lineup_slots(season).to_dicts())
+
+    # Materialize one tall snapshot per as-of week N = 1..maxweek: the team's leakage
+    # ledger exactly as it stood through week N. Current (latest) behavior is the
+    # N = maxweek slice. Cheap to materialize all weeks.
+    max_week = int(season_df["week"].max())
+    all_rows = []
+    for n in range(1, max_week + 1):
+        all_rows.extend(_compute_as_of(season_df.filter(pl.col("week") <= n), slots, n))
+
+    df = pl.DataFrame(all_rows).sort("as_of_week", "roster_id")
+    print(f"=== Team leakage: season={season}  as_of_week 1..{max_week} ===")
     print(
-        df.select(
+        df.filter(pl.col("as_of_week") == max_week).select(
             "roster_id", "pct", "points_left", "coachable_pts", "variance_pts", "spectrum_pos"
         )
     )
