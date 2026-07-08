@@ -66,15 +66,16 @@ SWEEP_HALF_LIVES = [None, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0]
 def _series(df: pl.DataFrame) -> pl.DataFrame:
     """Per-player recent series from a raw nfl_stats slice (keyed on display name — the
     backtest validates the scoring math, not the roster plumbing). Carries the per-week
-    (pts, opp, td_pts) list so `_weighted_rates` can derive EWMA rates at any half-life —
-    the same path the transform ships."""
+    (pts, opp, td_pts, xtd) list so `_weighted_rates` can derive EWMA rates at any
+    half-life — the same path the transform ships. `xtd` (play-by-play quality) is
+    already a column on nfl_stats — read straight off the raw slice, no join needed."""
     return (
         df.with_columns(opportunity_expr().alias("opp"), td_points_expr().alias("td_pts"))
         .group_by("player_display_name", "position")
         .agg(
             pl.len().alias("games"),
             pl.struct(
-                "week", pl.col("fantasy_points_ppr").alias("pts"), "opp", "td_pts"
+                "week", pl.col("fantasy_points_ppr").alias("pts"), "opp", "td_pts", "xtd"
             ).alias("weeks"),
         )
     )
@@ -109,7 +110,10 @@ def _predict(series: pl.DataFrame, pos_mean: dict, half_life) -> pl.DataFrame:
     rows = []
     for r in series.iter_rows(named=True):
         weeks = [
-            {"week": int(w["week"]), "pts": float(w["pts"]), "opp": float(w["opp"]), "td_pts": float(w["td_pts"])}
+            {
+                "week": int(w["week"]), "pts": float(w["pts"]), "opp": float(w["opp"]),
+                "td_pts": float(w["td_pts"]), "xtd": float(w["xtd"]),
+            }
             for w in r["weeks"]
         ]
         rates = _weighted_rates(weeks, half_life=half_life)
@@ -148,7 +152,7 @@ def _load(season: int) -> pl.DataFrame:
             pl.col(c).fill_null(0.0)
             for c in [
                 "carries", "targets", "attempts", "fantasy_points_ppr",
-                "rushing_tds", "receiving_tds", "passing_tds",
+                "rushing_tds", "receiving_tds", "passing_tds", "xtd",
             ]
         ]
     )
