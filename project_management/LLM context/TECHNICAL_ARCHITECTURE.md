@@ -123,12 +123,17 @@ selector drives the readiness gate (`weeksElapsed = asOfWeek`) and replaced the 
 **Tuning constants → future config seed:** league-agnostic **magic numbers** kept as named
 constants near the logic that uses them. The form/leakage constants moved into their
 transforms (`HALF_LIFE_WK`, `DIRECTION_BAND` in `compute_team_form.py`; `MIN_GAMES`,
-`COACHABLE_RATE_MARGIN`, `HABITUAL_STARTER_THRESHOLD` in `compute_team_leakage.py`);
-`queries.js` still holds its own `MIN_GAMES` and the 10%/15% construction-signal thresholds
-for the inline depth/signals read. Candidates to become league/user-configurable one day —
-document the seam, don't build the config now (premature flexibility is its own debt). Lift
-to a config object when a real second consumer appears. (Note: `MIN_GAMES` is now defined in
-two places for two independent consumers — fold into shared config when that config exists.)
+`COACHABLE_RATE_MARGIN`, `HABITUAL_STARTER_THRESHOLD` in `compute_team_leakage.py`;
+`compute_player_signal.py` owns its own signal set — `SHRINK_K`, `MIN_GAMES`,
+`SPIKE_BAND`/`STICKY_BAND`, `POS_MEAN_MIN_OPP`, `OPP_HALF_LIFE_WK`,
+`DIRECTION_HALF_LIFE_WK`/`DIRECTION_BAND`); `queries.js` still holds its own `MIN_GAMES` and
+the 10%/15% construction-signal thresholds for the inline depth/signals read. Candidates to
+become league/user-configurable one day — document the seam, don't build the config now
+(premature flexibility is its own debt). Lift to a shared config object when that seam is
+built. (Note: `MIN_GAMES` is currently defined in **three** places for three independent
+consumers — `compute_player_signal.py` (=3, the per-player games gate),
+`compute_team_leakage.py` (=2), and `queries.js` (=2, the inline construction read) — same
+name, independent values and semantics; fold into shared config when it exists.)
 
 ---
 
@@ -214,6 +219,10 @@ non-negotiable architectural rule.
 - Transform scripts import data_layer and call its functions — 
   they do not construct file paths or call polars read/write directly
 - Dashboard components read via data_layer functions only
+- Fetchers write through data_layer too — they build the DataFrame from the source
+  API, then persist it via a data_layer writer (e.g. write_nfl_stats,
+  write_sleeper_matchups, write_sleeper_players, write_player_id_map); they do not
+  construct snapshot/cache paths or call polars write directly
 - Any new data entity requires a read and write function added 
   to data_layer.py before the consuming script is written
 
@@ -223,10 +232,16 @@ non-negotiable architectural rule.
 - Section header naming matches the corresponding transform 
   script name (e.g. # --- Join: NFL + Sleeper Weekly ---)
 
-**What never belongs in a transform or dashboard script:**
+**What never belongs in a transform, dashboard, or fetcher script:**
 - pathlib.Path construction pointing at snapshots/ or cache/
 - pl.read_parquet() or df.write_parquet() called directly
 - Hardcoded file path strings
+
+**One documented exception — raw JSON cache dumps.** `sleeper.py`'s `refresh()` writes the
+league / users / rosters / bracket JSON responses straight to `cache/` through its own
+`_write_json` helper. These are current-state API captures (overwritten each run), not
+analytics entities, and data_layer has no JSON support — so they stay in the fetcher for
+now. Everything in **parquet** goes through data_layer.
 
 ### Current source assignments
 
@@ -308,6 +323,15 @@ fetch_players() caches the full Sleeper /players/nfl endpoint to cache/sleeper/p
 ## leaguelogs.py Notes
 
 `snapshot` pulls every profile (discovered dynamically from /v1/market — the API contract is additive) and appends to snapshots/leaguelogs/market_values.parquet via data_layer.write_leaguelogs_market_snapshot(), idempotent with dedup on snapshot_date. `profiles` lists the current profile keys. Read history via data_layer.read_leaguelogs_market().
+
+**Status — collect-only (exception).** This fetcher runs on its own launchd schedule purely
+to **bank market-value history** the API can't backfill (it serves only "now"). **No
+transform or dashboard consumes its output yet** — market-value reads (trade / value VOR)
+are V4. It is therefore an explicit exception to the scope filter's "everything traces to a
+current consumer" expectation, kept solely to accumulate the time-series until then. Note it
+is **not** an I/O-rule exception — it already writes through
+data_layer.write_leaguelogs_market_snapshot(); the gap is a missing *consumer*, not missing
+data-layer routing. Revisit when V4 wires in the market-value reads.
 
 **Snapshot reliability (diagnosed & partially fixed 2026-06-18):** the daily snapshot had been silently dropping days. Root cause was *not* power/sleep — it was transient API failures (ReadTimeout / connection reset / ChunkedEncodingError against developer.leaguelogs.com) combined with a fragile write path: `snapshot()` collected all 5 profiles in memory and wrote once at the very end, so any single failed request discarded every profile already fetched that day (e.g. 2026-06-14 fetched 2 of 5, saved 0). **Fix applied:** `snapshot()` now writes incrementally — it persists the cumulative set of today's rows after each profile, so a later failure leaves a *partial* day on disk (more recoverable) instead of total loss. Because the writer dedupes on snapshot_date and treats `df` as the full set for that day, a re-run cleanly replaces a partial day with the complete one (no duplicates). 2026-06-18 was captured this way (5 profiles, 3,409 rows; history now 14 dates). **Caveat:** until retry/resilience lands, downstream analysis should treat any day with fewer than the expected profile count (5) as incomplete. Historical gaps 2026-06-03, -05, -06, -10, -14 are permanent — the API serves only "now" and they were never snapshotted.
 
