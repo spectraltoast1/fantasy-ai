@@ -2,7 +2,7 @@
 
 > Engineering context document for Claude Code. Describes the stack, folder structure, data layer design, and technical principles. Updated regularly as the project evolves.
 
-**Last reviewed:** 2026-06-18
+**Last reviewed:** 2026-07-08
 
 ---
 
@@ -159,7 +159,7 @@ fantasy-ai/
     │   ├── cache/                  # current state (gitignored)
     │   │   ├── player_id_map.parquet  # gsis_id → sleeperPlayerId mapping
     │   │   └── sleeper/
-    │   │       └── players.parquet    # Sleeper /players/nfl registry, refreshed ≤ once/day
+    │   │       └── players.parquet    # Sleeper /players/nfl registry, refreshed ≤ once/day — 10 cols incl. injury_status/depth_chart_order/practice_participation (Phase 1 refinement)
     │   └── snapshots/              # time-series parquet (gitignored)
             ├── derived/                                 # pre-computed analytics (compute_*.py output); tall, grain (season, as_of_week, entity)
             │   ├── team_form_2025.parquet               # per (as_of_week, team) trajectory: slope, direction, spectrum, weekly series
@@ -172,7 +172,7 @@ fantasy-ai/
                 └── 2025/
                     └── remainders_2025_w{week}.parquet      # unresolved players; empty = clean join
     │       └── nflreadpy/
-    │           └── nfl_stats_2025.parquet  # 18,539 rows × 121 cols, weeks 1-18
+    │           └── nfl_stats_2025.parquet  # 18,539 rows × 123 cols, weeks 1-18 (+xtd, redzone_touches — PBP quality signal, Phase 1 refinement)
             └── sleeper/
                 └── 2025/
                     ├── teams_2025.parquet            # roster_id → team/owner names
@@ -244,7 +244,7 @@ non-negotiable architectural rule.
 | derive_lineup_slots transform | snapshots/sleeper/{season}/ | lineup_slots_{season}.parquet — starting skill-slot requirements (slot, count, eligible) derived from the league's raw roster_positions; declares the QB/RB/WR/TE + FLEX config so the front-end "perfect lineup" / efficiency calc is exact, not inferred |
 | compute_team_form transform | snapshots/derived/ | team_form_{season}.parquet — **tall, grain (as_of_week, roster_id)** (Season-replay): per as-of week N=1..maxweek, one row per roster_id with the EWMA scoring slope, direction, recent record, league-relative spectrum pos, per-week series — all recomputed on weeks ≤ N. Pre-computed so the front-end seam just reads it (no JS trajectory math) |
 | compute_team_leakage transform | snapshots/derived/ | team_leakage_{season}.parquet — **tall, grain (as_of_week, roster_id)**: per as-of week N, lineup efficiency %, season points-left, coachable/variance split, named fixes, per-week leak, spectrum pos — cumulative ledger over weeks ≤ N. Roster-as-of-N: a player's "current team" resolves to his latest week ≤ N. Feeds both the Team Overview leakage lens and the League drawer's efficiency read |
-| compute_player_signal transform | snapshots/derived/ | player_signal_{season}.parquet — **tall, grain (as_of_week, roster_id, player)**: per as-of week N, one row per rostered skill player with the spike signal-quality read (Phase 1), recomputed on weeks ≤ N (roster-as-of-N applies). Decomposes recent production into sticky opportunity (opp_g, EWMA-windowed via injected half-life — ships cumulative, backtest-tuned) vs fragile efficiency (ppo, shrunk toward the league positional mean); headline regression_risk + a sample-gated read (too_early/spike/mixed/sticky), td_share as evidence, per-week series. The first decision-critique engine slice; not a forward projection |
+| compute_player_signal transform | snapshots/derived/ | player_signal_{season}.parquet — **tall, grain (as_of_week, roster_id, player)**: per as-of week N, one row per rostered skill player with the spike signal-quality read (Phase 1), recomputed on weeks ≤ N (roster-as-of-N applies). Decomposes recent production into sticky opportunity (opp_g, EWMA-windowed via injected half-life — ships cumulative, backtest-tuned) vs fragile efficiency (ppo, shrunk toward the league positional mean); headline regression_risk + a sample-gated read (too_early/spike/mixed/sticky), td_share as evidence, per-week series. The first decision-critique engine slice; not a forward projection. **Phase 1 refinement (2026-07-08):** four added fields close the DECISION_READS.md §1 gap — quality_rate (xtd_g/opp_g, the Quality axis from PBP td_prob), direction/reliability (Trust axis, from the player's own opportunity series), security (Trust's context flag, from Sleeper injury/depth-chart data), point_correlation (pearson(xtd, td_pts)). Kept separate from the validated core read, not fused in |
 
 These assignments reflect current v1 decisions, not permanent rules. Future versions may snapshot additional sources (e.g., odds history for post-hoc analysis).
 
@@ -289,6 +289,8 @@ Snap count join path: load_snap_counts().pfr_player_id →
 load_ff_playerids().pfr_id → gsis_id
 Join coverage on nfl_sleeper_weekly_joined targets 100% of rostered skill-position players per week. The join is left-joined from Sleeper (authoritative), so players without nflreadpy stats that week (injured, inactive) appear with 0-stat rows rather than being dropped. The audit step resolves any remaining unknowns via the Sleeper player registry.
 
+**PBP quality signal (added 2026-07-08, Phase 1 refinement):** `nfl_stats.py._load_pbp_quality(year)` calls `nflreadpy.load_pbp(year)` (a new function on the same package — not a new dependency) and aggregates nflfastR's per-play `td_prob` (expected-TD probability given down/distance/yardline/score/time) into per-(gsis_id, week) `xtd` (sum of td_prob over the player's rush attempts, targets, and pass attempts) and `redzone_touches` (yardline_100 ≤ 20). PBP player-id columns (`rusher_player_id`/`receiver_player_id`/`passer_player_id`) are already gsis_id format, matching every other join in this fetcher — no new id mapping needed. Filtered to `season_type == "REG"` (playoffs excluded), consistent with `_load_player_stats`. This is the Quality axis (DECISION_READS.md §1) feeding `compute_player_signal.py`'s `quality_rate`.
+
 ## sleeper.py Notes
 
 Player IDs are strings (e.g. "2307") throughout - never cast to int. This is the sleeperPlayerId join key.
@@ -300,6 +302,8 @@ refresh() current-week snapshot writes will silently skip with an explicit log m
 players_points in matchup snapshots is stored as a serialized JSON string (map of sleeperPlayerId → points). Parse with json.loads before joining. Same applies to starters (JSON array of starter IDs).
 
 fetch_players() caches the full Sleeper /players/nfl endpoint to cache/sleeper/players.parquet. Skips the network call if the cache is less than 24 hours old; pass force=True to override. Called automatically by refresh() and by audit_join.py when the cache is stale or missing. Can also be triggered standalone: python fetchers/sleeper.py fetch-players. Position values in this endpoint use Sleeper's internal codes: QB/RB/WR/TE for skill, K for kicker, DEF for defense.
+
+**Injury/depth-chart fields (added 2026-07-08, Phase 1 refinement):** fetch_players() now also carries injury_status, injury_body_part, depth_chart_order, depth_chart_position, and practice_participation through to the cache — the endpoint already returns them, previously discarded. Feeds compute_player_signal.py's `security` read. **Gotcha:** these fields are null for most players in the sampled prefix polars uses for schema inference, which can pin the wrong dtype for a column that's stringy/numeric further down — fetch_players() passes `infer_schema_length=None` to pl.DataFrame() to force a full scan. This is "now" data only (no history), so the same value applies across every as_of_week slice for a given player — a documented simplification, not a bug.
 
 ## leaguelogs.py Notes
 
@@ -350,9 +354,10 @@ via data_layer.py, performs a single join, and writes via data_layer.py.
   keyword args** — `compute(season)` is the composition root that owns the module
   constants and passes them down (DIP: the pure logic depends on parameters, not
   globals, so it tests in isolation at any parameterisation). Shared numeric helpers
-  (`round1`, `mean`, `median`, and the league-relative `spectrum_positions`
-  normaliser — the Python mirror of the front-end's old `attachSpectrumPos`) live
-  once in **`transforms/_analytics.py`** rather than being copy-pasted per transform.
+  (`round1`, `mean`, `median`, the league-relative `spectrum_positions`
+  normaliser — the Python mirror of the front-end's old `attachSpectrumPos` — and
+  `pearson`, added for the Phase 1 point-correlation refinement) live once in
+  **`transforms/_analytics.py`** rather than being copy-pasted per transform.
 
 - `compute_player_signal.py` — **the first decision-critique engine slice (Product
   Roadmap Phase 1): the spike signal-quality read.** Reads the (frozen) season join,
@@ -372,6 +377,24 @@ via data_layer.py, performs a single join, and writes via data_layer.py.
   league's rostered players. Per-game rates come from the shared pure
   `_weighted_rates(weeks, half_life)` (EWMA window), so the windowing choice is a single
   injected parameter and the backtest validates the exact shipped path.
+
+  **Phase 1 refinement (2026-07-08):** closes the DECISION_READS.md §1 delta between the
+  shipped engine and the full Opportunity spec — four fields added, kept separate from
+  the validated core read ("don't collapse the axes"). `quality_rate` (`xtd_g/opp_g`,
+  the Quality axis — expected TDs per touch, independent of Volume) is computed inside
+  `_player_signal` from the new `xtd` PBP aggregation (see nflreadpy Notes), so the
+  backtest exercises it too. `direction`/`reliability` (the Trust axis) and
+  `point_correlation` are computed in `_compute_as_of` from the raw per-week series —
+  `direction` mirrors `compute_team_form.py`'s weighted-least-squares-slope +
+  `DIRECTION_BAND` pattern (own constant `DIRECTION_HALF_LIFE_WK`, independent of
+  `OPP_HALF_LIFE_WK`); `reliability` is `1/(1+cv)` on the weekly opportunity series;
+  `point_correlation` is `pearson(xtd, td_pts)` (new shared helper in `_analytics.py`),
+  read against `quality_rate` per the spec (low correlation + high quality = unlucky;
+  low + low = correctly cheap). `security` is a categorical context flag (not a
+  numeric trend) from a new `_security_map()` built once per `compute(season)` call
+  from `data_layer.read_sleeper_players()` — "now" data, so it's constant across every
+  as_of_week slice for a given player. None of this touches `expected_ppg`/
+  `regression_risk` — the 2025 backtest gate is unchanged (PASS/PASS, 13.2% MAE cut).
 
 - `backtest_player_signal.py` — **the validation gate Phase 1 must clear before any
   engine ships live.** Imports the *same* pure `_player_signal` the transform ships

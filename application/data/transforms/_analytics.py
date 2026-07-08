@@ -24,6 +24,25 @@ def median(xs) -> float:
     return s[(m - 1) // 2] if m % 2 else (s[m // 2 - 1] + s[m // 2]) / 2
 
 
+def pearson(xs, ys) -> float | None:
+    """Pearson correlation coefficient between two equal-length series.
+
+    Returns None (not 0.0) when undefined — fewer than 2 points, or either series has
+    zero variance — so callers can distinguish "no signal" from "measured, no
+    correlation," which matters for a sample-gated read (design law 2).
+    """
+    n = len(xs)
+    if n < 2 or n != len(ys):
+        return None
+    mx, my = mean(xs), mean(ys)
+    num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    dx = sum((x - mx) ** 2 for x in xs) ** 0.5
+    dy = sum((y - my) ** 2 for y in ys) ** 0.5
+    if dx == 0.0 or dy == 0.0:
+        return None
+    return num / (dx * dy)
+
+
 def spectrum_positions(values):
     """League-relative 0–1 position for each value, in input order (min→0, max→1).
 

@@ -92,7 +92,10 @@ def fetch_players(force: bool = False) -> None:
 
     Skips the network call if the cache file is less than 24 hours old,
     unless force=True. The full response is ~5 MB with 100+ fields per player;
-    we normalise it down to just the columns needed for position resolution.
+    we normalise it down to the columns needed for position resolution plus the
+    injury/depth-chart fields the Trust axis's "security" read needs
+    (DECISION_READS.md §1) — this endpoint already carries them, so surfacing
+    security requires no new dependency.
 
     Position values in this endpoint use Sleeper's internal codes:
       skill positions: QB, RB, WR, TE
@@ -120,10 +123,18 @@ def fetch_players(force: bool = False) -> None:
             "position": player.get("position"),
             "team": player.get("team"),
             "status": player.get("status"),
+            "injury_status": player.get("injury_status"),
+            "injury_body_part": player.get("injury_body_part"),
+            "depth_chart_order": player.get("depth_chart_order"),
+            "depth_chart_position": player.get("depth_chart_position"),
+            "practice_participation": player.get("practice_participation"),
         })
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    pl.DataFrame(rows).write_parquet(path)
+    # infer_schema_length=None: most players have null injury/practice fields, so a
+    # partial-row schema scan can pin the wrong dtype for a column that's all-null in
+    # the sampled prefix but stringy further down — scan every row instead.
+    pl.DataFrame(rows, infer_schema_length=None).write_parquet(path)
     print(f"  players: {len(rows)} players → {path}")
 
 

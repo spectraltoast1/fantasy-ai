@@ -31,6 +31,17 @@ backtest_player_signal.py. It beats a naive "recent points carry forward" baseli
 rest-of-season error AND, among hot players (which the naive read cannot tell apart),
 correctly separates the group that held from the group that regressed ~3 pts/g.
 
+**Phase 1 refinement (DECISION_READS.md §1):** four fields close the gap between this
+shipped engine and the full Opportunity spec — kept separate, not fused into the
+core read above, per "don't collapse the axes; divergence is the signal":
+  - `quality_rate` — the Quality axis: expected TDs per touch (play-by-play `td_prob`),
+    independent of Volume (`opp_g`). A 3rd-down back can be high-quality/low-volume.
+  - `direction` / `reliability` — the Trust axis's trend + consistency, from the
+    player's own weekly opportunity series (mirrors compute_team_form.py's slope math).
+  - `security` — the Trust axis's context flag, from Sleeper injury/depth-chart status.
+  - `point_correlation` — the companion: does his valuable (high-xtd) production
+    actually convert to TD points, or is he due a bounce either way?
+
 Output: snapshots/derived/player_signal_{season}.parquet, one row per rostered skill
 player.
 
@@ -49,7 +60,7 @@ _TRANSFORMS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_TRANSFORMS_DIR.parent))  # application/data → data_layer
 sys.path.insert(0, str(_TRANSFORMS_DIR))          # transforms → _analytics
 import data_layer
-from _analytics import round1, spectrum_positions
+from _analytics import mean, pearson, round1, spectrum_positions
 
 SKILL_POSITIONS = ["QB", "RB", "WR", "TE"]
 
@@ -89,6 +100,19 @@ STICKY_BAND = 0.05
 # and re-run the sweep to revisit.
 OPP_HALF_LIFE_WK = None
 
+# --- Trust axis (DECISION_READS.md §1 refinement) ---
+# Direction's own recency weighting for the slope fit itself — separate from
+# OPP_HALF_LIFE_WK (which weights the opp_g *rate*, validated cumulative). Mirrors
+# compute_team_form.py's HALF_LIFE_WK: recent weeks matter more when fitting "is this
+# trending," independent of how the point-estimate rate is windowed.
+DIRECTION_HALF_LIFE_WK = 2
+# A slope within ±DIRECTION_BAND of the player's own average opportunity reads
+# "steady" — same tuning rationale as compute_team_form.py's constant of the same name.
+DIRECTION_BAND = 0.04
+# Sleeper injury_status values that flag real risk to the opportunity continuing.
+# "Questionable" is treated as its own softer tier, not lumped in here.
+SECURITY_FLAGGED_STATUSES = {"Out", "Doubtful", "IR", "PUP", "Sus", "NA"}
+
 
 def opportunity_expr() -> pl.Expr:
     """Position-specific opportunity (per row): the volume a player commands, which is
@@ -108,18 +132,20 @@ def opportunity_expr() -> pl.Expr:
 def _weighted_rates(weeks, *, half_life):
     """EWMA-weighted per-game rates from a player's per-week series.
 
-    `weeks`: list of {week, pts, opp, td_pts} (any order). Each week's weight halves
-    every `half_life` weeks back from the player's most recent game, so a drifting role
-    is read off recent usage without discarding older games — a half-life, not a hard
-    window. `half_life=None` → equal weight (cumulative). The half-life is injected (not
-    a module global) so the analytic is parameterisable and testable in isolation: the
-    backtest sweeps it through this same function.
+    `weeks`: list of {week, pts, opp, td_pts, xtd} (any order; `xtd` optional, defaults
+    to 0.0 — keeps this function callable on older-shaped week dicts). Each week's
+    weight halves every `half_life` weeks back from the player's most recent game, so a
+    drifting role is read off recent usage without discarding older games — a
+    half-life, not a hard window. `half_life=None` → equal weight (cumulative). The
+    half-life is injected (not a module global) so the analytic is parameterisable and
+    testable in isolation: the backtest sweeps it through this same function.
 
-    Returns {games, ppg, opp_g, td_ppg}. `games` is the raw count — sample size for the
-    low-sample gate, which is about confidence, not recency, so it is never weighted.
-    The weights are normalised, so only their *relative* size within the player's own
-    games matters (a player whose games are all old is not down-levelled — a per-game
-    rate is a per-game rate; staleness is the sample gate's job, not the rate's).
+    Returns {games, ppg, opp_g, td_ppg, xtd_g}. `games` is the raw count — sample size
+    for the low-sample gate, which is about confidence, not recency, so it is never
+    weighted. The weights are normalised, so only their *relative* size within the
+    player's own games matters (a player whose games are all old is not down-levelled —
+    a per-game rate is a per-game rate; staleness is the sample gate's job, not the
+    rate's).
     """
     ws = sorted(weeks, key=lambda w: w["week"])
     n = len(ws)
@@ -135,26 +161,33 @@ def _weighted_rates(weeks, *, half_life):
         "ppg": sum(wt * w["pts"] for wt, w in zip(wts, ws)) / tw,
         "opp_g": sum(wt * w["opp"] for wt, w in zip(wts, ws)) / tw,
         "td_ppg": sum(wt * w["td_pts"] for wt, w in zip(wts, ws)) / tw,
+        "xtd_g": sum(wt * w.get("xtd", 0.0) for wt, w in zip(wts, ws)) / tw,
     }
 
 
 def _player_signal(agg, pos_mean_ppo, *, shrink_k, min_games, spike_band, sticky_band):
     """The pure signal read for one player from his recent-window aggregate.
 
-    `agg`: {position, games, ppg, opp_g, td_ppg}. `pos_mean_ppo`: the league-wide mean
-    points-per-opportunity for this player's position. The tuning constants are injected
-    (not read from module globals) so the analytic is parameterisable and testable in
-    isolation — the backtest sweeps `shrink_k` through this same function.
+    `agg`: {position, games, ppg, opp_g, td_ppg, xtd_g}. `pos_mean_ppo`: the league-wide
+    mean points-per-opportunity for this player's position. The tuning constants are
+    injected (not read from module globals) so the analytic is parameterisable and
+    testable in isolation — the backtest sweeps `shrink_k` through this same function.
 
     Returns the decomposition: expected (efficiency-regressed) ppg, regression_risk, the
-    TD share of scoring, and a sample-gated categorical read.
+    TD share of scoring, a sample-gated categorical read, and `quality_rate` — the
+    Quality axis (DECISION_READS.md §1): expected TDs per touch (from play-by-play
+    `td_prob`), independent of how many touches he gets. Kept separate from `opp_g`
+    (Volume), never fused — a 3rd-down back can be high-quality_rate, low-opp_g, and
+    that divergence is the signal, not something to average away.
     """
     games = agg["games"]
     ppg = agg["ppg"]
     opp_g = agg["opp_g"]
     td_ppg = agg["td_ppg"]
+    xtd_g = agg.get("xtd_g", 0.0)
 
     low_sample = games < min_games or opp_g <= 0.0
+    quality_rate = xtd_g / opp_g if opp_g > 0 else 0.0
     ppo = ppg / opp_g if opp_g > 0 else 0.0
     # Shrink efficiency toward the positional norm by sample size; opportunity is the
     # anchor and is carried forward as-is (the sticky half).
@@ -185,6 +218,7 @@ def _player_signal(agg, pos_mean_ppo, *, shrink_k, min_games, spike_band, sticky
         "expected_ppg": round1(expected_ppg),
         "regression_risk": round(regression_risk, 3),
         "read": read,
+        "quality_rate": round(quality_rate, 3),
     }
 
 
@@ -195,19 +229,100 @@ def td_points_expr() -> pl.Expr:
     return (pl.col("rushing_tds") + pl.col("receiving_tds")) * 6 + pl.col("passing_tds") * 4
 
 
+def _direction(series, *, half_life, band) -> str:
+    """Trend of a player's own opportunity across his recent weeks — the Trust axis's
+    "direction" (DECISION_READS.md §1): is his role growing, shrinking, or steady?
+    Mirrors compute_team_form.py's weighted-least-squares slope + band-thresholding at
+    player grain, fit on `opp` instead of points. `series`: list of {week, opp, ...},
+    any order. Fewer than 2 games reads "steady" — nothing to fit a trend to.
+    """
+    ws = sorted(series, key=lambda w: w["week"])
+    n = len(ws)
+    if n < 2:
+        return "steady"
+    opp = [w["opp"] for w in ws]
+    decay = 0.5 ** (1.0 / half_life)
+    wts = [decay ** (n - 1 - i) for i in range(n)]
+    W = sum(wts)
+    mx = sum(wt * i for i, wt in enumerate(wts)) / W
+    my = sum(wt * opp[i] for i, wt in enumerate(wts)) / W
+    num = sum(wts[i] * (i - mx) * (opp[i] - my) for i in range(n))
+    den = sum(wts[i] * (i - mx) ** 2 for i in range(n))
+    slope = num / den if den else 0.0
+    avg = mean(opp)
+    rel = slope / avg if avg else 0.0
+    return "rising" if rel > band else "fading" if rel < -band else "steady"
+
+
+def _reliability(series, *, min_games):
+    """0–1 read on how consistent a player's opportunity has been week to week — the
+    Trust axis's "reliability" (DECISION_READS.md §1). From the coefficient of variation
+    (std/mean) of his weekly opportunity: `reliability = 1 / (1 + cv)`, so a perfectly
+    steady role reads 1.0 and a wildly swinging one approaches 0. None below
+    `min_games` — a CV from one or two games measures noise, not consistency.
+    """
+    if len(series) < min_games:
+        return None
+    opp = [w["opp"] for w in series]
+    m = mean(opp)
+    if m <= 0:
+        return None
+    var = sum((o - m) ** 2 for o in opp) / len(opp)
+    cv = (var ** 0.5) / m
+    return round(1.0 / (1.0 + cv), 3)
+
+
+def _point_correlation(series, *, min_games):
+    """Correlation between a player's weekly touchdown points and his weekly expected
+    touchdowns (`xtd`, the Quality signal) — the point-correlation companion
+    (DECISION_READS.md §1): do his valuable chances actually convert? Read against
+    `quality_rate`: low correlation + high quality_rate = unlucky, a bounce-back
+    candidate (the valuable chances are there, they just haven't hit yet); low
+    correlation + low quality_rate = correctly cheap (no hidden upside either way).
+    None below `min_games`, or when either series has no variance to correlate against.
+    """
+    if len(series) < min_games:
+        return None
+    td_pts = [w["td_pts"] for w in series]
+    xtd = [w["xtd"] for w in series]
+    r = pearson(xtd, td_pts)
+    return round(r, 3) if r is not None else None
+
+
+def _security(injury_status, depth_chart_order) -> str:
+    """Categorical read off Sleeper roster context — the Trust axis's "security"
+    (DECISION_READS.md §1): is the ground under this opportunity solid? A context flag,
+    not a trend, so it stays a separate field rather than blending into
+    direction/reliability. Approximation, not the full spec: real security also wants
+    coaching/scheme-change and the competition's draft capital, which aren't in the
+    data layer yet — this is the slice buildable from what Sleeper's /players/nfl
+    endpoint already returns. `depth_chart_order > 1` is a soft signal only (WR/TE rooms
+    routinely start more than one), so it reads as the milder "depth_chart_risk" tier,
+    not "flagged".
+    """
+    if injury_status in SECURITY_FLAGGED_STATUSES:
+        return "flagged"
+    if injury_status == "Questionable":
+        return "questionable"
+    if depth_chart_order is not None and depth_chart_order > 1:
+        return "depth_chart_risk"
+    return "stable"
+
+
 def _recent_aggregate(df: pl.DataFrame) -> pl.DataFrame:
     """Collapse per-week skill rows to one per-player record: the raw game count and the
-    per-week (pts, opp, td_pts) series. The per-game rates (ppg, opp_g, td_ppg) are
-    derived from this series by `_weighted_rates` (EWMA half-life), so the windowing
-    choice lives in one injected-parameter place rather than baked into the aggregation —
-    and the same series drives the evidence sparkline."""
+    per-week (pts, opp, td_pts, xtd) series. The per-game rates (ppg, opp_g, td_ppg,
+    xtd_g) are derived from this series by `_weighted_rates` (EWMA half-life), so the
+    windowing choice lives in one injected-parameter place rather than baked into the
+    aggregation — and the same series drives the evidence sparkline and the Trust/
+    point-correlation reads."""
     return (
         df.with_columns(opportunity_expr().alias("opp"), td_points_expr().alias("td_pts"))
         .group_by("sleeper_player_id", "player_display_name", "position")
         .agg(
             pl.len().alias("games"),
             pl.struct(
-                "week", pl.col("fantasy_points_ppr").alias("pts"), "opp", "td_pts"
+                "week", pl.col("fantasy_points_ppr").alias("pts"), "opp", "td_pts", "xtd"
             )
             .sort_by("week")
             .alias("weeks"),
@@ -244,7 +359,9 @@ def positional_mean_ppo(season: int, weeks) -> dict:
     return {row["position"]: float(row["mean_ppo"]) for row in means.iter_rows(named=True)}
 
 
-def _compute_as_of(season_df: pl.DataFrame, pos_mean: dict, as_of_week: int, *, opp_half_life) -> list:
+def _compute_as_of(
+    season_df: pl.DataFrame, pos_mean: dict, as_of_week: int, *, opp_half_life, security_map: dict
+) -> list:
     """The per-player signal rows as of one cutoff week N — `season_df` is the join
     already filtered to weeks ≤ N (skill positions, nulls filled). Returns a list of
     row dicts tagged `as_of_week = N`.
@@ -272,7 +389,10 @@ def _compute_as_of(season_df: pl.DataFrame, pos_mean: dict, as_of_week: int, *, 
     for row in agg.iter_rows(named=True):
         pos = row["position"]
         series = [
-            {"week": int(w["week"]), "pts": float(w["pts"]), "opp": float(w["opp"]), "td_pts": float(w["td_pts"])}
+            {
+                "week": int(w["week"]), "pts": float(w["pts"]), "opp": float(w["opp"]),
+                "td_pts": float(w["td_pts"]), "xtd": float(w["xtd"]),
+            }
             for w in row["weeks"]
         ]
         # EWMA-weighted per-game rates (opportunity is the drifting half — recency-tilted);
@@ -286,6 +406,10 @@ def _compute_as_of(season_df: pl.DataFrame, pos_mean: dict, as_of_week: int, *, 
             spike_band=SPIKE_BAND,
             sticky_band=STICKY_BAND,
         )
+        # Trust axis (direction/reliability) + the point-correlation companion are
+        # computed from the raw series, not inside `_player_signal` — they need the
+        # per-week list, not just the aggregate rates, and (for security) external
+        # roster context `_player_signal` has no business depending on.
         records.append(
             {
                 "as_of_week": as_of_week,
@@ -294,6 +418,10 @@ def _compute_as_of(season_df: pl.DataFrame, pos_mean: dict, as_of_week: int, *, 
                 "player_display_name": row["player_display_name"],
                 "position": pos,
                 **sig,
+                "direction": _direction(series, half_life=DIRECTION_HALF_LIFE_WK, band=DIRECTION_BAND),
+                "reliability": _reliability(series, min_games=MIN_GAMES),
+                "point_correlation": _point_correlation(series, min_games=MIN_GAMES),
+                "security": security_map.get(row["sleeper_player_id"], "unknown"),
                 "weeks": [
                     {"week": w["week"], "pts": round1(w["pts"]), "opp": round1(w["opp"])}
                     for w in series
@@ -327,6 +455,19 @@ def _compute_as_of(season_df: pl.DataFrame, pos_mean: dict, as_of_week: int, *, 
     return rows
 
 
+def _security_map() -> dict:
+    """sleeper_player_id → security category, from the current Sleeper roster cache
+    (injury_status, depth_chart_order). This is "now" data, not historical — Sleeper
+    doesn't snapshot injury/depth-chart state by week — so the same value applies to
+    every as_of_week slice for a given player. A documented simplification, not a bug:
+    the source data has no history to be more precise with."""
+    players = data_layer.read_sleeper_players()
+    return {
+        row["sleeper_player_id"]: _security(row["injury_status"], row["depth_chart_order"])
+        for row in players.iter_rows(named=True)
+    }
+
+
 def compute(season: int) -> pl.DataFrame:
     # Full (frozen) join; usage/score columns can be null for a player who didn't record
     # that stat type, so treat as zero so opportunity and TD points are well-defined.
@@ -337,10 +478,12 @@ def compute(season: int) -> pl.DataFrame:
             pl.col(c).fill_null(0.0)
             for c in [
                 "carries", "targets", "attempts", "fantasy_points_ppr",
-                "rushing_tds", "receiving_tds", "passing_tds",
+                "rushing_tds", "receiving_tds", "passing_tds", "xtd",
             ]
         ]
     )
+
+    security_map = _security_map()
 
     # Materialize one tall snapshot per as-of week N = 1..maxweek: the dashboard exactly
     # as it would have read through week N, every player recomputed on weeks ≤ N. Current
@@ -352,9 +495,15 @@ def compute(season: int) -> pl.DataFrame:
         # Structural efficiency baseline: cumulative over weeks ≤ N (max sample within
         # the cutoff), never peeking past N.
         pos_mean = positional_mean_ppo(season, list(range(1, n + 1)))
-        all_rows.extend(_compute_as_of(sub, pos_mean, n, opp_half_life=OPP_HALF_LIFE_WK))
+        all_rows.extend(
+            _compute_as_of(sub, pos_mean, n, opp_half_life=OPP_HALF_LIFE_WK, security_map=security_map)
+        )
 
-    df = pl.DataFrame(all_rows).sort(
+    # infer_schema_length=None: reliability/point_correlation are None for many
+    # low-sample rows (early as_of_week slices especially) — a partial-row schema scan
+    # can pin the wrong dtype for a column that's all-null in the sampled prefix but
+    # numeric further down, so scan every row instead.
+    df = pl.DataFrame(all_rows, infer_schema_length=None).sort(
         "as_of_week", "roster_id", "regression_risk", descending=[False, False, True]
     )
     print(f"=== Player signal: season={season}  as_of_week 1..{max_week} ===")

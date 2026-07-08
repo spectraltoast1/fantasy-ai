@@ -73,6 +73,38 @@ def _load_team_rates(year: int) -> pl.DataFrame:
     ]).select(["team", "week", "team_pass_rate", "team_rush_rate"])
 
 
+def _load_pbp_quality(year: int) -> pl.DataFrame:
+    """Return (gsis_id, week, xtd, redzone_touches) from play-by-play.
+
+    `xtd` is the sum of nflfastR's per-play `td_prob` (expected-TD probability given
+    down/distance/yardline/score/time) over every touch a player is credited with —
+    rush attempts (rusher_player_id), targets (receiver_player_id, complete or not),
+    and pass attempts (passer_player_id). It's the Quality axis from the Decision
+    Reads spec (DECISION_READS.md §1): an expected-value weight per chance, independent
+    of how many chances a player got. `redzone_touches` (yardline_100 <= 20) is the
+    legible companion evidence. Player ids are already gsis_id format, matching every
+    other join in this fetcher — no new id mapping needed.
+    """
+    pbp = nflreadpy.load_pbp(year).filter(pl.col("season_type") == "REG")
+    redzone = pl.col("yardline_100") <= 20
+
+    rush = pbp.filter(
+        pl.col("rush_attempt") == 1, pl.col("rusher_player_id").is_not_null()
+    ).select(pl.col("rusher_player_id").alias("gsis_id"), "week", "td_prob", redzone.alias("redzone"))
+    targets = pbp.filter(
+        pl.col("pass_attempt") == 1, pl.col("receiver_player_id").is_not_null()
+    ).select(pl.col("receiver_player_id").alias("gsis_id"), "week", "td_prob", redzone.alias("redzone"))
+    passes = pbp.filter(
+        pl.col("pass_attempt") == 1, pl.col("passer_player_id").is_not_null()
+    ).select(pl.col("passer_player_id").alias("gsis_id"), "week", "td_prob", redzone.alias("redzone"))
+
+    touches = pl.concat([rush, targets, passes], how="vertical")
+    return touches.group_by("gsis_id", "week").agg(
+        pl.col("td_prob").sum().alias("xtd"),
+        pl.col("redzone").sum().cast(pl.Int64).alias("redzone_touches"),
+    )
+
+
 def _fetch_and_save(year: int, week: int | None = None) -> None:
     """Core assembly: join all sources, derive columns, write parquet."""
     print(f"  Loading player stats ({year}" + (f" week {week}" if week else "") + ")...")
@@ -99,6 +131,17 @@ def _fetch_and_save(year: int, week: int | None = None) -> None:
     if week is not None:
         rates = rates.filter(pl.col("week") == week)
     stats = stats.join(rates, on=["team", "week"], how="left")
+
+    print("  Loading play-by-play quality signal...")
+    quality = _load_pbp_quality(year)
+    if week is not None:
+        quality = quality.filter(pl.col("week") == week)
+    stats = stats.join(
+        quality, left_on=["player_id", "week"], right_on=["gsis_id", "week"], how="left"
+    ).with_columns(
+        pl.col("xtd").fill_null(0.0),
+        pl.col("redzone_touches").fill_null(0),
+    )
 
     stats = stats.with_columns([
         (pl.col("receiving_air_yards") / pl.col("targets").replace(0, None)).alias("adot"),
