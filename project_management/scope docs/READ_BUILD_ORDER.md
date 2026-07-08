@@ -53,11 +53,15 @@ Everything else is downstream of those three.
 
 Phase numbers track `PRODUCT_ROADMAP.md`; this maps the seven reads onto that spine.
 
-### Phase 1 — Opportunity *(DONE; refine to spec)* → §1
-The descriptive base, shipped as `compute_player_signal`. **Delta to close:** the spec's opportunity
-read is richer than the shipped version — **weighted** (value-adjusted) opportunity, the explicit
-**trust** axis (recency / direction / reliability / security), and the **point-correlation** companion.
-Fold these in as a refinement; no new dependency. *Sharpens every forward read that leans on opportunity.*
+### Phase 1 — Opportunity *(DONE — refined to spec 2026-07-08)* → §1
+The descriptive base, shipped as `compute_player_signal`. **Delta closed:** `quality_rate` (weighted/
+value-adjusted opportunity, from a new PBP `td_prob` aggregation), the **trust** axis (`direction` +
+`reliability` from the player's own series; `security` from Sleeper injury/depth-chart data), and the
+**point-correlation** companion (`pearson(xtd, td_pts)`) are now all shipped, kept separate from the
+core volume/efficiency read per "don't collapse the axes." Sourcing the PBP quality signal and the
+Sleeper injury/depth-chart fields broke the original "no new dependency" note on purpose — both came
+from packages/endpoints already integrated, not a new external service. *Sharpens every forward read
+that leans on opportunity.*
 
 ### Phase 2 — The projection substrate *(NEXT — the hinge)* → enables §2, §3, §4, §5-bracket
 Build the **FantasyPros fetcher → consensus + disagreement spread**, both **ROS and weekly**. Gate on
@@ -100,9 +104,10 @@ guidance. Falls out of the critique-first design. (= roadmap Phase 5.)
 ## Open flags (carried from the reads spec)
 - ROS **dynamic-update model** + the **1-10 precision-display** question (§2).
 - **Redraft / format-matched market source** for market VOR (§4).
-- **Opportunity spec delta** — weighted opportunity + trust axis + point-correlation (the Phase-1 refinement).
+- ~~**Opportunity spec delta** — weighted opportunity + trust axis + point-correlation~~ — **closed
+  2026-07-08** (the Phase-1 refinement).
 
 ## Status snapshot
-- **Done:** Phase 0 (descriptive dashboard), Phase 1 (Opportunity / spike signal-quality — refine to spec).
+- **Done:** Phase 0 (descriptive dashboard), Phase 1 (Opportunity / spike signal-quality, refined to spec).
 - **Next:** **Phase 2 — the projection substrate** (the hinge).
 - Everything past Phase 2 is gated on it.

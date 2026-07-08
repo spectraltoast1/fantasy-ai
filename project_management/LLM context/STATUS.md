@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-06-18 (Season-replay Session B — the front-end week selector — landed; the build grouping is COMPLETE)
+**Last updated:** 2026-07-08 (Phase 1 refinement — Opportunity brought up to the Decision Reads spec)
 **Target ship:** NFL kickoff, mid August 2026
 
 ---
@@ -34,6 +34,33 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**Phase 1 refinement — Opportunity brought up to the Decision Reads spec (`READ_BUILD_ORDER.md`
+§ Phase 1 delta, now closed).** `compute_player_signal.py` gains four fields on top of the
+shipped volume/efficiency decomposition, per `DECISION_READS.md` §1 — kept separate, never
+fused ("don't collapse the axes"): **`quality_rate`** (the Quality axis — expected TDs per
+touch, `xtd_g/opp_g`, independent of Volume) sourced from a new play-by-play aggregation in
+`nfl_stats.py` (`nflreadpy.load_pbp()` → per-player-week `xtd`/`redzone_touches`, joined
+straight into `nfl_stats_{year}.parquet`); **`direction`**/**`reliability`** (the Trust axis —
+role trend + week-to-week consistency, from the player's own opportunity series, `direction`
+mirroring `compute_team_form.py`'s weighted-slope pattern); **`security`** (Trust's context
+flag, from Sleeper's `/players/nfl` injury_status/depth_chart_order — `fetch_players()` now
+carries these through instead of discarding them); and **`point_correlation`**
+(`pearson(xtd, td_pts)` — does a player's valuable chances actually convert to TD points, read
+against `quality_rate`: low correlation + high quality = unlucky/bounce-back; low + low =
+correctly cheap). Two of these (PBP `td_prob`, Sleeper injury data) were sourced by breaking
+the doc's original "no new dependency" note on purpose — real red-zone/depth-chart data beat
+guessing, and both came from packages/endpoints already integrated, not a new external service.
+`backtest_player_signal.py` carries `xtd` through its own series so the shared
+`_weighted_rates`/`_player_signal` functions see the same shape; the 2025 answer-key gate is
+**unchanged and still passes** (13.2% MAE cut, PASS/PASS) — none of the new fields touch the
+validated core math. Verified live: PBP aggregation matches a hand-checked figure (Ja'Marr
+Chase weeks 1–4: 13.67 xtd / 3 red-zone touches off 36 touches); Sleeper injury/depth-chart
+fields populate (528 players with a non-null injury_status); a 3rd-down-back archetype (e.g.
+Tre Tucker: `opp_g` 2.0, `quality_rate` 0.825) shows the intended Quality/Volume divergence;
+`reliability`/`point_correlation` correctly read `null` below `MIN_GAMES`. **Next: Phase 2 —
+the projections substrate** (FantasyPros fetcher → consensus/spread forward prior), unchanged.
+
+> earlier build
 **Season-replay Session B — the front-end week selector (part 4). The whole Season-replay
 build grouping is now COMPLETE.** A global "As of" week dropdown in the App shell topnav
 (`App.jsx`) sets the active `as_of_week`; one selection applies across League + Team and
@@ -86,25 +113,6 @@ PASS/PASS (signal cuts rest-of-season MAE 13.2%). **Remaining: Session B — the
 week selector** (thread `as_of_week` through `queries.js` + panels, fold into the
 readiness gate, retire `?weeksOverride`).
 
-> earlier build
-**Maintenance — leaguelogs snapshot reliability (incremental writes) + today captured.**
-The daily market-value snapshot had been silently dropping days; diagnosed as transient
-API failures (ReadTimeout / connection reset / ChunkedEncodingError against
-developer.leaguelogs.com) made fatal by a fragile write path — `snapshot()` collected
-all 5 profiles in memory and wrote **once at the end**, so a single failed request
-discarded every profile already fetched that day (2026-06-14 fetched 2 of 5, saved 0).
-**Fix:** `snapshot()` now persists the cumulative set of today's rows **after each
-profile**, so a mid-run failure leaves a recoverable *partial* day instead of total
-loss; the writer dedupes on snapshot_date, so a re-run cleanly replaces a partial day
-(no duplicates — verified: re-running left 2026-06-18 stable at 3,409 rows). Ran the
-patched fetcher to capture **today (2026-06-18)**, which the scheduled run had lost — 5
-profiles, 3,409 rows; history now **14 dates**. No schedule/plist/host change this
-session, so tomorrow's 4am launchd run picks up the patch automatically. Historical gaps
-2026-06-03/-05/-06/-10/-14 are permanent (API serves only "now"). **Open follow-up
-(see TECHNICAL_ARCHITECTURE → leaguelogs.py Notes):** request retry/backoff + move the
-schedule off the laptop to an always-on host — the real fix for both API flakiness and
-sleep-coalescing.
-
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
@@ -129,6 +137,7 @@ sleep-coalescing.
     - leaguelogs snapshot reliability — snapshot() rewritten to write incrementally (cumulative today's-rows persisted after each profile) so a mid-run API failure leaves a recoverable partial day instead of discarding the whole run; idempotent re-run replaces a partial day (dedup on snapshot_date). 2026-06-18 captured (5 profiles, 3,409 rows; history → 14 dates). Follow-up still open: retry/backoff + off-laptop host.
     - Season-replay backend (Session A; parts 1–3) — `as_of_week` first-class column on the three derived analytics; tall grain `(season, as_of_week, entity)` materialized N=1..maxweek (each transform loops, filtering input to `week ≤ N`). Roster-as-of-N correctness fix falls out of that filter (`arg_max(week)` → "latest week ≤ N"). Per-analytic windowing framework: injected EWMA half-life via shared `_weighted_rates`; `backtest_player_signal.py --sweep` tunes the opportunity half-life on the 2025 answer key → ships cumulative (tested, not guessed). `data_layer` reads take optional `as_of_week` (default latest); `queries.js` default-latest guard keeps the front end on week 4. **Front-end week selector is Session B.**
     - Season-replay front-end (Session B; part 4 — grouping COMPLETE) — global "As of" week dropdown in the App shell (`App.jsx`); one selection drives League + Team and persists across tabs. `queries.js` threads `asOfWeek` via `asOfSlice(table, n)` (pick the week-N slice of the tall derived parquets) + `weekCutoff(n)` (bound inline `season.parquet` reads to `week ≤ N`, including `SQL_CURRENT_TEAM`'s `arg_max(roster_id, week)` → front-end roster-as-of-N); `n == null` ⇒ latest, so defaults are unchanged. New `loadWeeks()` feeds the dropdown (weeks 1..latest, default = latest = current week; travels back only). Readiness gate now runs off the selected week (`weeksElapsed = asOfWeek`); the temporary `?weeksOverride` QA param is retired. Verified live across weeks 1–4 (cutoff reshuffles rankings; trend panels degrade to too-early; roster-as-of-N departed flags; no console errors).
+    - Phase 1 refinement — Opportunity to spec (`quality_rate`, `direction`/`reliability`, `security`, `point_correlation`) — see "most recent build" above for the full breakdown. `nfl_stats.py` gains a PBP-derived quality signal (`xtd`/`redzone_touches`); `sleeper.py`'s `fetch_players()` carries injury/depth-chart fields through. 2025 backtest gate unchanged (PASS/PASS, 13.2% MAE cut).
 
 > not yet built
     >> backend
@@ -148,7 +157,11 @@ recent-points −13% MAE on the full-2025 answer key), (3) the Players sub-view 
 readiness gate (`readiness.jsx` — regimes + fallback slot). The descriptive dashboard
 (Phase 0) plus the first decision-critique engine are both done; the project has made
 the leap from *showing team state* to *grading a decision against a prior*. Still
-frozen at Week 4 of 2025 for building.
+frozen at Week 4 of 2025 for building. **The `READ_BUILD_ORDER.md` § Phase 1 "refine to
+spec" delta is now also closed** — `quality_rate`/`direction`/`reliability`/`security`/
+`point_correlation` bring the shipped engine's Opportunity read up to the full
+`DECISION_READS.md` §1 definition (see "most recent build"). No UI surfaces these new
+fields yet — that's a front-end follow-up, not blocking Phase 2.
 
 **The Season-replay build grouping is COMPLETE (both sessions shipped).** Session A (the
 `as_of_week` backend — parts 1–3) and Session B (the front-end week selector — part 4) are
