@@ -57,13 +57,11 @@ def _trigger_players_fetch(force: bool = False) -> None:
 
 def _check_cache_staleness() -> None:
     """Refresh the Sleeper players cache if it is older than 24 hours."""
-    import time
-    cache_path = Path(__file__).resolve().parent.parent / "cache" / "sleeper" / "players.parquet"
-    if not cache_path.exists():
+    age = data_layer.sleeper_players_age_seconds()
+    if age is None:
         print("  Sleeper players cache missing — fetching now...")
         _trigger_players_fetch(force=True)
         return
-    age = time.time() - cache_path.stat().st_mtime
     if age > 86_400:
         print(f"  Sleeper players cache is {age / 3600:.1f}h old — refreshing...")
         _trigger_players_fetch(force=True)

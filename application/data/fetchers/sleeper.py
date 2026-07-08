@@ -16,8 +16,13 @@ import requests
 
 _HERE = Path(__file__).resolve().parent        # .../application/data/fetchers/
 _DATA_DIR = _HERE.parent                       # .../application/data/
-SNAPSHOT_DIR = _DATA_DIR / "snapshots" / "sleeper"
-CACHE_DIR = _DATA_DIR / "cache" / "sleeper"
+CACHE_DIR = _DATA_DIR / "cache" / "sleeper"    # raw JSON current-state dumps (see _write_json)
+
+# data_layer.py lives one level up in application/data/ — all parquet snapshot/cache I/O
+# goes through it (the fetcher constructs no parquet paths). The raw JSON dumps written by
+# _write_json stay put: they're current-state API captures, not data-layer entities.
+sys.path.insert(0, str(_DATA_DIR))
+import data_layer
 
 _SLEEPER_BASE = "https://api.sleeper.app/v1"
 
@@ -68,18 +73,29 @@ def _write_json(data, path: Path) -> None:
     print(f"  Wrote {path.name} → {path}")
 
 
-def _write_parquet_from_list(data: list, path: Path, label: str) -> bool:
+def _rows_to_df(data: list):
+    """Normalise a Sleeper list-payload into a DataFrame — nested dict/list values are
+    JSON-serialised so every column is a scalar. Returns None for an empty response
+    (offseason or a week not yet played), which the caller treats as "skip the write"."""
     if not data:
-        print(f"  {label}: empty response from Sleeper (offseason or week not yet played) — skipping write.")
-        return False
-    path.parent.mkdir(parents=True, exist_ok=True)
+        return None
     normalized = [
         {k: (json.dumps(v) if isinstance(v, (dict, list)) else v) for k, v in row.items()}
         for row in data
     ]
-    df = pl.from_dicts(normalized)
-    df.write_parquet(path)
-    print(f"  {label}: {len(df)} rows → {path}")
+    return pl.from_dicts(normalized)
+
+
+def _snapshot_list(data: list, writer, year: int, week: int, label: str) -> bool:
+    """Persist one week's Sleeper list-payload via a data_layer writer, skipping (with a
+    log line) when the response is empty. The fetcher keeps the shaping + skip concern;
+    the file I/O lives behind data_layer (write_sleeper_matchups / write_sleeper_transactions)."""
+    df = _rows_to_df(data)
+    if df is None:
+        print(f"  {label}: empty response from Sleeper (offseason or week not yet played) — skipping write.")
+        return False
+    writer(df, year, week)
+    print(f"  {label}: {len(df)} rows → snapshots/sleeper/{year}/")
     return True
 
 
@@ -102,11 +118,9 @@ def fetch_players(force: bool = False) -> None:
       kickers:         K
       defense/ST:      DEF  (not team abbreviations like in matchup data)
     """
-    path = CACHE_DIR / "players.parquet"
-
-    if not force and path.exists():
-        age = time.time() - path.stat().st_mtime
-        if age < _PLAYERS_CACHE_MAX_AGE_SECONDS:
+    if not force and data_layer.sleeper_players_exists():
+        age = data_layer.sleeper_players_age_seconds()
+        if age is not None and age < _PLAYERS_CACHE_MAX_AGE_SECONDS:
             print(f"  players cache is fresh ({age / 3600:.1f}h old) — skipping fetch.")
             return
 
@@ -130,12 +144,11 @@ def fetch_players(force: bool = False) -> None:
             "practice_participation": player.get("practice_participation"),
         })
 
-    path.parent.mkdir(parents=True, exist_ok=True)
     # infer_schema_length=None: most players have null injury/practice fields, so a
     # partial-row schema scan can pin the wrong dtype for a column that's all-null in
     # the sampled prefix but stringy further down — scan every row instead.
-    pl.DataFrame(rows, infer_schema_length=None).write_parquet(path)
-    print(f"  players: {len(rows)} players → {path}")
+    data_layer.write_sleeper_players(pl.DataFrame(rows, infer_schema_length=None))
+    print(f"  players: {len(rows)} players → cache/sleeper/players.parquet")
 
 
 def fetch_teams(league_id: str, year: int) -> None:
@@ -175,11 +188,6 @@ def fetch_teams(league_id: str, year: int) -> None:
         })
 
     df = pl.from_dicts(rows)
-
-    # data_layer.py lives one level up in application/data/
-    sys.path.insert(0, str(_DATA_DIR))
-    import data_layer
-
     data_layer.write_sleeper_teams(df, year)
     print(f"  teams: {len(df)} rosters → snapshots/sleeper/{year}/teams_{year}.parquet")
 
@@ -207,11 +215,6 @@ def fetch_roster_positions(league_id: str, year: int) -> None:
     df = pl.DataFrame(
         {"slot_index": list(range(len(slots))), "slot": [str(s) for s in slots]}
     )
-
-    # data_layer.py lives one level up in application/data/
-    sys.path.insert(0, str(_DATA_DIR))
-    import data_layer
-
     data_layer.write_roster_positions(df, year)
     print(f"  roster_positions: {len(df)} slots → snapshots/sleeper/{year}/roster_positions_{year}.parquet")
     print(f"  slots: {slots}")
@@ -234,19 +237,11 @@ def backfill(league_id: str, year: int) -> None:
 
         resp = requests.get(f"{_SLEEPER_BASE}/league/{league_id}/matchups/{week}")
         resp.raise_for_status()
-        _write_parquet_from_list(
-            resp.json(),
-            SNAPSHOT_DIR / str(year) / f"matchups_week_{week:02d}.parquet",
-            f"matchups week {week}",
-        )
+        _snapshot_list(resp.json(), data_layer.write_sleeper_matchups, year, week, f"matchups week {week}")
 
         resp = requests.get(f"{_SLEEPER_BASE}/league/{league_id}/transactions/{week}")
         resp.raise_for_status()
-        _write_parquet_from_list(
-            resp.json(),
-            SNAPSHOT_DIR / str(year) / f"transactions_week_{week:02d}.parquet",
-            f"transactions week {week}",
-        )
+        _snapshot_list(resp.json(), data_layer.write_sleeper_transactions, year, week, f"transactions week {week}")
 
         time.sleep(0.5)
 
@@ -286,22 +281,14 @@ def refresh(league_id: str) -> None:
     # Players registry — refreshed at most once per 24 hours.
     fetch_players()
 
-    # Current week snapshots — same path pattern as backfill
+    # Current week snapshots — same entities as backfill
     resp = requests.get(f"{_SLEEPER_BASE}/league/{league_id}/matchups/{week}")
     resp.raise_for_status()
-    _write_parquet_from_list(
-        resp.json(),
-        SNAPSHOT_DIR / str(year) / f"matchups_week_{week:02d}.parquet",
-        f"matchups week {week}",
-    )
+    _snapshot_list(resp.json(), data_layer.write_sleeper_matchups, year, week, f"matchups week {week}")
 
     resp = requests.get(f"{_SLEEPER_BASE}/league/{league_id}/transactions/{week}")
     resp.raise_for_status()
-    _write_parquet_from_list(
-        resp.json(),
-        SNAPSHOT_DIR / str(year) / f"transactions_week_{week:02d}.parquet",
-        f"transactions week {week}",
-    )
+    _snapshot_list(resp.json(), data_layer.write_sleeper_transactions, year, week, f"transactions week {week}")
 
     print(f"Refresh complete for league {league_id}.")
 

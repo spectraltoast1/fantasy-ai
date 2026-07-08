@@ -15,13 +15,11 @@ import polars as pl
 
 _HERE = Path(__file__).resolve().parent       # .../application/data/fetchers/
 _DATA_DIR = _HERE.parent                      # .../application/data/
-SNAPSHOT_DIR = _DATA_DIR / "snapshots" / "nflreadpy"
-CACHE_DIR = _DATA_DIR / "cache"
-PLAYER_ID_MAP_PATH = CACHE_DIR / "player_id_map.parquet"
 
-
-def _snapshot_path(year: int) -> Path:
-    return SNAPSHOT_DIR / f"nfl_stats_{year}.parquet"
+# data_layer.py lives one level up in application/data/ — all snapshot/cache I/O
+# goes through it (the fetcher constructs no paths and calls no polars read/write).
+sys.path.insert(0, str(_DATA_DIR))
+import data_layer
 
 
 def _build_player_id_map() -> pl.DataFrame:
@@ -33,9 +31,8 @@ def _build_player_id_map() -> pl.DataFrame:
         .filter(pl.col("gsis_id").is_not_null())
         .with_columns(pl.col("sleeper_id").cast(pl.Utf8).alias("sleeper_player_id"))
     )
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    df.write_parquet(PLAYER_ID_MAP_PATH)
-    print(f"  Player ID map: {len(df)} rows → {PLAYER_ID_MAP_PATH}")
+    data_layer.write_player_id_map(df)
+    print(f"  Player ID map: {len(df)} rows → cache/player_id_map.parquet")
     return df
 
 
@@ -148,16 +145,8 @@ def _fetch_and_save(year: int, week: int | None = None) -> None:
         pl.lit(datetime.now(timezone.utc).replace(tzinfo=None)).alias("fetched_at"),
     ])
 
-    SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = _snapshot_path(year)
-
-    if out_path.exists() and week is not None:
-        existing = pl.read_parquet(out_path)
-        existing = existing.filter(pl.col("week") != week)
-        stats = pl.concat([existing, stats], how="diagonal")
-
-    stats.write_parquet(out_path)
-    print(f"  Wrote {len(stats)} rows → {out_path}")
+    data_layer.write_nfl_stats(stats, year, week=week)
+    print(f"  Wrote {len(stats)} rows → snapshots/nflreadpy/nfl_stats_{year}.parquet")
 
 
 def backfill(year: int) -> None:
