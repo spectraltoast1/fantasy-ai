@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 
 import polars as pl
@@ -9,24 +10,70 @@ _CACHE_DIR = _HERE / "cache"
 
 # --- Player ID Map ---
 
+def _player_id_map_path() -> Path:
+    return _CACHE_DIR / "player_id_map.parquet"
+
+
+def write_player_id_map(df: pl.DataFrame) -> None:
+    """Write the gsis_id → sleeperPlayerId mapping to cache (overwrite).
+
+    Refreshed on every nflreadpy fetch run (see fetchers/nfl_stats.py).
+    """
+    path = _player_id_map_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
+
 def read_player_id_map() -> pl.DataFrame:
-    return pl.read_parquet(_CACHE_DIR / "player_id_map.parquet")
+    return pl.read_parquet(_player_id_map_path())
 
 
 # --- Sleeper Players Registry ---
+
+def _sleeper_players_path() -> Path:
+    return _CACHE_DIR / "sleeper" / "players.parquet"
+
+
+def write_sleeper_players(df: pl.DataFrame) -> None:
+    """Cache the Sleeper /players/nfl registry (overwrite; current-state cache).
+
+    The caller builds `df` — the fetcher normalises the endpoint down to the kept
+    columns and constructs the frame with infer_schema_length=None (the mostly-null
+    injury/depth-chart fields need a full scan to type correctly). This only persists it.
+    """
+    path = _sleeper_players_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
 
 def read_sleeper_players() -> pl.DataFrame:
     """Read the cached Sleeper /players/nfl registry.
 
     Raises FileNotFoundError if fetch_players() has not been run yet.
     """
-    path = _CACHE_DIR / "sleeper" / "players.parquet"
+    path = _sleeper_players_path()
     if not path.exists():
         raise FileNotFoundError(
             f"Sleeper players cache not found at {path}. "
             "Run: python fetchers/sleeper.py fetch-players"
         )
     return pl.read_parquet(path)
+
+
+def sleeper_players_exists() -> bool:
+    return _sleeper_players_path().exists()
+
+
+def sleeper_players_age_seconds() -> float | None:
+    """Age of the players cache in seconds, or None if it does not exist yet.
+
+    Lets the fetcher/auditor apply their own freshness policy (the 24h cache TTL)
+    without constructing a cache path themselves.
+    """
+    path = _sleeper_players_path()
+    if not path.exists():
+        return None
+    return time.time() - path.stat().st_mtime
 
 
 # --- Sleeper Teams (roster_id → names) ---
@@ -98,16 +145,62 @@ def read_lineup_slots(season: int) -> pl.DataFrame:
 
 # --- NFL Stats ---
 
+def _nfl_stats_path(season: int) -> Path:
+    return _SNAPSHOT_DIR / "nflreadpy" / f"nfl_stats_{season}.parquet"
+
+
+def write_nfl_stats(df: pl.DataFrame, season: int, week: int | None = None) -> None:
+    """Write the nflreadpy player-week stats for a season.
+
+    A full-season write (week=None) overwrites the file. A single-week refresh (week
+    given) replaces just that week's rows in the existing season file — read, drop the
+    week, concat (diagonal, since weeks can differ in columns), write. Mirrors
+    write_join_nfl_sleeper_weekly's dedup guard.
+    """
+    path = _nfl_stats_path(season)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if week is not None and path.exists():
+        existing = pl.read_parquet(path).filter(pl.col("week") != week)
+        df = pl.concat([existing, df], how="diagonal")
+    df.write_parquet(path)
+
+
 def read_nfl_stats(season: int) -> pl.DataFrame:
-    return pl.read_parquet(_SNAPSHOT_DIR / "nflreadpy" / f"nfl_stats_{season}.parquet")
+    return pl.read_parquet(_nfl_stats_path(season))
 
 
 # --- Sleeper Matchups ---
 
+def _sleeper_matchups_path(season: int, week: int) -> Path:
+    return _SNAPSHOT_DIR / "sleeper" / str(season) / f"matchups_week_{week:02d}.parquet"
+
+
+def write_sleeper_matchups(df: pl.DataFrame, season: int, week: int) -> None:
+    """Write one week's matchup snapshot for a season (overwrite)."""
+    path = _sleeper_matchups_path(season, week)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
+
 def read_sleeper_matchups(season: int, week: int) -> pl.DataFrame:
-    return pl.read_parquet(
-        _SNAPSHOT_DIR / "sleeper" / str(season) / f"matchups_week_{week:02d}.parquet"
-    )
+    return pl.read_parquet(_sleeper_matchups_path(season, week))
+
+
+# --- Sleeper Transactions ---
+
+def _sleeper_transactions_path(season: int, week: int) -> Path:
+    return _SNAPSHOT_DIR / "sleeper" / str(season) / f"transactions_week_{week:02d}.parquet"
+
+
+def write_sleeper_transactions(df: pl.DataFrame, season: int, week: int) -> None:
+    """Write one week's transaction snapshot for a season (overwrite)."""
+    path = _sleeper_transactions_path(season, week)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
+
+def read_sleeper_transactions(season: int, week: int) -> pl.DataFrame:
+    return pl.read_parquet(_sleeper_transactions_path(season, week))
 
 
 # --- Join: NFL + Sleeper Weekly ---

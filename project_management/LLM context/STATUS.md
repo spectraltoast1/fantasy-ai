@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-07-08 (Phase 1 refinement — Opportunity brought up to the Decision Reads spec)
+**Last updated:** 2026-07-08 (Data-layer I/O consistency — all fetcher parquet I/O routed through data_layer.py; TECHNICAL_ARCHITECTURE truth-up)
 **Target ship:** NFL kickoff, mid August 2026
 
 ---
@@ -34,6 +34,33 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**Data-layer I/O consistency — all fetcher parquet I/O now routes through `data_layer.py`
+(closes the Option-A coverage gap a Phase 1 build audit surfaced).** The audit found the I/O
+rule half-applied: `sleeper.py` already wrote teams/roster_positions via `data_layer` but wrote
+the players cache + matchups + transactions directly, and `nfl_stats.py` bypassed `data_layer`
+entirely — because those entities never got a `write_*` function. Added the missing coverage to
+`data_layer.py`: **`write_player_id_map`**, **`write_sleeper_players`** (+ `sleeper_players_exists`/
+`sleeper_players_age_seconds`, so the 24h freshness check needs no fetcher-side path),
+**`write_nfl_stats(season, week=None)`** (week-dedup guard mirrored from
+`write_join_nfl_sleeper_weekly` — diagonal concat), **`write_sleeper_matchups`**, and a new
+**`read`/`write_sleeper_transactions`** pair; existing reads repointed at new `_*_path` helpers.
+Rewired `nfl_stats.py` (dropped its path constants), `sleeper.py` (`_write_parquet_from_list`
+split into a persistence-free `_rows_to_df` normalizer + a `_snapshot_list` dispatcher; the two
+lazy `data_layer` imports consolidated to one module-level import), and `audit_join.py`'s
+cache-staleness check. **One documented exception:** `sleeper.py`'s raw JSON current-state dumps
+(`_write_json` → league/users/rosters/bracket) stay in the fetcher — not analytics entities, and
+`data_layer` has no JSON support. `TECHNICAL_ARCHITECTURE.md` truthed-up to match: the I/O rule
+now names fetchers; LeagueLogs documented as a *collect-only, no-current-consumer* exception (its
+data is V4; explicitly **not** an I/O exception — it already routes through `data_layer`);
+`MIN_GAMES` corrected from "two places" to the real three (`compute_player_signal`=3, leakage=2,
+`queries.js`=2). **Behavior-preserving — no data content changed:** `compute_player_signal`
+reproduces **byte-identically** and the 2025 backtest still exits 0 (PASS/PASS, 13.2% MAE cut);
+write logic covered by temp-store round-trips (idempotent week-replace, JSON normalization).
+Verified **offline only** — a live `refresh` fetch is deferred (it would disturb the W4 freeze).
+**Next: Phase 2 — the projections substrate** (FantasyPros fetcher → consensus/spread forward
+prior), unchanged.
+
+> earlier build
 **Phase 1 refinement — Opportunity brought up to the Decision Reads spec (`READ_BUILD_ORDER.md`
 § Phase 1 delta, now closed).** `compute_player_signal.py` gains four fields on top of the
 shipped volume/efficiency decomposition, per `DECISION_READS.md` §1 — kept separate, never
@@ -84,35 +111,6 @@ departed flag visible (Jauan Jennings → Bourne Again); no console errors. **Ou
 (unchanged):** not past week 4; no prior-season selector; not Phase 2. **Next: Phase 2 —
 the projections substrate** (FantasyPros fetcher → consensus/spread forward prior).
 
-> earlier build
-**Season-replay Session A — the `as_of_week` snapshot dimension (backend; parts 1–3 of
-the build grouping).** Lets every derived analytic be recomputed as of any past week N —
-the tool exactly as it would have read through week N, every analytic on weeks ≤ N.
-**Part 1:** `as_of_week` is now a first-class **column** on all three derived analytics
-(`team_form`, `team_leakage`, `player_signal`); grain is `(season, as_of_week, entity)`,
-one **tall** table materialized N=1..maxweek (the warehouse-correct model that survives
-the eventual SQLite/server migration — not file-per-week). Each transform loops over N,
-filtering its input to `week ≤ N` before computing; that one filter is the whole
-mechanism. **Part 3 (roster-as-of-N correctness fix):** the same filter fixes the latent
-"latest team" bug — `arg_max(roster_id, week)` becomes "latest week ≤ N", so a mid-season
-trade/add changes *who is on the team* at week N, not just their numbers (7 such players
-in 2025; e.g. Kareem Hunt flips roster 7→3 at week 4). **Part 2 (windowing):** the window
-(how data *inside* the cutoff is weighted) is decoupled from the cutoff and declared
-per-analytic by the stationarity principle — leakage cumulative (ledger), form EWMA 2wk
-(trend), player-opportunity through a new **injected-half-life** seam (shared
-`_weighted_rates`). Extended `backtest_player_signal.py --sweep` to tune the opportunity
-half-life on the 2025 answer key; the sweep ran *against* the "role drifts → decay"
-intuition (short half-lives hurt rest-of-season MAE; cumulative wins at W6/W8), so it
-ships **cumulative** — the tested choice, not the guessed one (half-life stays a parameter,
-re-tunable in-season). `data_layer` reads gained an optional `as_of_week` (default =
-latest); a minimal default-latest **guard** in `queries.js` keeps the front end on week 4
-unchanged (the seam Session B parameterises). Verified: per-N slices bounded to weeks ≤ N;
-readiness states now *live* (N≤2 all `too_early`, real spike/sticky/mixed from N=3); front
-end renders one row per team/player (no duplication), no console errors; verdict still
-PASS/PASS (signal cuts rest-of-season MAE 13.2%). **Remaining: Session B — the front-end
-week selector** (thread `as_of_week` through `queries.js` + panels, fold into the
-readiness gate, retire `?weeksOverride`).
-
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
@@ -138,6 +136,7 @@ readiness gate, retire `?weeksOverride`).
     - Season-replay backend (Session A; parts 1–3) — `as_of_week` first-class column on the three derived analytics; tall grain `(season, as_of_week, entity)` materialized N=1..maxweek (each transform loops, filtering input to `week ≤ N`). Roster-as-of-N correctness fix falls out of that filter (`arg_max(week)` → "latest week ≤ N"). Per-analytic windowing framework: injected EWMA half-life via shared `_weighted_rates`; `backtest_player_signal.py --sweep` tunes the opportunity half-life on the 2025 answer key → ships cumulative (tested, not guessed). `data_layer` reads take optional `as_of_week` (default latest); `queries.js` default-latest guard keeps the front end on week 4. **Front-end week selector is Session B.**
     - Season-replay front-end (Session B; part 4 — grouping COMPLETE) — global "As of" week dropdown in the App shell (`App.jsx`); one selection drives League + Team and persists across tabs. `queries.js` threads `asOfWeek` via `asOfSlice(table, n)` (pick the week-N slice of the tall derived parquets) + `weekCutoff(n)` (bound inline `season.parquet` reads to `week ≤ N`, including `SQL_CURRENT_TEAM`'s `arg_max(roster_id, week)` → front-end roster-as-of-N); `n == null` ⇒ latest, so defaults are unchanged. New `loadWeeks()` feeds the dropdown (weeks 1..latest, default = latest = current week; travels back only). Readiness gate now runs off the selected week (`weeksElapsed = asOfWeek`); the temporary `?weeksOverride` QA param is retired. Verified live across weeks 1–4 (cutoff reshuffles rankings; trend panels degrade to too-early; roster-as-of-N departed flags; no console errors).
     - Phase 1 refinement — Opportunity to spec (`quality_rate`, `direction`/`reliability`, `security`, `point_correlation`) — see "most recent build" above for the full breakdown. `nfl_stats.py` gains a PBP-derived quality signal (`xtd`/`redzone_touches`); `sleeper.py`'s `fetch_players()` carries injury/depth-chart fields through. 2025 backtest gate unchanged (PASS/PASS, 13.2% MAE cut).
+    - Data-layer I/O consistency — all fetcher parquet I/O routed through `data_layer.py` (Option-A coverage gap from a Phase 1 build audit). Added write_player_id_map / write_sleeper_players (+exists/age) / write_nfl_stats(week=) / write_sleeper_matchups / read+write_sleeper_transactions; rewired nfl_stats.py, sleeper.py (`_write_parquet_from_list` → `_rows_to_df` + `_snapshot_list`), audit_join.py. Raw JSON cache dumps kept as a documented fetcher exception. TECHNICAL_ARCHITECTURE truthed-up (fetchers in the I/O rule; LeagueLogs collect-only exception; MIN_GAMES 2→3 places). Behavior-preserving (byte-identical player_signal reproduction; backtest PASS/PASS).
 
 > not yet built
     >> backend
