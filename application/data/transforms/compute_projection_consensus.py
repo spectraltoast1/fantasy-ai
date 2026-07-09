@@ -57,10 +57,11 @@ from _analytics import round1, stdev
 SHRINK_K = 4
 # Band half-width multiplier on the residual std: p25/p75 = center ± BAND_Z·band. The
 # normal-theory value for the 25th/75th percentiles is 0.6745·σ; residuals are non-normal
-# (fat-tailed, and inactive-0 weeks skew them down), so the empirical multiplier that
-# lands IQR coverage at ~50% is tuned on the 2025 answer key
-# (backtest_projection_consensus.py --sweep) and baked here — tested, not guessed.
-BAND_Z = 0.6745
+# (peaked in the middle with fat boom/bust tails that inflate σ), so the empirical
+# multiplier that lands IQR coverage at ~50% is tuned on the 2025 answer key
+# (backtest_projection_consensus.py --sweep) and baked here — tested, not guessed. The
+# 2025 sweep chose 0.6 (coverage 0.514), below the normal 0.6745. Re-tune in-season.
+BAND_Z = 0.6
 
 
 def _consensus(proj_ppr) -> dict:
