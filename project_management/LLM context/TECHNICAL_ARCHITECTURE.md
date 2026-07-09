@@ -172,6 +172,8 @@ fantasy-ai/
             │   └── player_signal_2025.parquet           # per (as_of_week, team, player) spike signal: opp vs efficiency split, regression_risk, read
             ├── leaguelogs/
             │   └── market_values.parquet            # daily market-value history, all profiles
+            ├── projections/
+            │   └── projections_2025.parquet         # multi-source forward prior (Sleeper now, FantasyPros in-season); `source` a column; snapshot/append, grain (season, week, source, player)
             └── nfl_sleeper_weekly_joined/
                 ├── season_2025.parquet                  # join output, all weeks appended (one file per season)
                 └── 2025/
@@ -221,7 +223,8 @@ non-negotiable architectural rule.
 - Dashboard components read via data_layer functions only
 - Fetchers write through data_layer too — they build the DataFrame from the source
   API, then persist it via a data_layer writer (e.g. write_nfl_stats,
-  write_sleeper_matchups, write_sleeper_players, write_player_id_map); they do not
+  write_sleeper_matchups, write_sleeper_players, write_player_id_map,
+  write_projections); they do not
   construct snapshot/cache paths or call polars write directly
 - Any new data entity requires a read and write function added 
   to data_layer.py before the consuming script is written
@@ -248,11 +251,11 @@ now. Everything in **parquet** goes through data_layer.
 | Source | Storage | Rationale |
 |---|---|---|
 - external
-| Sleeper | cache/ + snapshots/ | Matchup/roster/transaction state to snapshots/ (weekly history); player registry to cache/ (current state only, refreshed ≤ once/day) |
+| Sleeper | cache/ + snapshots/ | Matchup/roster/transaction state **and weekly projections** (the forward prior — `source="sleeper"` in the shared `projections` entity, from the `api.sleeper.com` stats host) to snapshots/; player registry to cache/ (current state only, refreshed ≤ once/day) |
 | nflreadpy | snapshots/ only | Weekly player stats - trend visualization requires history |
 | LeagueLogs | snapshots/ only | Daily market-value snapshot of all profiles (redraft + dynasty). API serves only "now" (no history endpoint), so the value time-series exists only if we snapshot it. Keyed on sleeperPlayerId. |
 | Odds API | cache/ only | Current week lines only needed for v1 |
-| FantasyPros | cache/ only | Current projections and news only needed for v1 |
+| FantasyPros | snapshots/ (`projections` entity) | Weekly projected points (PPR/half/std). Routes through the shared **multi-source `projections` entity** (`source="fantasypros"`), snapshotted like Sleeper — **supersedes the earlier "cache/ only" note.** Added in-season; key in config. |
 
 - internal
 | nfl_sleeper_weekly_joined transform | snapshots/nfl_sleeper_weekly_joined/ | Joined output — one file per season (season_{season}.parquet), each week appended with a (season, week) dedup guard
@@ -260,6 +263,32 @@ now. Everything in **parquet** goes through data_layer.
 | compute_team_form transform | snapshots/derived/ | team_form_{season}.parquet — **tall, grain (as_of_week, roster_id)** (Season-replay): per as-of week N=1..maxweek, one row per roster_id with the EWMA scoring slope, direction, recent record, league-relative spectrum pos, per-week series — all recomputed on weeks ≤ N. Pre-computed so the front-end seam just reads it (no JS trajectory math) |
 | compute_team_leakage transform | snapshots/derived/ | team_leakage_{season}.parquet — **tall, grain (as_of_week, roster_id)**: per as-of week N, lineup efficiency %, season points-left, coachable/variance split, named fixes, per-week leak, spectrum pos — cumulative ledger over weeks ≤ N. Roster-as-of-N: a player's "current team" resolves to his latest week ≤ N. Feeds both the Team Overview leakage lens and the League drawer's efficiency read |
 | compute_player_signal transform | snapshots/derived/ | player_signal_{season}.parquet — **tall, grain (as_of_week, roster_id, player)**: per as-of week N, one row per rostered skill player with the spike signal-quality read (Phase 1), recomputed on weeks ≤ N (roster-as-of-N applies). Decomposes recent production into sticky opportunity (opp_g, EWMA-windowed via injected half-life — ships cumulative, backtest-tuned) vs fragile efficiency (ppo, shrunk toward the league positional mean); headline regression_risk + a sample-gated read (too_early/spike/mixed/sticky), td_share as evidence, per-week series. The first decision-critique engine slice; not a forward projection. **Phase 1 refinement (2026-07-08):** four added fields close the DECISION_READS.md §1 gap — quality_rate (xtd_g/opp_g, the Quality axis from PBP td_prob), direction/reliability (Trust axis, from the player's own opportunity series), security (Trust's context flag, from Sleeper injury/depth-chart data), point_correlation (pearson(xtd, td_pts)). Kept separate from the validated core read, not fused in |
+
+**Projections entity (multi-source forward prior — Phase 2).** A single normalized,
+source-agnostic file (`snapshots/projections/projections_{season}.parquet`) that any projection
+provider writes into via `data_layer.write_projections(df, season, week, source)`. **`source` is
+a column, not a directory** — so combining providers into a consensus + disagreement spread is a
+group-by across `source`, and "pick a provider" is a filter; adding a new source (FantasyPros
+in-season) is a new `source` value, **not a schema change**. Snapshot/append (dedup on
+`(season, week, source)`), keyed on `sleeperPlayerId`, QB/RB/WR/TE only, `pts_ppr/half/std` +
+component evidence. Source #1 = Sleeper (RotoWire); FantasyPros next. This is the borrowed forward
+prior every Phase-2 read (§2/§3/§4/§5-bracket) depends on.
+
+**Future need — the projection's scoring must match the league (not yet built).** The entity
+carries only the *generic* `pts_ppr`/`pts_half`/`pts_std` the source computes; **nothing selects or
+recomputes the projection to the league's actual `scoring_settings`.** This matters because actuals
+are already **league-exact** (Sleeper scores matchup points under the real settings — see
+`join_nfl_sleeper_weekly.py`), so a projection on a *different* scoring silently corrupts any forward
+read that compares projection to actual (VOR §4, weekly spread §3, ROS §2) — a wrong-output latent
+bug, not an error. **Latent, not live today:** the current league (`League of Random People 2.0`) is
+full PPR / otherwise standard, so `proj_pts_ppr` is the correct column. It goes live for (a) a
+half-PPR / standard league — needs a *selection* step (pick the canned column keyed off
+`scoring_settings.rec`), or (b) any **custom** scoring the three canned columns can't express (6-pt
+pass TD, TE premium, reception / first-down bonuses) — needs a *recompute from the component stats*
+under `scoring_settings`. The stored components (`proj_pass_yd/td`, `proj_rush_yd/td`,
+`proj_rec/rec_yd/rec_td`) were carried partly to enable that recompute, though a fully custom league
+may need a wider component set than is stored today. Ties to the "league scoring settings"
+cross-cutting input in DECISION_READS §1/§3/§4; build when a non-PPR or custom league is onboarded.
 
 These assignments reflect current v1 decisions, not permanent rules. Future versions may snapshot additional sources (e.g., odds history for post-hoc analysis).
 
@@ -286,9 +315,9 @@ nfl_stats_{year}.parquet already includes sleeper_player_id as a column — this
 One script per data source in `application/data/fetchers/`. Each fetcher has a single concern - one source, one cache file, one snapshot stream where applicable.
 
 Current fetcher state:
-- `sleeper.py` - backfills + refresh modes
+- `sleeper.py` - backfill + refresh + **projections** modes (projections: whole NFL skill pool's weekly forward prior via the `api.sleeper.com` stats host → shared `projections` entity, `source="sleeper"`)
 - `odds.py` - does not exist
-- `fantasypros.py` - does not exist
+- `fantasypros.py` - does not exist (Phase 2 next source; writes the same `projections` entity, `source="fantasypros"`, in-season)
 - `weather.py` - does not exist
 - `nfl_stats.py` - backfill + refresh modes, polars, player ID map
 - `leaguelogs.py` - built; daily market-value snapshots (all profiles), scheduled by launchd at 4am ET
@@ -319,6 +348,8 @@ players_points in matchup snapshots is stored as a serialized JSON string (map o
 fetch_players() caches the full Sleeper /players/nfl endpoint to cache/sleeper/players.parquet. Skips the network call if the cache is less than 24 hours old; pass force=True to override. Called automatically by refresh() and by audit_join.py when the cache is stale or missing. Can also be triggered standalone: python fetchers/sleeper.py fetch-players. Position values in this endpoint use Sleeper's internal codes: QB/RB/WR/TE for skill, K for kicker, DEF for defense.
 
 **Injury/depth-chart fields (added 2026-07-08, Phase 1 refinement):** fetch_players() now also carries injury_status, injury_body_part, depth_chart_order, depth_chart_position, and practice_participation through to the cache — the endpoint already returns them, previously discarded. Feeds compute_player_signal.py's `security` read. **Gotcha:** these fields are null for most players in the sampled prefix polars uses for schema inference, which can pin the wrong dtype for a column that's stringy/numeric further down — fetch_players() passes `infer_schema_length=None` to pl.DataFrame() to force a full scan. This is "now" data only (no history), so the same value applies across every as_of_week slice for a given player — a documented simplification, not a bug.
+
+**Projections mode (added 2026-07-08, Phase 2 source #1):** `sleeper.py projections <season> [week]` fetches the whole NFL skill-position pool's weekly projections and writes the shared multi-source `projections` entity (`source="sleeper"`). **Gotcha — different host:** projections live on `api.sleeper.com` (the stats host, `_SLEEPER_STATS_BASE`, **no `/v1`**), not the `api.sleeper.app/v1` league API the rest of the fetcher uses. Endpoint: `/projections/nfl/{season}/{week}?season_type=regular&position[]=QB…`. **The scoring is already computed by the source** (`pts_ppr`/`pts_half_ppr`/`pts_std` in each row's `stats`) — no re-derivation. `position` lives at the nested `player.position` (the top-level `position` is null); the payload includes FB/CB rows filtered out by `SKILL_POSITIONS`. Under the hood the projections are RotoWire's (carried as the `company` column). **Key fact — it serves historical weekly projections** (past seasons return real per-week values, one row per player, 0 dupes), which is why Sleeper is Phase 2's *first* source: the prior lines up with the frozen-2025 world and is backtestable, whereas a live FantasyPros pull today would only serve 2026. League-agnostic (no league_id), so its CLI branch runs before the league_resolver import.
 
 ## leaguelogs.py Notes
 

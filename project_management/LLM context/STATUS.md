@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-07-08 (Data-layer I/O consistency — all fetcher parquet I/O routed through data_layer.py; TECHNICAL_ARCHITECTURE truth-up)
+**Last updated:** 2026-07-08 (Phase 2 begins — Sleeper weekly projections land as the projection substrate's first source; multi-source `projections` entity in data_layer)
 **Target ship:** NFL kickoff, mid August 2026
 
 ---
@@ -34,6 +34,30 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**Phase 2 begins — the projection substrate, source #1 (Sleeper).** The forward prior every
+Phase-2 read rests on (ROS shape §2, weekly spread §3, VOR §4, bracket sim §5) now has its
+first source landing in the data layer, built as a **multi-source, source-agnostic entity**.
+`data_layer.write/read_projections` persist one growing
+`snapshots/projections/projections_{season}.parquet` with **`source` as a column** (not a
+directory) — so consensus + disagreement across providers is a group-by and "pick a source"
+is a filter, and adding FantasyPros in-season is a new `source` value, **not a schema change**.
+Snapshot/append mirrors the LeagueLogs precedent (dedup on `(season, week, source)` replaces a
+slice on re-fetch; rows carry `snapshot_date` + `source_updated_at` for an in-season daily
+projection history later). Source #1 = **Sleeper's projections endpoint** (`api.sleeper.com`
+stats host; RotoWire under the hood) via a new `sleeper.py projections <season> [week]` mode —
+**keyed natively on `sleeperPlayerId` (no id join)**, QB/RB/WR/TE only, `pts_ppr/half/std` already
+computed by the source + component evidence carried. **Why Sleeper first, not FantasyPros:** Sleeper
+serves *historical* weekly projections, so the prior lines up with the frozen-2025 world and can be
+backtested against the answer key — a *live* FantasyPros pull today serves 2026 preseason, a different
+season. FantasyPros (key already in config) joins later in-season through the same seam. **Verified
+live:** 2025 backfilled wks 1–18 (54,594 rows, 3,033 players/wk); scoring differentiates (CMC
+ppr>half>std, Allen equal); re-fetch dedups (no dupes); **100% coverage of rostered skill players at
+every frozen week (W1–4)**; the ROS prior (sum wks 5–18) computes for the 147 W4-rostered players.
+**Next: the consensus + disagreement-spread transform** (`compute_projection_consensus.py`) — a real
+spread needs a second source, so pair Sleeper with FantasyPros (or another free source) next; the
+spread is the law-2 confidence signal (tight = act, wide = coin-flip).
+
+> earlier build
 **Data-layer I/O consistency — all fetcher parquet I/O now routes through `data_layer.py`
 (closes the Option-A coverage gap a Phase 1 build audit surfaced).** The audit found the I/O
 rule half-applied: `sleeper.py` already wrote teams/roster_positions via `data_layer` but wrote
@@ -87,30 +111,6 @@ Tre Tucker: `opp_g` 2.0, `quality_rate` 0.825) shows the intended Quality/Volume
 `reliability`/`point_correlation` correctly read `null` below `MIN_GAMES`. **Next: Phase 2 —
 the projections substrate** (FantasyPros fetcher → consensus/spread forward prior), unchanged.
 
-> earlier build
-**Season-replay Session B — the front-end week selector (part 4). The whole Season-replay
-build grouping is now COMPLETE.** A global "As of" week dropdown in the App shell topnav
-(`App.jsx`) sets the active `as_of_week`; one selection applies across League + Team and
-persists across tab switches (state lives in the shell, editable from every current/future
-tab). It threads through `queries.js` via two SQL fragments: `asOfSlice(table, n)` picks
-week N's slice from the tall derived parquets (form/leakage/player_signal), and
-`weekCutoff(n)` bounds the still-in-JS `season.parquet` reads to `week ≤ N` — including
-`SQL_CURRENT_TEAM`'s `arg_max(roster_id, week)`, so the front-end roster resolution becomes
-"latest week ≤ N" too (the JS half of the roster-as-of-N fix; departed/current depth-chart
-flags are now correct as-of-N, not just as-of-latest). `n == null` ⇒ latest, so every read's
-default is unchanged. New `loadWeeks()` feeds the dropdown (weeks 1..latest); **default =
-latest** (today week 4 — a live app opens on the real current week; the selector only travels
-*back*). The readiness gate now runs off the real selected week (`weeksElapsed = asOfWeek`),
-and the temporary **`?weeksOverride` QA param is retired** (the selector is the real driver).
-Verified live across the clock: default opens on week 4 (no regression — Bski #1 @ 151.4,
-"Weeks 1–4"); week-2 League reshuffles to the 2-week cutoff ("Weeks 1–2", Tet Lasso #1 @
-153.3, records ≤ 2 games); week persists across League↔Team; Team Overview Form + leakage
-(trend) render "Too early" at week 2 while construction (structural) stays on; Players
-(point-in-time) shows the "Early read… weight it lightly" note at week 1; roster-as-of-N
-departed flag visible (Jauan Jennings → Bourne Again); no console errors. **Out of scope
-(unchanged):** not past week 4; no prior-season selector; not Phase 2. **Next: Phase 2 —
-the projections substrate** (FantasyPros fetcher → consensus/spread forward prior).
-
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
@@ -137,6 +137,7 @@ the projections substrate** (FantasyPros fetcher → consensus/spread forward pr
     - Season-replay front-end (Session B; part 4 — grouping COMPLETE) — global "As of" week dropdown in the App shell (`App.jsx`); one selection drives League + Team and persists across tabs. `queries.js` threads `asOfWeek` via `asOfSlice(table, n)` (pick the week-N slice of the tall derived parquets) + `weekCutoff(n)` (bound inline `season.parquet` reads to `week ≤ N`, including `SQL_CURRENT_TEAM`'s `arg_max(roster_id, week)` → front-end roster-as-of-N); `n == null` ⇒ latest, so defaults are unchanged. New `loadWeeks()` feeds the dropdown (weeks 1..latest, default = latest = current week; travels back only). Readiness gate now runs off the selected week (`weeksElapsed = asOfWeek`); the temporary `?weeksOverride` QA param is retired. Verified live across weeks 1–4 (cutoff reshuffles rankings; trend panels degrade to too-early; roster-as-of-N departed flags; no console errors).
     - Phase 1 refinement — Opportunity to spec (`quality_rate`, `direction`/`reliability`, `security`, `point_correlation`) — see "most recent build" above for the full breakdown. `nfl_stats.py` gains a PBP-derived quality signal (`xtd`/`redzone_touches`); `sleeper.py`'s `fetch_players()` carries injury/depth-chart fields through. 2025 backtest gate unchanged (PASS/PASS, 13.2% MAE cut).
     - Data-layer I/O consistency — all fetcher parquet I/O routed through `data_layer.py` (Option-A coverage gap from a Phase 1 build audit). Added write_player_id_map / write_sleeper_players (+exists/age) / write_nfl_stats(week=) / write_sleeper_matchups / read+write_sleeper_transactions; rewired nfl_stats.py, sleeper.py (`_write_parquet_from_list` → `_rows_to_df` + `_snapshot_list`), audit_join.py. Raw JSON cache dumps kept as a documented fetcher exception. TECHNICAL_ARCHITECTURE truthed-up (fetchers in the I/O rule; LeagueLogs collect-only exception; MIN_GAMES 2→3 places). Behavior-preserving (byte-identical player_signal reproduction; backtest PASS/PASS).
+    - Phase 2 projection substrate, source #1 (Sleeper) — multi-source `projections` entity in data_layer (write/read_projections; `source` a column on one growing snapshots/projections/projections_{season}.parquet; snapshot/append, dedup on (season,week,source)); `sleeper.py projections <season> [week]` mode pulls the NFL skill pool's weekly projections from api.sleeper.com (RotoWire), native sleeperPlayerId, QB/RB/WR/TE. 2025 backfilled wks 1–18 (54,594 rows); 100% coverage of rostered skill players at W1–4. FantasyPros joins later in-season via the same seam.
 
 > not yet built
     >> backend
@@ -171,9 +172,12 @@ and a **global "As of" week dropdown** in the App shell threads the selected wee
 drives the readiness gate, and retired the `?weeksOverride` param. Default = latest week
 (today week 4); the selector travels back only.
 
-**Next: Phase 2 — the projections substrate** (FantasyPros fetcher → consensus/spread forward
-prior; the hinge everything credible depends on, and the fix for the Kamara-style blind spot).
-See "The step after". This is back to Python/data-layer work.
+**Phase 2 — the projections substrate — is now UNDERWAY (the hinge everything credible depends
+on, and the fix for the Kamara-style blind spot).** Source #1 landed: **Sleeper weekly projections**
+in a multi-source `projections` entity (see "most recent build"). **Next in Phase 2: the consensus +
+disagreement-spread transform** — it needs a second source for a real spread, so pair Sleeper with
+**FantasyPros** (key already in config; joins the same seam in-season) or another free source. See
+"The step after". This is back to Python/data-layer work.
 
 ## Version Roadmap
 → **Source of truth: `scope docs/PRODUCT_ROADMAP.md`** — phase detail, the four
@@ -336,19 +340,28 @@ These refine shipped lenses; pick up alongside or after the Players sub-view.
    drives the clock for QA. The deeper "calibrate to a forward prior" half is **Phase 2**
    (projections) — the gate is the seam; the prior that sharpens it comes next.
 
-## The step after — Phase 2: the projections substrate
+## Phase 2 — the projections substrate (UNDERWAY)
 
-Once the Season-replay grouping lands, the next hinge is **Phase 2 — the forward
-prior** every later decision slice rests on. Build a **`fantasypros.py` fetcher** →
-current-season projections (all I/O through `data_layer.py`; keyed on
-`sleeperPlayerId`), plus a transform producing a **consensus + disagreement (spread)**
-read. Two payoffs: (a) the spread is the law-2 confidence signal — tight consensus =
-act, wide = coin-flip; (b) it gives the spike read a *forward* prior to regress toward,
-fixing the one honest blind spot the backtest surfaced (Kamara: usage looked fine, the
-player declined — usage alone can't see talent/situation change). It also lets the
-readiness gate *calibrate* early-season language rather than merely gate it. Vegas game
-totals via an `odds.py` fetcher are an optional cheap add. Do **not** use prior-season
-carryover as the prior (biased by age/injury/scheme). Back to Python/data-layer work.
+The hinge — **the forward prior** every later decision slice rests on. Delivered as a
+**multi-source `projections` entity** (all I/O through `data_layer.py`; keyed on
+`sleeperPlayerId`; `source` a column so providers combine/select without a schema change),
+plus a transform producing a **consensus + disagreement (spread)** read. Two payoffs: (a) the
+spread is the law-2 confidence signal — tight consensus = act, wide = coin-flip; (b) it gives
+the spike read a *forward* prior to regress toward, fixing the one honest blind spot the
+backtest surfaced (Kamara: usage looked fine, the player declined — usage alone can't see
+talent/situation change). It also lets the readiness gate *calibrate* early-season language
+rather than merely gate it. Do **not** use prior-season carryover as the prior (biased by
+age/injury/scheme).
+
+**Progress:**
+- ✅ **Source #1 — Sleeper weekly projections (DONE).** `sleeper.py projections <season> [week]`
+  → `write_projections(source="sleeper")`. Historical (works with the frozen-2025 world),
+  native `sleeperPlayerId`, 100% coverage of rostered skill players. See "most recent build".
+- **Next — the consensus + disagreement-spread transform** (`compute_projection_consensus.py`):
+  group across `source` per (season, week, player) → consensus (center) + spread (disagreement).
+  A real spread needs a **second source** — bring in **`fantasypros.py`** (key in config; same
+  `write_projections(source="fantasypros")` seam) in-season, or another free source now.
+- **Optional cheap add:** Vegas game totals via an `odds.py` fetcher (game environment).
 
 (Older note, lower priority: continue the V1 Dashboard Build Order — standings with
 trajectory; manager dossiers; positional strength vs. league average; head-to-head
