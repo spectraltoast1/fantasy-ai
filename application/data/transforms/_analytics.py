@@ -43,6 +43,22 @@ def pearson(xs, ys) -> float | None:
     return num / (dx * dy)
 
 
+def stdev(xs) -> float | None:
+    """Population standard deviation of a numeric series.
+
+    Returns None (not 0.0) when undefined — fewer than 2 points — mirroring pearson's
+    convention, so a caller can distinguish "no spread estimate" (fall back to a prior)
+    from "measured, zero spread." Population form (divide by n, not n−1): the thin
+    per-player samples this feeds get pooled with a positional prior anyway, so the more
+    stable /n estimate is the right choice over the less-biased-but-noisier /(n−1).
+    """
+    n = len(xs)
+    if n < 2:
+        return None
+    m = mean(xs)
+    return (sum((x - m) ** 2 for x in xs) / n) ** 0.5
+
+
 def spectrum_positions(values):
     """League-relative 0–1 position for each value, in input order (min→0, max→1).
 
