@@ -166,11 +166,12 @@ fantasy-ai/
     │   │   └── sleeper/
     │   │       └── players.parquet    # Sleeper /players/nfl registry, refreshed ≤ once/day — 10 cols incl. injury_status/depth_chart_order/practice_participation (Phase 1 refinement)
     │   └── snapshots/              # time-series parquet (gitignored)
-            ├── derived/                                 # pre-computed analytics (compute_*.py output); the 3 team/player analytics are tall, grain (season, as_of_week, entity); projection_consensus is per (season, week, player)
+            ├── derived/                                 # pre-computed analytics (compute_*.py output); team/player analytics + production_vor are tall, grain (season, as_of_week, entity); projection_consensus is per (season, week, player)
             │   ├── team_form_2025.parquet               # per (as_of_week, team) trajectory: slope, direction, spectrum, weekly series
             │   ├── team_leakage_2025.parquet            # per (as_of_week, team) leakage: efficiency %, coachable/variance, named fixes
             │   ├── player_signal_2025.parquet           # per (as_of_week, team, player) spike signal: opp vs efficiency split, regression_risk, read
-            │   └── projection_consensus_2025.parquet    # per (week, player) forward prior: borrowed center + p25/p50/p75 spread band (residual std shrunk to positional prior); disagreement_ppr null till a 2nd source
+            │   ├── projection_consensus_2025.parquet    # per (week, player) forward prior: borrowed center + p25/p50/p75 spread band (width = residual std, skew = residual skewness, both shrunk to positional prior — §3's 3 components); disagreement_ppr null till a 2nd source
+            │   └── production_vor_2025.parquet          # per (as_of_week, roster, player) §4 read: ROS value (borrowed centers summed over remaining weeks) over the waiver line, normalized by pool spread; QB pool + pooled flex line
             ├── leaguelogs/
             │   └── market_values.parquet            # daily market-value history, all profiles
             ├── projections/
@@ -189,7 +190,7 @@ fantasy-ai/
                     └── ... # matchup and transaction parquet files for each week of the 2025 season
     ├── shared/                     # league detection, config loaders
     ├── transforms/ # one Python script per join/transform
-        ├── _analytics.py              # shared pure helpers (round1, mean, median, stdev, pearson, spectrum_positions)
+        ├── _analytics.py              # shared pure helpers (round1, mean, median, stdev, skewness, pearson, spectrum_positions)
         ├── join_nfl_sleeper_weekly.py # ✅ built
         ├── audit_join.py              # ✅ built — resolves unknown-position remainders
         ├── derive_lineup_slots.py     # ✅ built — roster_positions → lineup_slots (starting skill slots)
@@ -197,8 +198,10 @@ fantasy-ai/
         ├── compute_team_leakage.py    # ✅ built — lineup-leakage analytics → derived/team_leakage
         ├── compute_player_signal.py   # ✅ built — spike signal-quality read (Phase 1) → derived/player_signal
         ├── backtest_player_signal.py  # ✅ built — validates the shipped signal vs naive baseline on the full-2025 answer key
-        ├── compute_projection_consensus.py  # ✅ built — projection consensus + spread band (Phase 2) → derived/projection_consensus
-        └── backtest_projection_consensus.py # ✅ built — calibration gate: 25–75 band coverage ~50% on the full-2025 answer key
+        ├── compute_projection_consensus.py  # ✅ built — projection consensus + spread band, all 3 §3 components incl. archetype skew (Phase 2) → derived/projection_consensus
+        ├── backtest_projection_consensus.py # ✅ built — calibration gate: 25–75 band coverage ~50% AND both tails ~25% on the full-2025 answer key
+        ├── compute_production_vor.py        # ✅ built — Production VOR §4 (first substrate-consuming read) → derived/production_vor
+        └── backtest_production_vor.py        # ✅ built — VOR gate: projected ROS tracks actual (corr ~0.95), VOR tiers monotonic on the 2025 answer key
     ├── config.example.py
     └── requirements.txt
 ```
@@ -266,7 +269,8 @@ now. Everything in **parquet** goes through data_layer.
 | compute_team_form transform | snapshots/derived/ | team_form_{season}.parquet — **tall, grain (as_of_week, roster_id)** (Season-replay): per as-of week N=1..maxweek, one row per roster_id with the EWMA scoring slope, direction, recent record, league-relative spectrum pos, per-week series — all recomputed on weeks ≤ N. Pre-computed so the front-end seam just reads it (no JS trajectory math) |
 | compute_team_leakage transform | snapshots/derived/ | team_leakage_{season}.parquet — **tall, grain (as_of_week, roster_id)**: per as-of week N, lineup efficiency %, season points-left, coachable/variance split, named fixes, per-week leak, spectrum pos — cumulative ledger over weeks ≤ N. Roster-as-of-N: a player's "current team" resolves to his latest week ≤ N. Feeds both the Team Overview leakage lens and the League drawer's efficiency read |
 | compute_player_signal transform | snapshots/derived/ | player_signal_{season}.parquet — **tall, grain (as_of_week, roster_id, player)**: per as-of week N, one row per rostered skill player with the spike signal-quality read (Phase 1), recomputed on weeks ≤ N (roster-as-of-N applies). Decomposes recent production into sticky opportunity (opp_g, EWMA-windowed via injected half-life — ships cumulative, backtest-tuned) vs fragile efficiency (ppo, shrunk toward the league positional mean); headline regression_risk + a sample-gated read (too_early/spike/mixed/sticky), td_share as evidence, per-week series. The first decision-critique engine slice; not a forward projection. **Phase 1 refinement (2026-07-08):** four added fields close the DECISION_READS.md §1 gap — quality_rate (xtd_g/opp_g, the Quality axis from PBP td_prob), direction/reliability (Trust axis, from the player's own opportunity series), security (Trust's context flag, from Sleeper injury/depth-chart data), point_correlation (pearson(xtd, td_pts)). Kept separate from the validated core read, not fused in |
-| compute_projection_consensus transform | snapshots/derived/ | projection_consensus_{season}.parquet — **per (season, week, player)** over the whole skill pool. **NOT tall over as_of_week** (unlike the three above): a projection for week W is a fixed forward statement whose band uses only weeks < W, so it's keyed on `week` like the projections entity it reads — read via `read_projection_consensus(season, week=None)`. Borrowed consensus center (median `proj_pts_ppr` across sources) + a p25/p50/p75 spread band whose width is the player's residual std (actual − proj) shrunk toward a full-pool positional prior (`SHRINK_K`), `BAND_Z`-scaled, floored at 0. `disagreement_ppr` (cross-source std) is null under a single source. The Phase-2 forward prior / law-2 confidence band (DECISION_READS §3), calibration-gated by backtest_projection_consensus.py (25–75 coverage ~50% on the 2025 answer key; `BAND_Z` swept-tuned). **Coverage nuance:** a null `proj_pts_ppr` (Sleeper doesn't project a player who's OUT/inactive — components are null too) means no band and no residual for that player-week, by design — so the pool is projected-and-playing players, not every roster spot. Consumed by later VOR/ROS reads; the front end reads the current week's slice and filters to rostered players |
+| compute_projection_consensus transform | snapshots/derived/ | projection_consensus_{season}.parquet — **per (season, week, player)** over the whole skill pool. **NOT tall over as_of_week** (unlike the three above): a projection for week W is a fixed forward statement whose band uses only weeks < W, so it's keyed on `week` like the projections entity it reads — read via `read_projection_consensus(season, week=None)`. Borrowed consensus center (median `proj_pts_ppr` across sources) + a p25/p50/p75 spread band — **all three §3 components**: center (borrowed), **width** = the player's residual std (actual − proj) shrunk toward a full-pool positional prior (`SHRINK_K`), and **archetype skew** = a Cornish-Fisher quantile shift `SKEW_GAIN·(g/6)·(BAND_Z²−1)` on p25/p75 from the player's residual *skewness* `g` shrunk to a positional prior (`SKEW_SHRINK_K`); p50 stays the borrowed center, floored at 0. **Skew driver resolved by the answer key, not §3's literal wording:** the projection's TD-dependence archetype does *not* track residual skew (measured 2026-07-09); the player's own residual 3rd moment does — the exact parallel to the width's 2nd moment. Because `BAND_Z<1`, a right-skewed residual shifts both breakpoints *down* (the borrowed center sits above the realized median), giving a slightly longer *lower* gap — reversing §3's right-skew illustration (pre-data intuition about raw scores). `disagreement_ppr` (cross-source std) is null under a single source. The Phase-2 forward prior / law-2 confidence band (DECISION_READS §3), calibration-gated by backtest_projection_consensus.py — **per-tail** (25–75 coverage ~0.50 AND below-p25/above-p75 ~0.25 each); `BAND_Z × SKEW_GAIN` swept jointly → (0.55, 1.5) on the 2025 answer key. **Coverage nuance:** a null `proj_pts_ppr` (Sleeper doesn't project a player who's OUT/inactive — components are null too) means no band and no residual for that player-week, by design — so the pool is projected-and-playing players, not every roster spot. Consumed by Production VOR (below) and later ROS reads; the front end reads the current week's slice and filters to rostered players |
+| compute_production_vor transform | snapshots/derived/ | production_vor_{season}.parquet — **tall, grain (as_of_week, roster_id, player)**: per as-of week N, one row per rostered skill player with the DECISION_READS §4 Production VOR read. **ros_value** = sum of the borrowed weekly consensus centers (projection_consensus.center_ppr) over the *remaining* schedule (weeks > N) — borrows the projection (law 3), builds only the anchor+normalization. **vor** = (ros_value − waiver_line) / (pool_top − waiver_line): waiver line = 0, pool top ≈ 1, negative = dead weight; §4's settled normalization (divide by pool spread, not the waiver value). **Pools from lineup_slots** (not hard-coded): dedicated QB slot = its own pool, flex-eligible RB/WR/TE = one pooled waiver line (§4 flex reconciliation). Roster-as-of-N (latest team ≤ N, the shared arg_max idiom); roster frozen wks 1–4 so N bounded there, projection horizon → wk 18. Calibration-gated by backtest_production_vor.py (projected ROS tracks actual at corr ~0.95 per pool; VOR tiers monotonic in realized production — exit 0). **Documented simplifications:** the pooled flex line doesn't model dedicated-slot scarcity (a scarce TE is measured vs the flex replacement); **superflex (QB→flex pool) is the latent assumption** — safe today (1QB league). Market VOR (LeagueLogs) + the Production−Market trade gap are V4, not built here |
 
 **Projections entity (multi-source forward prior — Phase 2).** A single normalized,
 source-agnostic file (`snapshots/projections/projections_{season}.parquet`) that any projection
@@ -479,25 +483,58 @@ via data_layer.py, performs a single join, and writes via data_layer.py.
   `std(actual − proj)` over his weeks < W (out-of-sample), **shrunk toward a full-pool positional
   prior** by `SHRINK_K` games — thin early samples lean on the position, sharpen as history
   accrues (the shrink idiom from `compute_player_signal.py`, applied to a variance instead of a
-  rate; the pure `_analytics.stdev` added for it). p25/p75 = center ± `BAND_Z`·band, floored at 0.
-  A sharper reading of §3's "historical weekly variance" — *residual* spread, not raw score
-  variance, is what makes the ~50%-in-IQR calibration meaningful. Same SOLID shape as the other
-  transforms: pure `_projection_band`/`_consensus` with injected constants, `compute()` the
-  composition root, but **not** the as_of_week loop — it's per-week forward (band uses weeks < W),
-  so the output is keyed on `week` and read without `_as_of_slice`. `disagreement_ppr` (cross-source
-  std) is a scaffolded column, null under one source, additive when ffanalytics adds a live second
-  source in-season — a value change, not a schema change.
+  rate; the pure `_analytics.stdev` added for it). **Archetype skew (§3 c3, added 2026-07-09)** is
+  the 3rd component: a Cornish-Fisher quantile shift `SKEW_GAIN·(g/6)·(BAND_Z²−1)` applied to both
+  breakpoints from the player's **residual skewness** `g` shrunk to a positional prior (`SKEW_SHRINK_K`
+  — larger than `SHRINK_K` since a 3rd moment is noisier; pure `_analytics.skewness` added for it). p50
+  stays the borrowed center; p25/p75 = center + band·(∓`BAND_Z` + shift), floored at 0. **The skew
+  driver was resolved by the answer key, not §3's literal wording:** §3 names the projection's
+  archetype (TD-dependence) as the driver, but that was *measured* not to track residual skew (high-TD
+  players skew 0.64, low-TD 0.89 — backwards); the player's own residual 3rd moment does. Because
+  `BAND_Z<1`, a right-skewed residual (the universal case) shifts both breakpoints *down* — the
+  borrowed center sits above the realized median (projections lean mildly optimistic) — so honest
+  25/25 tails want a slightly longer *lower* gap, reversing §3's right-skew illustration (documented in
+  the transform docstring). Same SOLID shape: pure `_projection_band`/`_consensus` with injected
+  constants, `compute()` the composition root, but **not** the as_of_week loop — it's per-week forward
+  (band uses weeks < W), so the output is keyed on `week` and read without `_as_of_slice`.
+  `disagreement_ppr` (cross-source std) is a scaffolded column, null under one source, additive when
+  ffanalytics adds a live second source in-season — a value change, not a schema change.
 
 - `backtest_projection_consensus.py` — **the calibration gate for the spread band.** Imports the
   same pure `_projection_band`/`_consensus_frame`/`_residuals` the transform ships (no re-derivation).
-  Validates DECISION_READS §3's calibration check on the full-2025 answer key: for every
-  projected-and-played (player, week), the band from weeks < W (out-of-sample) — does the actual land
-  in [p25, p75] ~50% of the time? **`--sweep`** tunes `BAND_Z` against the answer key (2025 chose 0.6,
-  coverage 51.4%, below the normal-theory 0.6745 — residuals are peaked with fat boom/bust tails);
-  exit 0 iff coverage is within tolerance of 0.50. Also reports the per-player shrink vs a naive
-  position-only band across volatility strata (per-player keeps steady + volatile both nearer 0.50; a
-  one-size band over-covers the steady and under-covers the volatile). The same
-  backtest-against-the-answer-key template as `backtest_player_signal.py`.
+  Validates DECISION_READS §3's calibration on the full-2025 answer key: for every projected-and-played
+  (player, week), the band from weeks < W (out-of-sample) — does the actual land in [p25, p75] ~50% of
+  the time, **and each tail (below-p25 / above-p75) near 25%**? The per-tail split is what the skew
+  term is graded on (a symmetric band can hit 50% overall while missing low on one side — 2025 was
+  0.278/0.208). **`--sweep`** tunes `BAND_Z × SKEW_GAIN` **jointly** against the answer key (2025 chose
+  (0.55, 1.5) — coverage 0.493, tails 0.247/0.261, tail error cut 5× vs symmetric). Exit 0 iff combined
+  coverage within tol of 0.50, both tails within tol of 0.25, AND the skew improves tail balance vs a
+  re-tuned symmetric band. Also reports the per-player shrink vs a naive position-only band across
+  volatility strata. Same backtest-against-the-answer-key template as `backtest_player_signal.py`.
+
+- `compute_production_vor.py` — **the first read that consumes the projection substrate (DECISION_READS
+  §4): Production VOR.** Reads `projection_consensus` (the borrowed centers) + the season join (roster)
+  + `lineup_slots` (pool config); emits one row per (as_of_week, rostered player). Per law 3 it borrows
+  the projection and builds only the decision layer: `ros_value` = sum of the borrowed weekly centers
+  over the remaining schedule (weeks > N); `vor` = (ros_value − waiver_line) / (pool_top − waiver_line),
+  anchoring waiver = 0 and normalizing by the **pool spread** (§4's settled choice — stable where a
+  waiver denominator collapses). Pools derive from `lineup_slots` (`_pool_of`): a dedicated QB slot is
+  its own pool, flex-eligible RB/WR/TE share **one pooled waiver line** (§4 flex reconciliation). SOLID
+  shape: pure `_ros_values`/`_pool_lines`/`_vor`/`_roster_as_of`, `compute()` the composition root.
+  **Tall over as_of_week** like the three team/player analytics (roster-as-of-N via the shared arg_max
+  idiom); roster (season join) is frozen at wks 1–4 so N is bounded there, projection horizon → wk 18.
+  **Documented simplifications:** the pooled flex line doesn't model dedicated-slot scarcity (a scarce
+  TE is measured against the flex replacement, usually a WR/RB — §4's deliberate settled choice); it's
+  a **1QB league** (superflex would drop QB into the flex pool — the latent assumption to revisit).
+  Market VOR (LeagueLogs) + the Production−Market trade gap are V4, out of scope.
+
+- `backtest_production_vor.py` — **the validation gate for Production VOR.** Imports the same pure
+  functions the transform ships. Two verdicts on the full-2025 answer key (exit 0 iff both): (1)
+  *predictive* — per pool, does projected `ros_value` correlate with **actual** ROS production (realized
+  points over the same remaining weeks)? 2025: corr 0.944 (QB) / 0.955 (FLEX), floor 0.60. (2)
+  *decision-relevant* — sort rostered players by VOR into terciles and confirm actual production rises
+  monotonically (dead 70.7 < mid 138.7 < stud 220.7), with below-waiver (vor<0) clearly under
+  at-or-above. Same backtest-against-the-answer-key template as the other two gates.
 
 ## Technical Principles
 
