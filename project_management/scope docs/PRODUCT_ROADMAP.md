@@ -134,7 +134,7 @@ disagreement: pending the 2nd source.)*
 
 ---
 
-## Phase 3 — Cash in the projection: the quantitative forward reads — *UNDERWAY (§3, §4, §5-half done; §6 next)*
+## Phase 3 — Cash in the projection: the quantitative forward reads — *COMPLETE (§3, §4, §5-half, §6 all done)*
 
 Once the prior exists, the quantitative reads that *consume* it are near-term and
 mostly mechanical (per `READ_BUILD_ORDER.md`: §3, §4, §6, half of §5). This is also
@@ -151,7 +151,9 @@ gets repaid — those are the cross-cutting *how* of these reads, not a separate
   lineup → record-independent roster strength (`compute_true_rank.py`), answer-key gated;
   half of posture. Reused the optimal-lineup engine (lifted into shared `_analytics`). Bracket
   math (§5 full) is Phase 4.
-- **Positional Depth (§6) — next (sole remaining Phase-3 read).** Re-slice Production VOR by position vs. league → roster shape.
+- ✅ **Positional Depth (§6) — DONE.** Re-slice Production VOR per position, net of the starting
+  requirement, vs. league → surplus / gap (`compute_positional_depth.py`), answer-key gated
+  (per-position corr mean 0.861). → roster shape (trade + waiver/FAAB). **Closes Phase 3.**
 - **Fix the leakage "coachable" claim (STATUS backlog #1) — this is law 1 made
   real, and it lands *in* VOR.** Today it converts a 4-game realized sample into a
   forward imperative ("start Allen over Brown going forward") — and the rest-of-season
