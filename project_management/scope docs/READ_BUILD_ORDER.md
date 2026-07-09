@@ -97,10 +97,15 @@ All quantitative, all leaning directly on the Phase-2 prior. VOR is also where t
 "regress realized rate toward the prior" lands, and the *shared-engines* generalization (roadmap
 Phase 3's framing) is the cross-cutting *how* of these reads, not a separate gate.
 
-### Phase 4 — Integration + going live → §2 (skeleton), §5 (full), §7
-- **Posture Evidence (§5, full)** — the **bracket-math Monte Carlo** (team score distributions from
-  weekly-spread variance + true rank → per-matchup win prob → simulate the season) shown adjacent to
-  true rank. Needs the live season + schedule. → the risk-appetite lens.
+### Phase 4 — Integration + going live *(UNDERWAY — §5 bracket math done)* → §2 (skeleton), §5 (full), §7
+- ✅ **Posture Evidence (§5, full) — bracket-math Monte Carlo DONE.** `compute_bracket_sim.py`: team
+  weekly score distributions (μ from the optimal-lineup projection, σ from the §3 band) → analytic
+  per-matchup win prob → a 10k-sim season over the **real remaining schedule** (all 18 wks of matchup
+  snapshots are on hand) → **playoff odds** + proj wins/seed + magic number. With True Rank = §5
+  complete. Config-light gate on actual 2025 results (Brier 0.224 beats coin-flip; expected-wins
+  Spearman 0.756; top-6 by odds = 6/6 actual playoff teams). Playoff config (reg-season end wk15, 6
+  teams) inferred from the schedule — documented latent. The **posture presentation** (odds shown
+  adjacent to true rank, the risk-appetite lens) is the deferred front-end half.
 - **ROS Outcome Shape — quantitative skeleton (§2)** — bull/bear anchored on the borrowed ROS
   projection ± variance + time decay; situation/security from *structured* inputs (draft capital, depth
   chart, injury status). The AI narrative comes in Phase 6.
@@ -130,10 +135,11 @@ guidance. Falls out of the critique-first design. (= roadmap Phase 5.)
   spec); **Phase 2 substrate** (Sleeper source + consensus/spread band, all 3 §3 components); and **all
   4 Phase-3 cash-in reads — Weekly Spread (§3), Production VOR (§4), True rank (half of §5), and
   Positional Depth (§6)** — all answer-key gated, data + gate only (no UI yet).
-- **Phase 3 is COMPLETE.** **Next — Phase 4 (integration + going live):** the §5 bracket-math Monte
-  Carlo (full posture — consumes True Rank + weekly-spread variance), the §2 ROS outcome-shape
-  quantitative skeleton, manager dossiers (§7), and the **front-end surfacing** of the four gated
-  forward reads.
+- **Phase 3 is COMPLETE; Phase 4 is UNDERWAY** — the **§5 bracket-math Monte Carlo** shipped
+  (`compute_bracket_sim.py` → playoff odds; with True Rank = §5 Posture complete), config-light gated on
+  actual 2025 results (Brier 0.224; expected-wins Spearman 0.756; 6/6 actual playoff teams). **Next —
+  remaining Phase 4:** the §2 ROS outcome-shape quantitative skeleton, manager dossiers (§7), and the
+  **front-end surfacing** of the five gated forward reads (incl. the posture presentation).
 - **Blocked (not next):** cross-source **disagreement** (the Phase-2 substrate's 2nd half) — needs a
   live 2nd source, fills in-season via ffanalytics. Market VOR + the trade gap (§4) remain V4.
 - Everything past the substrate is gated on it; §3 + §4 + §5-half + §6 confirm the substrate cashes in.
