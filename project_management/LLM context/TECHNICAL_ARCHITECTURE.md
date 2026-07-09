@@ -2,7 +2,7 @@
 
 > Engineering context document for Claude Code. Describes the stack, folder structure, data layer design, and technical principles. Updated regularly as the project evolves.
 
-**Last reviewed:** 2026-07-08
+**Last reviewed:** 2026-07-09
 
 ---
 
@@ -166,10 +166,11 @@ fantasy-ai/
     │   │   └── sleeper/
     │   │       └── players.parquet    # Sleeper /players/nfl registry, refreshed ≤ once/day — 10 cols incl. injury_status/depth_chart_order/practice_participation (Phase 1 refinement)
     │   └── snapshots/              # time-series parquet (gitignored)
-            ├── derived/                                 # pre-computed analytics (compute_*.py output); tall, grain (season, as_of_week, entity)
+            ├── derived/                                 # pre-computed analytics (compute_*.py output); the 3 team/player analytics are tall, grain (season, as_of_week, entity); projection_consensus is per (season, week, player)
             │   ├── team_form_2025.parquet               # per (as_of_week, team) trajectory: slope, direction, spectrum, weekly series
             │   ├── team_leakage_2025.parquet            # per (as_of_week, team) leakage: efficiency %, coachable/variance, named fixes
-            │   └── player_signal_2025.parquet           # per (as_of_week, team, player) spike signal: opp vs efficiency split, regression_risk, read
+            │   ├── player_signal_2025.parquet           # per (as_of_week, team, player) spike signal: opp vs efficiency split, regression_risk, read
+            │   └── projection_consensus_2025.parquet    # per (week, player) forward prior: borrowed center + p25/p50/p75 spread band (residual std shrunk to positional prior); disagreement_ppr null till a 2nd source
             ├── leaguelogs/
             │   └── market_values.parquet            # daily market-value history, all profiles
             ├── projections/
@@ -188,14 +189,16 @@ fantasy-ai/
                     └── ... # matchup and transaction parquet files for each week of the 2025 season
     ├── shared/                     # league detection, config loaders
     ├── transforms/ # one Python script per join/transform
-        ├── _analytics.py              # shared pure helpers (round1, mean, median, spectrum_positions)
+        ├── _analytics.py              # shared pure helpers (round1, mean, median, stdev, pearson, spectrum_positions)
         ├── join_nfl_sleeper_weekly.py # ✅ built
         ├── audit_join.py              # ✅ built — resolves unknown-position remainders
         ├── derive_lineup_slots.py     # ✅ built — roster_positions → lineup_slots (starting skill slots)
         ├── compute_team_form.py       # ✅ built — EWMA trajectory analytics → derived/team_form
         ├── compute_team_leakage.py    # ✅ built — lineup-leakage analytics → derived/team_leakage
         ├── compute_player_signal.py   # ✅ built — spike signal-quality read (Phase 1) → derived/player_signal
-        └── backtest_player_signal.py  # ✅ built — validates the shipped signal vs naive baseline on the full-2025 answer key
+        ├── backtest_player_signal.py  # ✅ built — validates the shipped signal vs naive baseline on the full-2025 answer key
+        ├── compute_projection_consensus.py  # ✅ built — projection consensus + spread band (Phase 2) → derived/projection_consensus
+        └── backtest_projection_consensus.py # ✅ built — calibration gate: 25–75 band coverage ~50% on the full-2025 answer key
     ├── config.example.py
     └── requirements.txt
 ```
@@ -263,6 +266,7 @@ now. Everything in **parquet** goes through data_layer.
 | compute_team_form transform | snapshots/derived/ | team_form_{season}.parquet — **tall, grain (as_of_week, roster_id)** (Season-replay): per as-of week N=1..maxweek, one row per roster_id with the EWMA scoring slope, direction, recent record, league-relative spectrum pos, per-week series — all recomputed on weeks ≤ N. Pre-computed so the front-end seam just reads it (no JS trajectory math) |
 | compute_team_leakage transform | snapshots/derived/ | team_leakage_{season}.parquet — **tall, grain (as_of_week, roster_id)**: per as-of week N, lineup efficiency %, season points-left, coachable/variance split, named fixes, per-week leak, spectrum pos — cumulative ledger over weeks ≤ N. Roster-as-of-N: a player's "current team" resolves to his latest week ≤ N. Feeds both the Team Overview leakage lens and the League drawer's efficiency read |
 | compute_player_signal transform | snapshots/derived/ | player_signal_{season}.parquet — **tall, grain (as_of_week, roster_id, player)**: per as-of week N, one row per rostered skill player with the spike signal-quality read (Phase 1), recomputed on weeks ≤ N (roster-as-of-N applies). Decomposes recent production into sticky opportunity (opp_g, EWMA-windowed via injected half-life — ships cumulative, backtest-tuned) vs fragile efficiency (ppo, shrunk toward the league positional mean); headline regression_risk + a sample-gated read (too_early/spike/mixed/sticky), td_share as evidence, per-week series. The first decision-critique engine slice; not a forward projection. **Phase 1 refinement (2026-07-08):** four added fields close the DECISION_READS.md §1 gap — quality_rate (xtd_g/opp_g, the Quality axis from PBP td_prob), direction/reliability (Trust axis, from the player's own opportunity series), security (Trust's context flag, from Sleeper injury/depth-chart data), point_correlation (pearson(xtd, td_pts)). Kept separate from the validated core read, not fused in |
+| compute_projection_consensus transform | snapshots/derived/ | projection_consensus_{season}.parquet — **per (season, week, player)** over the whole skill pool. **NOT tall over as_of_week** (unlike the three above): a projection for week W is a fixed forward statement whose band uses only weeks < W, so it's keyed on `week` like the projections entity it reads — read via `read_projection_consensus(season, week=None)`. Borrowed consensus center (median `proj_pts_ppr` across sources) + a p25/p50/p75 spread band whose width is the player's residual std (actual − proj) shrunk toward a full-pool positional prior (`SHRINK_K`), `BAND_Z`-scaled, floored at 0. `disagreement_ppr` (cross-source std) is null under a single source. The Phase-2 forward prior / law-2 confidence band (DECISION_READS §3), calibration-gated by backtest_projection_consensus.py (25–75 coverage ~50% on the 2025 answer key; `BAND_Z` swept-tuned). **Coverage nuance:** a null `proj_pts_ppr` (Sleeper doesn't project a player who's OUT/inactive — components are null too) means no band and no residual for that player-week, by design — so the pool is projected-and-playing players, not every roster spot. Consumed by later VOR/ROS reads; the front end reads the current week's slice and filters to rostered players |
 
 **Projections entity (multi-source forward prior — Phase 2).** A single normalized,
 source-agnostic file (`snapshots/projections/projections_{season}.parquet`) that any projection
@@ -466,6 +470,34 @@ via data_layer.py, performs a single join, and writes via data_layer.py.
   (and `--opp-half-life` overrides the verdict run); the 2025 sweep across W4/W6/W8 chose
   **cumulative** (short half-lives hurt rest-of-season MAE — opportunity is sticky enough
   that max sample wins), which is why `OPP_HALF_LIFE_WK` ships `None`.
+
+- `compute_projection_consensus.py` — **the Phase-2 forward prior: the weekly projection
+  consensus + spread band (DECISION_READS §3).** Reads the multi-source `projections` entity
+  + `nfl_stats` actuals, emits one row per (week, player) over the whole skill pool. Per law 3
+  it **borrows the center** (median `proj_pts_ppr` across sources) and **builds only the band**;
+  per law 2 the band width *is* the confidence signal. Band width = the player's **residual std**
+  `std(actual − proj)` over his weeks < W (out-of-sample), **shrunk toward a full-pool positional
+  prior** by `SHRINK_K` games — thin early samples lean on the position, sharpen as history
+  accrues (the shrink idiom from `compute_player_signal.py`, applied to a variance instead of a
+  rate; the pure `_analytics.stdev` added for it). p25/p75 = center ± `BAND_Z`·band, floored at 0.
+  A sharper reading of §3's "historical weekly variance" — *residual* spread, not raw score
+  variance, is what makes the ~50%-in-IQR calibration meaningful. Same SOLID shape as the other
+  transforms: pure `_projection_band`/`_consensus` with injected constants, `compute()` the
+  composition root, but **not** the as_of_week loop — it's per-week forward (band uses weeks < W),
+  so the output is keyed on `week` and read without `_as_of_slice`. `disagreement_ppr` (cross-source
+  std) is a scaffolded column, null under one source, additive when ffanalytics adds a live second
+  source in-season — a value change, not a schema change.
+
+- `backtest_projection_consensus.py` — **the calibration gate for the spread band.** Imports the
+  same pure `_projection_band`/`_consensus_frame`/`_residuals` the transform ships (no re-derivation).
+  Validates DECISION_READS §3's calibration check on the full-2025 answer key: for every
+  projected-and-played (player, week), the band from weeks < W (out-of-sample) — does the actual land
+  in [p25, p75] ~50% of the time? **`--sweep`** tunes `BAND_Z` against the answer key (2025 chose 0.6,
+  coverage 51.4%, below the normal-theory 0.6745 — residuals are peaked with fat boom/bust tails);
+  exit 0 iff coverage is within tolerance of 0.50. Also reports the per-player shrink vs a naive
+  position-only band across volatility strata (per-player keeps steady + volatile both nearer 0.50; a
+  one-size band over-covers the steady and under-covers the volatile). The same
+  backtest-against-the-answer-key template as `backtest_player_signal.py`.
 
 ## Technical Principles
 

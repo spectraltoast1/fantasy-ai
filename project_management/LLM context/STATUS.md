@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-07-08 (Phase 2 begins — Sleeper weekly projections land as the projection substrate's first source; multi-source `projections` entity in data_layer)
+**Last updated:** 2026-07-09 (Phase 2 — projection consensus + spread-band transform shipped & calibration-gated; source scouting settled the 2nd source: ffanalytics in-season, ESPN deferred)
 **Target ship:** NFL kickoff, mid August 2026
 
 ---
@@ -34,6 +34,42 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**Phase 2 — the projection consensus + spread-band transform (the forward-prior band; the
+hinge's payoff, calibration-gated).** `compute_projection_consensus.py` turns the borrowed
+projections into the law-2 confidence read of `DECISION_READS.md` §3: per (season, week, player)
+over the whole skill pool, a **consensus center** (median `proj_pts_ppr` across sources) and a
+**percentile band** `p25/p50/p75 = center ± BAND_Z·band` (floored at 0). The band width is the
+player's **residual std** `std(actual − proj)` over his weeks `< W`, **shrunk toward a full-pool
+positional prior** by `SHRINK_K` games — thin early samples lean on the position, sharpen as his
+own history accrues (mirrors `compute_player_signal.py`'s shrink idiom; new pure `_analytics.stdev`).
+A sharper reading of §3's "historical weekly variance": *residual* spread, not raw score variance,
+is what makes the ~50%-in-IQR calibration mean anything. **Not tall over `as_of_week`** (unlike the
+other derived analytics) — a projection for week W is a fixed forward statement whose band uses only
+weeks `< W`, so it's keyed on `week` like the entity it reads; new `write/read_projection_consensus`
+in data_layer. **The session's real fork — the 2nd source — resolved by scouting:** a *cross-source*
+disagreement spread needs a second projection source, but **none serves historical 2025 weekly
+projections but Sleeper** — ffanalytics is live-scrape-only + an R package (right for **in-season
+live** disagreement, not the backtest), fantasyfootballdatapros is a one-off 2019/20 ESPN snapshot
+(its weekly endpoint is *actuals*), and ESPN's own API is now cookie-gated + needs an `espn_id` join
+(deferred). So the **variance band ships now** (calibratable with Sleeper alone) and the additive
+`disagreement_ppr` column stays **null** under one source (law 2: distinct from measured-zero),
+filling **in-season via ffanalytics** — a value change, not a schema change. **Calibration gate
+(`backtest_projection_consensus.py`, exit 0):** over 2025 the actual lands in the 25–75 band **51.4%**
+of the time (target 50%); `--sweep` tuned `BAND_Z → 0.6` on the answer key (below the normal 0.6745 —
+residuals are peaked with fat boom/bust tails). The per-player shrink is **more uniform across
+volatility strata** (spread 0.221) than a naive one-size position band (0.301), which over-covers
+steady players (0.68) and under-covers volatile ones (0.38). **Verified:** 6,100 projected
+player-weeks; boom/bust WRs + dual-threat QBs get the widest bands, steady possession TEs the
+tightest; week-1 falls back to the positional prior. **Coverage nuance (documented, not a bug):** a
+null `proj_pts_ppr` means Sleeper didn't project that player that week (OUT/inactive — components are
+null too, and they have no actual row), so they're honestly excluded from both the band and the
+residual history; week-4 covers 135/147 rostered (the 12 uncovered were injured/out that week, e.g.
+Burrow, CeeDee Lamb, Jayden Daniels). Full-PPR league ⇒ `proj_pts_ppr` vs `fantasy_points_ppr`
+coincide; the `scoring_settings` recompute stays the documented latent item. **Next:** cross-source
+**disagreement** (in-season ffanalytics), then **archetype skew** (§3 c3), then the VOR/ROS reads
+(§4/§2) that consume this band.
+
+> earlier build
 **Phase 2 begins — the projection substrate, source #1 (Sleeper).** The forward prior every
 Phase-2 read rests on (ROS shape §2, weekly spread §3, VOR §4, bracket sim §5) now has its
 first source landing in the data layer, built as a **multi-source, source-agnostic entity**.
@@ -84,33 +120,6 @@ Verified **offline only** — a live `refresh` fetch is deferred (it would distu
 **Next: Phase 2 — the projections substrate** (FantasyPros fetcher → consensus/spread forward
 prior), unchanged.
 
-> earlier build
-**Phase 1 refinement — Opportunity brought up to the Decision Reads spec (`READ_BUILD_ORDER.md`
-§ Phase 1 delta, now closed).** `compute_player_signal.py` gains four fields on top of the
-shipped volume/efficiency decomposition, per `DECISION_READS.md` §1 — kept separate, never
-fused ("don't collapse the axes"): **`quality_rate`** (the Quality axis — expected TDs per
-touch, `xtd_g/opp_g`, independent of Volume) sourced from a new play-by-play aggregation in
-`nfl_stats.py` (`nflreadpy.load_pbp()` → per-player-week `xtd`/`redzone_touches`, joined
-straight into `nfl_stats_{year}.parquet`); **`direction`**/**`reliability`** (the Trust axis —
-role trend + week-to-week consistency, from the player's own opportunity series, `direction`
-mirroring `compute_team_form.py`'s weighted-slope pattern); **`security`** (Trust's context
-flag, from Sleeper's `/players/nfl` injury_status/depth_chart_order — `fetch_players()` now
-carries these through instead of discarding them); and **`point_correlation`**
-(`pearson(xtd, td_pts)` — does a player's valuable chances actually convert to TD points, read
-against `quality_rate`: low correlation + high quality = unlucky/bounce-back; low + low =
-correctly cheap). Two of these (PBP `td_prob`, Sleeper injury data) were sourced by breaking
-the doc's original "no new dependency" note on purpose — real red-zone/depth-chart data beat
-guessing, and both came from packages/endpoints already integrated, not a new external service.
-`backtest_player_signal.py` carries `xtd` through its own series so the shared
-`_weighted_rates`/`_player_signal` functions see the same shape; the 2025 answer-key gate is
-**unchanged and still passes** (13.2% MAE cut, PASS/PASS) — none of the new fields touch the
-validated core math. Verified live: PBP aggregation matches a hand-checked figure (Ja'Marr
-Chase weeks 1–4: 13.67 xtd / 3 red-zone touches off 36 touches); Sleeper injury/depth-chart
-fields populate (528 players with a non-null injury_status); a 3rd-down-back archetype (e.g.
-Tre Tucker: `opp_g` 2.0, `quality_rate` 0.825) shows the intended Quality/Volume divergence;
-`reliability`/`point_correlation` correctly read `null` below `MIN_GAMES`. **Next: Phase 2 —
-the projections substrate** (FantasyPros fetcher → consensus/spread forward prior), unchanged.
-
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
@@ -138,6 +147,7 @@ the projections substrate** (FantasyPros fetcher → consensus/spread forward pr
     - Phase 1 refinement — Opportunity to spec (`quality_rate`, `direction`/`reliability`, `security`, `point_correlation`) — see "most recent build" above for the full breakdown. `nfl_stats.py` gains a PBP-derived quality signal (`xtd`/`redzone_touches`); `sleeper.py`'s `fetch_players()` carries injury/depth-chart fields through. 2025 backtest gate unchanged (PASS/PASS, 13.2% MAE cut).
     - Data-layer I/O consistency — all fetcher parquet I/O routed through `data_layer.py` (Option-A coverage gap from a Phase 1 build audit). Added write_player_id_map / write_sleeper_players (+exists/age) / write_nfl_stats(week=) / write_sleeper_matchups / read+write_sleeper_transactions; rewired nfl_stats.py, sleeper.py (`_write_parquet_from_list` → `_rows_to_df` + `_snapshot_list`), audit_join.py. Raw JSON cache dumps kept as a documented fetcher exception. TECHNICAL_ARCHITECTURE truthed-up (fetchers in the I/O rule; LeagueLogs collect-only exception; MIN_GAMES 2→3 places). Behavior-preserving (byte-identical player_signal reproduction; backtest PASS/PASS).
     - Phase 2 projection substrate, source #1 (Sleeper) — multi-source `projections` entity in data_layer (write/read_projections; `source` a column on one growing snapshots/projections/projections_{season}.parquet; snapshot/append, dedup on (season,week,source)); `sleeper.py projections <season> [week]` mode pulls the NFL skill pool's weekly projections from api.sleeper.com (RotoWire), native sleeperPlayerId, QB/RB/WR/TE. 2025 backfilled wks 1–18 (54,594 rows); 100% coverage of rostered skill players at W1–4. FantasyPros joins later in-season via the same seam.
+    - Phase 2 projection consensus + spread band — compute_projection_consensus.py → derived/projection_consensus_{season}.parquet (per week×player over the whole skill pool): borrowed consensus center + p25/p50/p75 band from the player's residual std (actual−proj) shrunk toward a full-pool positional prior, BAND_Z-scaled, floored at 0; disagreement_ppr column null under one source. Calibration-gated (backtest_projection_consensus.py, exit 0): 25–75 coverage 51.4% on the 2025 answer key, BAND_Z=0.6 swept-tuned; per-player shrink beats a naive one-size band on stratum uniformity. New _analytics.stdev + data_layer write/read_projection_consensus. 2nd source scouted: ffanalytics (in-season live disagreement), ESPN (deferred historical).
 
 > not yet built
     >> backend
@@ -172,12 +182,15 @@ and a **global "As of" week dropdown** in the App shell threads the selected wee
 drives the readiness gate, and retired the `?weeksOverride` param. Default = latest week
 (today week 4); the selector travels back only.
 
-**Phase 2 — the projections substrate — is now UNDERWAY (the hinge everything credible depends
-on, and the fix for the Kamara-style blind spot).** Source #1 landed: **Sleeper weekly projections**
-in a multi-source `projections` entity (see "most recent build"). **Next in Phase 2: the consensus +
-disagreement-spread transform** — it needs a second source for a real spread, so pair Sleeper with
-**FantasyPros** (key already in config; joins the same seam in-season) or another free source. See
-"The step after". This is back to Python/data-layer work.
+**Phase 2 — the projections substrate — is UNDERWAY (the hinge everything credible depends on,
+and the fix for the Kamara-style blind spot).** Source #1 (Sleeper weekly projections) **and the
+consensus + spread-band transform** both landed (see "most recent build"): the borrowed center +
+a **calibration-gated variance band** is the forward prior every later read leans on. **Source
+scouting settled the 2nd source** — no clean historical-2025 projection source exists but Sleeper,
+so the **cross-source disagreement** half comes **in-season via ffanalytics** (live multi-source);
+ESPN historical is deferred (cookie-gated + `espn_id` join). **Next in Phase 2: cross-source
+disagreement** (in-season), then **archetype skew** (§3 c3), then the reads that consume the band —
+Production **VOR** (§4) and **ROS** outcome-shape (§2). Python/data-layer work.
 
 ## Version Roadmap
 → **Source of truth: `scope docs/PRODUCT_ROADMAP.md`** — phase detail, the four
@@ -356,11 +369,19 @@ age/injury/scheme).
 **Progress:**
 - ✅ **Source #1 — Sleeper weekly projections (DONE).** `sleeper.py projections <season> [week]`
   → `write_projections(source="sleeper")`. Historical (works with the frozen-2025 world),
-  native `sleeperPlayerId`, 100% coverage of rostered skill players. See "most recent build".
-- **Next — the consensus + disagreement-spread transform** (`compute_projection_consensus.py`):
-  group across `source` per (season, week, player) → consensus (center) + spread (disagreement).
-  A real spread needs a **second source** — bring in **`fantasypros.py`** (key in config; same
-  `write_projections(source="fantasypros")` seam) in-season, or another free source now.
+  native `sleeperPlayerId`. See the build log.
+- ✅ **Consensus + spread-band transform (DONE).** `compute_projection_consensus.py` →
+  `derived/projection_consensus_{season}.parquet`: borrowed consensus center + a percentile band
+  (p25/p50/p75) whose width is the player's residual std shrunk toward a full-pool positional prior.
+  Calibration-gated (`backtest_projection_consensus.py`, exit 0 — 25–75 coverage 51.4% on the 2025
+  answer key). This is §3's **variance** ingredient; the **cross-source disagreement** ingredient is
+  null under one source and additive when a 2nd lands. See "most recent build".
+- **2nd source — scouted, resolved:** no clean historical-2025 weekly projection source but Sleeper
+  (ffanalytics = live-scrape + R; fantasyfootballdatapros = 2019/20 ESPN snapshot + actuals; ESPN =
+  cookie-gated + `espn_id` join). Plan: **ffanalytics for the in-season live cross-source
+  disagreement** (2026); ESPN historical only if we later want to backtest disagreement against 2025.
+- **Next transforms:** cross-source **disagreement** (in-season), **archetype skew** (§3 c3), then
+  Production **VOR** (§4) and **ROS outcome-shape** (§2) reads that consume the band.
 - **Optional cheap add:** Vegas game totals via an `odds.py` fetcher (game environment).
 
 (Older note, lower priority: continue the V1 Dashboard Build Order — standings with
