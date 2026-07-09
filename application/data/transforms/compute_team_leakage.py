@@ -39,7 +39,12 @@ _TRANSFORMS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_TRANSFORMS_DIR.parent))  # application/data → data_layer
 sys.path.insert(0, str(_TRANSFORMS_DIR))          # transforms → _analytics
 import data_layer
-from _analytics import round1, spectrum_positions
+from _analytics import (
+    round1,
+    spectrum_positions,
+    expand_slots as _expand_slots,
+    optimal_lineup as _optimal_lineup,
+)
 
 SKILL_POSITIONS = ["QB", "RB", "WR", "TE"]
 
@@ -52,40 +57,6 @@ COACHABLE_RATE_MARGIN = 1.1
 # Start share at/above this marks a "habitual starter"; below it, a "habitual bench"
 # player. The coachable signal is a habitual-bench gem out-rating a habitual starter.
 HABITUAL_STARTER_THRESHOLD = 0.5
-
-
-def _expand_slots(slot_rows):
-    """Port of queries.js expandSlots: one entry per physical slot (FLEX count 2 → two),
-    most-constrained first so dedicated slots claim their position's stars before flex
-    slots."""
-    slots = []
-    for s in slot_rows:
-        eligible = str(s["eligible"]).split(",")
-        for _ in range(int(s["count"])):
-            slots.append({"slot": s["slot"], "eligible": eligible})
-    slots.sort(key=lambda s: len(s["eligible"]))
-    return slots
-
-
-def _optimal_lineup(players, slots):
-    """Port of queries.js optimalLineup: greedy by ascending eligibility, filling the
-    most-constrained slots first with the top scorer available. Each player carries a
-    stable `_i` to track usage. Returns the total and the chosen picks (each tagged
-    with its filled slot), so callers can both score and diff against who was started."""
-    used = set()
-    picks = []
-    total = 0.0
-    for slot in slots:
-        candidates = [
-            p for p in players if p["_i"] not in used and p["position"] in slot["eligible"]
-        ]
-        if not candidates:
-            continue
-        pick = max(candidates, key=lambda p: p["pts"])
-        total += pick["pts"]
-        used.add(pick["_i"])
-        picks.append({**pick, "slot": slot["slot"]})
-    return {"total": total, "picks": picks}
 
 
 def _cls(pos):

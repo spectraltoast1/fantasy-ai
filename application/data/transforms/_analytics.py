@@ -79,6 +79,45 @@ def skewness(xs) -> float | None:
     return sum(((x - m) / s) ** 3 for x in xs) / n
 
 
+def expand_slots(slot_rows):
+    """One entry per physical starting slot (a FLEX count of 2 → two slots), most-constrained
+    first so dedicated slots claim their position's stars before flex slots draw from the pool.
+
+    `slot_rows` are the lineup_slots dicts (slot, count, eligible-CSV). Pure and points-agnostic:
+    the shared optimal-lineup engine for any per-player value (weekly points in leakage, ROS
+    value in true rank). Lifted here so the greedy rule has one home across transforms.
+    """
+    slots = []
+    for s in slot_rows:
+        eligible = str(s["eligible"]).split(",")
+        for _ in range(int(s["count"])):
+            slots.append({"slot": s["slot"], "eligible": eligible})
+    slots.sort(key=lambda s: len(s["eligible"]))
+    return slots
+
+
+def optimal_lineup(players, slots):
+    """Greedy optimal lineup: fill the most-constrained slots first with the top-`pts` eligible
+    player still available. Each player carries a stable `_i` so usage is tracked across slots;
+    `pts` is whatever value is being maximised (realized points, ROS value…). Returns the total
+    and the chosen picks (each tagged with its filled slot) so callers can score and diff.
+    """
+    used = set()
+    picks = []
+    total = 0.0
+    for slot in slots:
+        candidates = [
+            p for p in players if p["_i"] not in used and p["position"] in slot["eligible"]
+        ]
+        if not candidates:
+            continue
+        pick = max(candidates, key=lambda p: p["pts"])
+        total += pick["pts"]
+        used.add(pick["_i"])
+        picks.append({**pick, "slot": slot["slot"]})
+    return {"total": total, "picks": picks}
+
+
 def spectrum_positions(values):
     """League-relative 0–1 position for each value, in input order (min→0, max→1).
 
