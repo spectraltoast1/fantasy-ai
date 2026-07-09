@@ -1,6 +1,6 @@
 # READ BUILD ORDER
 
-**Last reviewed:** 2026-07-08
+**Last reviewed:** 2026-07-09
 **Companion to:** `PRODUCT_ROADMAP.md` (the *why* — phases, four design laws, scope filter) and the
 **Decision Reads spec** (`DECISION_READS.md` — the *what*, full definition of each read).
 This doc is the ***sequence*** — the order the seven reads get built and why that order is forced by
@@ -63,21 +63,32 @@ Sleeper injury/depth-chart fields broke the original "no new dependency" note on
 from packages/endpoints already integrated, not a new external service. *Sharpens every forward read
 that leans on opportunity.*
 
-### Phase 2 — The projection substrate *(NEXT — the hinge)* → enables §2, §3, §4, §5-bracket
-Build the **FantasyPros fetcher → consensus + disagreement spread**, both **ROS and weekly**. Gate on
-most of the read layer; nothing below is possible until it lands. **Highest-leverage build in the plan.**
-(= roadmap Phase 2.)
+### Phase 2 — The projection substrate *(substrate DONE; disagreement blocked)* → enables §2, §3, §4, §5-bracket
+The forward prior every read below rests on. **Source #1 — Sleeper weekly projections** (historical,
+so it lines up with the frozen-2025 answer key) landed in a source-agnostic `projections` entity, and
+`compute_projection_consensus.py` turns it into the borrowed **consensus center + spread band**, now
+with **all three §3 components** (center / width / archetype skew), calibration-gated on the 2025
+answer key. **The `disagreement` half is BLOCKED at the freeze** — a cross-source spread needs a live
+2nd source, and no source but Sleeper serves *historical* 2025 weekly projections; it fills **in-season
+via ffanalytics** (the `disagreement_ppr` column is scaffolded null till then — a value change, not a
+schema change). **Still the highest-leverage build** — everything below leans on it. (= roadmap Phase 2.)
 
-### Phase 3 — Cash in the projection: the quantitative forward reads → §3, §4, §6, half of §5
+### Phase 3 — Cash in the projection: the quantitative forward reads *(UNDERWAY — §3, §4 done)* → §3, §4, §6, half of §5
 Once the prior exists, these are near-term and mostly mechanical:
-- **Value / VOR (§4)** — production VOR over the waiver line + market VOR (LeagueLogs, redraft profile)
-  + the gap. → roster management (adds/drops) + trades.
-- **Positional Depth (§6)** — immediate re-slice of Value/VOR by position vs. league. → roster shape.
-- **Weekly Projection Spread (§3)** — percentile band around the borrowed weekly center. → start/sit.
-- **True rank (half of §5)** — aggregate Value into optimal-lineup roster strength. → half of posture.
+- ✅ **Weekly Projection Spread (§3) — DONE.** Percentile band around the borrowed weekly center
+  (`compute_projection_consensus.py`), all three components incl. archetype skew; per-tail
+  calibration-gated on the 2025 answer key. → start/sit. *(Built alongside the Phase-2 substrate.)*
+- ✅ **Value / VOR (§4) — Production VOR DONE.** `compute_production_vor.py`: production VOR over the
+  waiver line, normalized by pool spread (QB pool + pooled flex line); gated (projected ROS tracks
+  actual at corr ~0.95, VOR tiers monotonic). → roster management (adds/drops). **Market VOR + the
+  Production−Market gap remain V4** (LeagueLogs redraft profile) — the trade layer is not built here.
+- **Positional Depth (§6) — NEXT.** Immediate re-slice of Production VOR by position vs. league. → roster shape.
+- **True rank (half of §5) — NEXT.** Aggregate Production VOR over each team's optimal lineup → roster
+  strength. → half of posture. *(Reuses the optimal-lineup logic in `compute_team_leakage`.)*
 
-All quantitative, all leaning directly on the Phase-2 prior. (Roadmap Phase 3 — shared engines; VOR is
-also where the leakage-fix "regress realized rate toward the prior" lands.)
+All quantitative, all leaning directly on the Phase-2 prior. VOR is also where the leakage-fix
+"regress realized rate toward the prior" lands, and the *shared-engines* generalization (roadmap
+Phase 3's framing) is the cross-cutting *how* of these reads, not a separate gate.
 
 ### Phase 4 — Integration + going live → §2 (skeleton), §5 (full), §7
 - **Posture Evidence (§5, full)** — the **bracket-math Monte Carlo** (team score distributions from
@@ -107,7 +118,12 @@ guidance. Falls out of the critique-first design. (= roadmap Phase 5.)
 - ~~**Opportunity spec delta** — weighted opportunity + trust axis + point-correlation~~ — **closed
   2026-07-08** (the Phase-1 refinement).
 
-## Status snapshot
-- **Done:** Phase 0 (descriptive dashboard), Phase 1 (Opportunity / spike signal-quality, refined to spec).
-- **Next:** **Phase 2 — the projection substrate** (the hinge).
-- Everything past Phase 2 is gated on it.
+## Status snapshot *(updated 2026-07-09)*
+- **Done:** Phase 0 (descriptive dashboard); Phase 1 (Opportunity / spike signal-quality, refined to
+  spec); **Phase 2 substrate** (Sleeper source + consensus/spread band, all 3 §3 components); and **2
+  of the 4 Phase-3 cash-in reads — Weekly Spread (§3) and Production VOR (§4)** — both answer-key gated.
+- **We are into Phase 3.** **Next:** the remaining two cash-in reads — **Positional Depth (§6)** and
+  **True rank (half of §5)** — both re-aggregations of the Production VOR that just landed.
+- **Blocked (not next):** cross-source **disagreement** (the Phase-2 substrate's 2nd half) — needs a
+  live 2nd source, fills in-season via ffanalytics. Market VOR + the trade gap (§4) remain V4.
+- Everything past the substrate is gated on it; §3 + §4 confirm the substrate cashes in.

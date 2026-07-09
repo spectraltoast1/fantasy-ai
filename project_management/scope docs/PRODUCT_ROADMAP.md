@@ -1,8 +1,11 @@
 # Fantasy Football Assistant — Product Roadmap
 
-**Last reviewed:** 2026-06-17
+**Last reviewed:** 2026-07-09
 **Supersedes:** the prior V1–V6 list in this file and in `STATUS.md § Version Roadmap`.
 Those should now point here. (Leave the STATUS.md edit to a Claude Code session.)
+**Phase mapping authority:** `READ_BUILD_ORDER.md` is the canonical map of which *read*
+lands in which phase; this doc and STATUS.md are kept **in sync** with it. (Reconciled
+2026-07-09 — Phase 3 is "cash in the projection," matching Build_Order.)
 
 ---
 
@@ -103,41 +106,62 @@ weeks of data.
 
 ---
 
-## Phase 2 — The projections substrate (the gating dependency for everything after)
+## Phase 2 — The projections substrate (the gating dependency for everything after) — *substrate DONE; disagreement blocked*
 
 The forward prior every other decision slice rests on.
 
-**Build:** `fantasypros.py` fetcher → current projections; a transform that
-produces a **consensus + disagreement (spread)** read across whatever sources you
-pull. The spread *is* the confidence signal for law 2 — tight consensus = act,
-wide spread = coin-flip. (Vegas game totals/spreads via an `odds.py` fetcher are a
-cheap, high-value add here — game environment — but optional.)
+**Build:** a source-agnostic `projections` entity + a transform that produces a
+**consensus + disagreement (spread)** read across whatever sources you pull. The
+spread *is* the confidence signal for law 2 — tight consensus = act, wide spread =
+coin-flip. (Vegas game totals/spreads via an `odds.py` fetcher are a cheap,
+high-value add here — game environment — but optional.)
+
+**State (2026-07-09):** **Source #1 = Sleeper weekly projections** (not FantasyPros
+as first sketched — Sleeper serves *historical* weekly projections, so the prior
+lines up with the frozen-2025 answer key and is backtestable). The **consensus +
+spread band** (`compute_projection_consensus.py`) shipped, all three §3 components
+incl. archetype skew, calibration-gated. The **disagreement half is BLOCKED** — it
+needs a live 2nd source and none but Sleeper serves historical 2025; it fills
+**in-season via ffanalytics** (`disagreement_ppr` scaffolded null till then).
+FantasyPros joins later in-season through the same seam.
 
 **Unlocks:** (a) calibrates the Phase 1 spike read's *forward* language; (b) makes
 the leakage fix in Phase 3 credible; (c) gates every decision slice after this.
 
 **Done when:** any engine can ask "what was the forward expectation, and how sure
-were the sources?" through the data layer.
+were the sources?" through the data layer. *(Center + spread: yes. Cross-source
+disagreement: pending the 2nd source.)*
 
 ---
 
-## Phase 3 — Generalize into shared engines + fix the leakage lens
+## Phase 3 — Cash in the projection: the quantitative forward reads — *UNDERWAY (§3, §4 done)*
 
-Turn the one slice into the reusable layer, and repay the known design debt.
+Once the prior exists, the quantitative reads that *consume* it are near-term and
+mostly mechanical (per `READ_BUILD_ORDER.md`: §3, §4, §6, half of §5). This is also
+where the one slice becomes the **reusable shared layer** and the known design debt
+gets repaid — those are the cross-cutting *how* of these reads, not a separate gate.
 
+- ✅ **Weekly Projection Spread (§3) — DONE.** The percentile band around the
+  borrowed weekly center (`compute_projection_consensus.py`); the start/sit read.
+  Built alongside the Phase-2 substrate, per-tail calibration-gated.
+- ✅ **Value / VOR (§4) — Production VOR DONE.** Production VOR over the waiver line
+  (`compute_production_vor.py`), gated on the answer key → roster management
+  (adds/drops). **Market VOR + the Production−Market trade gap remain V4.**
+- **Positional Depth (§6) — next.** Re-slice Production VOR by position vs. league → roster shape.
+- **True rank (half of §5) — next.** Aggregate Production VOR over each team's optimal
+  lineup → record-independent roster strength; half of posture.
 - **Fix the leakage "coachable" claim (STATUS backlog #1) — this is law 1 made
-  real.** Today it converts a 4-game realized sample into a forward imperative
-  ("start Allen over Brown going forward") — and the rest-of-season data shows that
-  call was backwards. Regress realized rate toward the Phase 2 prior before calling
-  anything coachable; restate as a question, not an order.
-- Stand up the **shared engines** the slices share: *signal quality* (Phase 1
-  generalized), *context fit* (ceiling/floor given matchup + your team's need),
-  *opponent model* (stub). Same engine, dressed per surface.
-- Add the **start/sit context** slice on these engines — the purest demo of
-  context-over-ranking.
+  real, and it lands *in* VOR.** Today it converts a 4-game realized sample into a
+  forward imperative ("start Allen over Brown going forward") — and the rest-of-season
+  data shows that call was backwards. Regress realized rate toward the Phase 2 prior
+  before calling anything coachable; restate as a question, not an order.
+- **Shared engines (cross-cutting):** as these reads land, the one slice generalizes
+  into the reusable layer — *signal quality* (Phase 1 generalized), *context fit*
+  (ceiling/floor given matchup + your team's need), *opponent model* (stub). Same
+  engine, dressed per surface.
 
-**Done when:** two+ surfaces run on the same engines with no duplicated logic, and
-no shipped read grades on outcome.
+**Done when:** the four cash-in reads run on the borrowed prior, two+ surfaces share
+the same engines with no duplicated logic, and no shipped read grades on outcome.
 
 ---
 

@@ -195,19 +195,20 @@ and a **global "As of" week dropdown** in the App shell threads the selected wee
 drives the readiness gate, and retired the `?weeksOverride` param. Default = latest week
 (today week 4); the selector travels back only.
 
-**Phase 2 — the projections substrate — is UNDERWAY (the hinge everything credible depends on,
-and the fix for the Kamara-style blind spot).** Source #1 (Sleeper weekly projections), the
-consensus + spread band, **its archetype-skew 3rd component**, **and the first read that consumes
-it (Production VOR §4)** have all landed (see "most recent build"): the borrowed center + a
-**calibration-gated, now-fully-3-component band** is the forward prior every later read leans on,
-and VOR proves the substrate cashes into a real add/drop decision surface (projected ROS tracks
-actual at corr ~0.95). **Source scouting settled the 2nd source** — no clean historical-2025
-projection source exists but Sleeper, so the **cross-source disagreement** half comes **in-season
-via ffanalytics** (live multi-source); ESPN historical is deferred (cookie-gated + `espn_id` join).
-**Next in Phase 2: cross-source disagreement** (in-season, blocked at the freeze), then the
-remaining substrate-consuming reads — **Positional Depth** (§6, a re-slice of VOR) and **True rank**
-(half of §5, VOR aggregated to optimal-lineup roster strength) are now near-term, plus **ROS
-outcome-shape** (§2). Python/data-layer work.
+**The Phase-2 substrate is DONE and Phase 3 (cash in the projection) is UNDERWAY** — per
+`READ_BUILD_ORDER.md`'s phase map (the authority the roadmap docs sync to). Source #1 (Sleeper
+weekly projections), the consensus + spread band, **its archetype-skew 3rd component** (§3, a
+Phase-3 cash-in read), **and the first roster-management read, Production VOR** (§4) have all
+landed (see "most recent build"): the borrowed center + a **calibration-gated, fully-3-component
+band** is the forward prior every later read leans on, and VOR proves the substrate cashes into a
+real add/drop surface (projected ROS tracks actual at corr ~0.95). **Source scouting settled the
+2nd source** — no clean historical-2025 projection source exists but Sleeper, so the **cross-source
+disagreement** half (the Phase-2 substrate's other ingredient) comes **in-season via ffanalytics**;
+ESPN historical is deferred (cookie-gated + `espn_id` join). **Next (remaining Phase-3 cash-in
+reads):** **Positional Depth** (§6, a re-slice of VOR by position) and **True rank** (half of §5,
+VOR aggregated to optimal-lineup roster strength) — both re-aggregations of the VOR that just
+landed. **Blocked, not next:** cross-source disagreement (Phase 2, needs the live 2nd source);
+**ROS outcome-shape (§2) is Phase 4**, not near-term. Python/data-layer work.
 
 ## Version Roadmap
 → **Source of truth: `scope docs/PRODUCT_ROADMAP.md`** — phase detail, the four
@@ -220,12 +221,15 @@ Summary only here:
 - **Phase 1 — Spike signal-quality slice** *(current; kickoff target)* — "is this
   production real or noise?" on usage data already fetched; validated against the
   full-2025 answer key before going live.
-- **Phase 2 — Projections substrate** — FantasyPros fetcher + consensus/disagreement
-  spread (the forward prior; the hinge everything credible depends on). Odds/Vegas
-  an optional cheap add.
-- **Phase 3 — Shared engines + leakage fix** — generalize the slice into
-  signal-quality / context-fit / opponent engines; fix the coachable-claim
-  (process-not-outcome, regress to prior — backlog #1); add start/sit context.
+- **Phase 2 — Projections substrate** *(substrate done; disagreement blocked)* —
+  the forward prior (the hinge everything credible depends on). **Source #1 = Sleeper**
+  weekly projections + the consensus/spread band shipped; **cross-source disagreement**
+  is blocked at the freeze and fills in-season via ffanalytics. Odds/Vegas optional add.
+- **Phase 3 — Cash in the projection: the quantitative forward reads** *(underway —
+  §3, §4 done)* — the reads that consume the prior (per `READ_BUILD_ORDER.md`): Weekly
+  Spread (§3 ✅), Production VOR (§4 ✅), Positional Depth (§6, next), True rank (half of
+  §5, next). The leakage coachable-fix (backlog #1, regress-to-prior — law 1) lands in
+  VOR; the shared-engines generalization is the cross-cutting *how*, not a separate gate.
 - **Phase 4 — Go live + opponent modeling** — in-season weekly refresh; opponent
   reads + manager-dossier infra; waiver and trade surfaces.
 - **Phase 5 — Model of YOU** — graded decisions compound into a per-manager
@@ -370,7 +374,13 @@ These refine shipped lenses; pick up alongside or after the Players sub-view.
    drives the clock for QA. The deeper "calibrate to a forward prior" half is **Phase 2**
    (projections) — the gate is the seam; the prior that sharpens it comes next.
 
-## Phase 2 — the projections substrate (UNDERWAY)
+## Phase 2 — the projections substrate (substrate DONE; disagreement blocked) → Phase 3 UNDERWAY
+
+> **Phase labels follow `READ_BUILD_ORDER.md`** (the authority STATUS + PRODUCT_ROADMAP sync
+> to): the **substrate** (consensus + spread band) is Phase 2; the reads that **consume** it —
+> Weekly Spread §3, VOR §4 (both done), Positional Depth §6, True rank half-§5 (next) — are
+> Phase 3 "cash in the projection." This section covers the substrate + its progress; the
+> Progress list below spans both.
 
 The hinge — **the forward prior** every later decision slice rests on. Delivered as a
 **multi-source `projections` entity** (all I/O through `data_layer.py`; keyed on
