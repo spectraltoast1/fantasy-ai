@@ -59,6 +59,26 @@ def stdev(xs) -> float | None:
     return (sum((x - m) ** 2 for x in xs) / n) ** 0.5
 
 
+def skewness(xs) -> float | None:
+    """Population skewness (third standardised moment) of a numeric series.
+
+    Returns None (not 0.0) when undefined — fewer than 3 points (a third moment needs
+    at least three), or zero spread — mirroring stdev's convention so a caller can fall
+    back to a prior rather than treating "no estimate" as "measured, symmetric." Same
+    population form (divide by n) as stdev: the per-player residual samples this feeds
+    are thin and get pooled with a positional prior, so the stable /n estimate beats a
+    less-biased-but-noisier bias-corrected one. Positive = long right tail.
+    """
+    n = len(xs)
+    if n < 3:
+        return None
+    m = mean(xs)
+    s = (sum((x - m) ** 2 for x in xs) / n) ** 0.5
+    if s == 0.0:
+        return None
+    return sum(((x - m) / s) ** 3 for x in xs) / n
+
+
 def spectrum_positions(values):
     """League-relative 0–1 position for each value, in input order (min→0, max→1).
 
