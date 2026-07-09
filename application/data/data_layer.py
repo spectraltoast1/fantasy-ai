@@ -535,3 +535,34 @@ def write_true_rank(df: pl.DataFrame, season: int) -> None:
 def read_true_rank(season: int, as_of_week=None) -> pl.DataFrame:
     """Read the True Rank read for one as-of week (default = latest)."""
     return _as_of_slice(pl.read_parquet(_true_rank_path(season)), as_of_week)
+
+
+# --- Positional Depth ---
+# The Value read (DECISION_READS.md §6) re-sliced *per position*, benchmarked against the league:
+# a team's positional surplus (startable-quality depth = trade capital) vs. gaps (a starting slot
+# filled at ~replacement level). No new engine — it re-aggregates Production VOR per position,
+# net of the position's starting requirement. Tall over as_of_week like the other derived
+# analytics, so it plugs into the same "As of" week selector. Closes the Phase-3 read set.
+
+
+def _positional_depth_path(season: int) -> Path:
+    return _SNAPSHOT_DIR / "derived" / f"positional_depth_{season}.parquet"
+
+
+def write_positional_depth(df: pl.DataFrame, season: int) -> None:
+    """Write the per-(as_of_week, roster_id, position) Positional Depth read for a season (overwrite).
+
+    Output of transforms/compute_positional_depth.py: one row per team per position (QB/RB/WR/TE)
+    per as-of week, carrying the position's rostered + starter ROS value, the surplus beyond the
+    starting requirement (depth / trade capital), the marginal starter's VOR (the gap indicator),
+    a league-relative 0–1 spectrum position within that position's cohort, and an advisory
+    surplus/adequate/gap shape. A re-slice of Production VOR — borrows the value, builds no prior.
+    """
+    path = _positional_depth_path(season)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
+
+def read_positional_depth(season: int, as_of_week=None) -> pl.DataFrame:
+    """Read the Positional Depth read for one as-of week (default = latest)."""
+    return _as_of_slice(pl.read_parquet(_positional_depth_path(season)), as_of_week)
