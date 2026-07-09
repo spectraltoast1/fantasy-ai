@@ -186,6 +186,26 @@ def read_sleeper_matchups(season: int, week: int) -> pl.DataFrame:
     return pl.read_parquet(_sleeper_matchups_path(season, week))
 
 
+def read_season_matchups(season: int, through_week: int = 18) -> pl.DataFrame:
+    """Stack every available weekly matchup snapshot into one (week, roster_id, matchup_id,
+    points) frame — the schedule (matchup_id pairs two teams per week) + actual results, the
+    seam the bracket-math sim reads for standings and the remaining schedule. Skips weeks whose
+    snapshot is missing (offseason / not yet fetched)."""
+    frames = []
+    for week in range(1, through_week + 1):
+        path = _sleeper_matchups_path(season, week)
+        if not path.exists():
+            continue
+        frames.append(
+            pl.read_parquet(path)
+            .select("roster_id", "matchup_id", "points")
+            .with_columns(pl.lit(week).alias("week"))
+        )
+    return pl.concat(frames) if frames else pl.DataFrame(
+        schema={"roster_id": pl.Int64, "matchup_id": pl.Int64, "points": pl.Float64, "week": pl.Int32}
+    )
+
+
 # --- Sleeper Transactions ---
 
 def _sleeper_transactions_path(season: int, week: int) -> Path:
@@ -566,3 +586,33 @@ def write_positional_depth(df: pl.DataFrame, season: int) -> None:
 def read_positional_depth(season: int, as_of_week=None) -> pl.DataFrame:
     """Read the Positional Depth read for one as-of week (default = latest)."""
     return _as_of_slice(pl.read_parquet(_positional_depth_path(season)), as_of_week)
+
+
+# --- Bracket Odds ---
+# The bracket-math half of the Posture read (DECISION_READS.md §5): a Monte Carlo season
+# simulation that turns the forward reads into playoff odds. Team weekly score distributions
+# (mean = optimal-lineup projected points, spread = the §3 weekly band) drive per-matchup win
+# probabilities; simulating the remaining real schedule → playoff odds + projected wins/seed +
+# magic number. With True Rank (§5 first half) it completes Posture. Tall over as_of_week like
+# the other derived analytics, so it plugs into the same "As of" week selector.
+
+
+def _bracket_odds_path(season: int) -> Path:
+    return _SNAPSHOT_DIR / "derived" / f"bracket_odds_{season}.parquet"
+
+
+def write_bracket_odds(df: pl.DataFrame, season: int) -> None:
+    """Write the per-(as_of_week, roster_id) Bracket Odds read for a season (overwrite).
+
+    Output of transforms/compute_bracket_sim.py: one row per team per as-of week, carrying the
+    Monte Carlo playoff odds, projected regular-season wins, average final seed, magic number,
+    and the current (as-of-N) wins/points-for the sim starts from.
+    """
+    path = _bracket_odds_path(season)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
+
+def read_bracket_odds(season: int, as_of_week=None) -> pl.DataFrame:
+    """Read the Bracket Odds read for one as-of week (default = latest)."""
+    return _as_of_slice(pl.read_parquet(_bracket_odds_path(season)), as_of_week)
