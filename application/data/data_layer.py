@@ -364,7 +364,12 @@ def projections_exist(season: int) -> bool:
 
 
 def _as_of_slice(df: pl.DataFrame, as_of_week) -> pl.DataFrame:
-    """Filter a tall derived-analytics frame to a single as-of week (default = latest)."""
+    """Filter a tall derived-analytics frame to a single as-of week (default = latest).
+
+    `as_of_week="all"` returns the whole tall frame — for a consumer that re-aggregates every
+    week's slice (e.g. compute_true_rank reading all of Production VOR) rather than viewing one."""
+    if as_of_week == "all":
+        return df
     if as_of_week is None:
         as_of_week = df["as_of_week"].max()
     return df.filter(pl.col("as_of_week") == as_of_week)
@@ -499,3 +504,34 @@ def write_production_vor(df: pl.DataFrame, season: int) -> None:
 def read_production_vor(season: int, as_of_week=None) -> pl.DataFrame:
     """Read the Production VOR read for one as-of week (default = latest)."""
     return _as_of_slice(pl.read_parquet(_production_vor_path(season)), as_of_week)
+
+
+# --- True Rank ---
+# The team-level aggregation of the Value read (DECISION_READS.md §5, first half): sum the
+# borrowed ROS production value of each team's *optimal* (lineup-slot-aware) lineup → a
+# record-independent measure of how good a roster is, ranked within the league. No new engine —
+# it re-aggregates Production VOR over the optimal-lineup rules. Tall over as_of_week like the
+# other derived analytics, so it plugs into the same "As of" week selector. The integration
+# precursor the Phase-4 bracket-math Monte Carlo (§5 full) will sit on top of.
+
+
+def _true_rank_path(season: int) -> Path:
+    return _SNAPSHOT_DIR / "derived" / f"true_rank_{season}.parquet"
+
+
+def write_true_rank(df: pl.DataFrame, season: int) -> None:
+    """Write the per-(as_of_week, roster_id) True Rank read for a season (overwrite).
+
+    Output of transforms/compute_true_rank.py: one row per team per as-of week, carrying the
+    optimal-lineup ROS strength (sum of the borrowed weekly projection centres over the
+    remaining schedule for each optimal starter), the bench value behind it, the within-league
+    rank (1 = strongest), and a league-relative 0–1 spectrum position. Record-independent.
+    """
+    path = _true_rank_path(season)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
+
+def read_true_rank(season: int, as_of_week=None) -> pl.DataFrame:
+    """Read the True Rank read for one as-of week (default = latest)."""
+    return _as_of_slice(pl.read_parquet(_true_rank_path(season)), as_of_week)

@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-07-09 (Phase 2 — archetype skew completes the §3 spread band; Production VOR §4 ships as the first substrate-consuming read; both calibration/answer-key gated)
+**Last updated:** 2026-07-09 (Phase 3 — True Rank §5-half ships: record-independent team roster strength from the borrowed VOR, answer-key gated; §6 Positional Depth now the sole remaining Phase-3 read)
 **Target ship:** NFL kickoff, mid August 2026
 
 ---
@@ -34,6 +34,34 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**Phase 3 — True Rank (§5, first half) ships: team roster strength from the borrowed VOR.** The
+2nd of the four Phase-3 cash-in reads to consume the substrate (after §3 spread + §4 VOR) and the
+first **league-level** one. `compute_true_rank.py` → `derived/true_rank_2025.parquet` sums each
+team's **optimal-lineup** ROS value (fill the declared QB/RB/WR/TE + FLEX slots from the roster by
+`ros_value`, most-constrained slot first, sum the starters) into a **record-independent**
+roster-strength rank. **No new engine** (law 3 all the way down): it re-aggregates the Production
+VOR that just landed over the league's lineup rules — the optimal-lineup greedy was **lifted from
+`compute_team_leakage` into `_analytics` as shared `expand_slots`/`optimal_lineup`** (pure,
+points-agnostic; leakage now imports them aliased, behavior-preserving) and fed `ros_value` as its
+`pts`. Tall over `as_of_week` (roster-as-of-N inherited free from the VOR slice); carries
+`bench_value` (depth / a §6 trade-capital hint) + a league-relative `spectrum_pos`. **Slot-aware
+payoff, verified on 2025:** roster 9 holds the single biggest ROS player (a 310-pt QB) yet ranks
+**9th of 10** — one QB slot means a 2nd elite QB rides the bench and can't inflate strength; True
+Rank rewards a balanced *startable* lineup, not capped-position hoarding (a naive roster-sum gets
+this backwards). Ranks reshuffle across as-of weeks (roster-as-of-N moving). **Gate**
+(`backtest_true_rank.py`, exit 0): projected roster strength tracks each team's **actual ROS
+ceiling** — management-independent (optimal lineup set weekly on realized points, so it measures
+roster *quality*, not lineup-setting skill, which is leakage's domain) — at **Pearson 0.802 /
+Spearman 0.842** (freeze wk 4, n=10 teams, floor 0.60); the strong half out-produces the weak half
+by **+261.7 ROS pts**. Small-sample honest: the **freeze snapshot is the gate**, the
+pooled-over-weeks corr is evidence only (the same team at N=1..4 isn't independent). **Data-layer
+add:** `_as_of_slice` gains an `"all"` sentinel so a re-aggregating consumer reads the whole tall
+frame through the seam (no direct `read_parquet`). No UI (data + gate only, like VOR — a front-end
+follow-up). **Next:** **Positional Depth (§6)** is now the *sole* remaining Phase-3 cash-in read (a
+re-slice of VOR by position vs. league); cross-source disagreement stays blocked at the freeze
+(Phase-2 2nd half → in-season ffanalytics); ROS outcome-shape (§2) is Phase 4.
+
+> earlier build
 **Phase 2 — archetype skew (§3 c3) completes the spread band + Production VOR (§4) ships as
 the first read that consumes the substrate.** Two builds this session, both answer-key gated.
 **(1) Archetype skew** finishes the §3 weekly band to full 3-component spec (center ✓, width ✓,
@@ -107,30 +135,6 @@ coincide; the `scoring_settings` recompute stays the documented latent item. **N
 **disagreement** (in-season ffanalytics), then **archetype skew** (§3 c3), then the VOR/ROS reads
 (§4/§2) that consume this band.
 
-> earlier build
-**Phase 2 begins — the projection substrate, source #1 (Sleeper).** The forward prior every
-Phase-2 read rests on (ROS shape §2, weekly spread §3, VOR §4, bracket sim §5) now has its
-first source landing in the data layer, built as a **multi-source, source-agnostic entity**.
-`data_layer.write/read_projections` persist one growing
-`snapshots/projections/projections_{season}.parquet` with **`source` as a column** (not a
-directory) — so consensus + disagreement across providers is a group-by and "pick a source"
-is a filter, and adding FantasyPros in-season is a new `source` value, **not a schema change**.
-Snapshot/append mirrors the LeagueLogs precedent (dedup on `(season, week, source)` replaces a
-slice on re-fetch; rows carry `snapshot_date` + `source_updated_at` for an in-season daily
-projection history later). Source #1 = **Sleeper's projections endpoint** (`api.sleeper.com`
-stats host; RotoWire under the hood) via a new `sleeper.py projections <season> [week]` mode —
-**keyed natively on `sleeperPlayerId` (no id join)**, QB/RB/WR/TE only, `pts_ppr/half/std` already
-computed by the source + component evidence carried. **Why Sleeper first, not FantasyPros:** Sleeper
-serves *historical* weekly projections, so the prior lines up with the frozen-2025 world and can be
-backtested against the answer key — a *live* FantasyPros pull today serves 2026 preseason, a different
-season. FantasyPros (key already in config) joins later in-season through the same seam. **Verified
-live:** 2025 backfilled wks 1–18 (54,594 rows, 3,033 players/wk); scoring differentiates (CMC
-ppr>half>std, Allen equal); re-fetch dedups (no dupes); **100% coverage of rostered skill players at
-every frozen week (W1–4)**; the ROS prior (sum wks 5–18) computes for the 147 W4-rostered players.
-**Next: the consensus + disagreement-spread transform** (`compute_projection_consensus.py`) — a real
-spread needs a second source, so pair Sleeper with FantasyPros (or another free source) next; the
-spread is the law-2 confidence signal (tight = act, wide = coin-flip).
-
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
@@ -161,6 +165,7 @@ spread is the law-2 confidence signal (tight = act, wide = coin-flip).
     - Phase 2 projection consensus + spread band — compute_projection_consensus.py → derived/projection_consensus_{season}.parquet (per week×player over the whole skill pool): borrowed consensus center + p25/p50/p75 band from the player's residual std (actual−proj) shrunk toward a full-pool positional prior, BAND_Z-scaled, floored at 0; disagreement_ppr column null under one source. Calibration-gated (backtest_projection_consensus.py, exit 0): 25–75 coverage 51.4% on the 2025 answer key, BAND_Z=0.6 swept-tuned; per-player shrink beats a naive one-size band on stratum uniformity. New _analytics.stdev + data_layer write/read_projection_consensus. 2nd source scouted: ffanalytics (in-season live disagreement), ESPN (deferred historical).
     - Phase 2 archetype skew (§3 c3) — completes the spread band to full 3-component spec. compute_projection_consensus.py gains a Cornish-Fisher skew shift (SKEW_GAIN·(g/6)·(BAND_Z²−1)) on p25/p75 driven by the player's residual skewness shrunk to a positional prior (new _analytics.skewness, SKEW_SHRINK_K=8); p50 stays the borrowed center. Design fork resolved by the answer key: the projection's TD-dependence archetype does NOT track residual skew (measured), the player's own residual 3rd moment does. Because BAND_Z<1 the shift moves both breakpoints down (center sits above realized median). Gate extended to per-tail calibration + joint BAND_Z×SKEW_GAIN sweep → (0.55, 1.5): coverage 0.493, tails 0.247/0.261 (tail error cut 5×), exit 0. No schema change to data_layer (new skew_ppr/resid_skew columns pass through).
     - Phase 2 Production VOR (§4) — compute_production_vor.py → derived/production_vor_{season}.parquet, the first read that consumes the substrate. Per rostered player: ROS value = sum of borrowed weekly consensus centers over remaining weeks; anchored waiver line=0, normalized by pool spread (top−waiver); QB its own pool, flex-eligible RB/WR/TE share a pooled waiver line (from lineup_slots). Tall over as_of_week (roster-as-of-N, roster frozen wks 1–4, projection horizon wk 18). New data_layer write/read_production_vor. Gate (backtest_production_vor.py, exit 0): projected ROS tracks actual at corr 0.944 QB / 0.955 FLEX, VOR tiers monotonic (dead<mid<stud). Simplifications documented: pooled flex line ignores dedicated-slot scarcity; superflex latent; Market VOR + trade gap V4.
+    - Phase 3 True Rank (§5, first half) — compute_true_rank.py → derived/true_rank_{season}.parquet, the first league-level read consuming the substrate. Per team: roster_strength = sum of the optimal-lineup ros_value (fill QB/RB/WR/TE+FLEX from the roster by ros_value, most-constrained slot first) → record-independent roster-strength rank + league-relative spectrum_pos + bench_value. Re-aggregates Production VOR (no new engine); the optimal-lineup greedy lifted from compute_team_leakage into _analytics as shared expand_slots/optimal_lineup (leakage imports them, behavior-preserving). Tall over as_of_week (roster-as-of-N inherited from the VOR slice). New data_layer write/read_true_rank; _as_of_slice gains an "all" sentinel for whole-frame re-aggregation through the seam. Slot-aware: a 2-elite-QB roster ranks by its one startable QB (verified — roster 9 holds a 310-pt QB, ranks 9th of 10). Gate (backtest_true_rank.py, exit 0): projected strength tracks the actual ROS ceiling (mgmt-independent optimal lineup on realized points) at Pearson 0.802 / Spearman 0.842 (freeze wk4, n=10, floor 0.60); strong half +261.7 ROS over weak. No UI (data+gate, like VOR).
 
 > not yet built
     >> backend
@@ -195,20 +200,21 @@ and a **global "As of" week dropdown** in the App shell threads the selected wee
 drives the readiness gate, and retired the `?weeksOverride` param. Default = latest week
 (today week 4); the selector travels back only.
 
-**The Phase-2 substrate is DONE and Phase 3 (cash in the projection) is UNDERWAY** — per
-`READ_BUILD_ORDER.md`'s phase map (the authority the roadmap docs sync to). Source #1 (Sleeper
-weekly projections), the consensus + spread band, **its archetype-skew 3rd component** (§3, a
-Phase-3 cash-in read), **and the first roster-management read, Production VOR** (§4) have all
-landed (see "most recent build"): the borrowed center + a **calibration-gated, fully-3-component
-band** is the forward prior every later read leans on, and VOR proves the substrate cashes into a
-real add/drop surface (projected ROS tracks actual at corr ~0.95). **Source scouting settled the
-2nd source** — no clean historical-2025 projection source exists but Sleeper, so the **cross-source
-disagreement** half (the Phase-2 substrate's other ingredient) comes **in-season via ffanalytics**;
-ESPN historical is deferred (cookie-gated + `espn_id` join). **Next (remaining Phase-3 cash-in
-reads):** **Positional Depth** (§6, a re-slice of VOR by position) and **True rank** (half of §5,
-VOR aggregated to optimal-lineup roster strength) — both re-aggregations of the VOR that just
-landed. **Blocked, not next:** cross-source disagreement (Phase 2, needs the live 2nd source);
-**ROS outcome-shape (§2) is Phase 4**, not near-term. Python/data-layer work.
+**The Phase-2 substrate is DONE and Phase 3 (cash in the projection) is UNDERWAY — 3 of 4 cash-in
+reads shipped** — per `READ_BUILD_ORDER.md`'s phase map (the authority the roadmap docs sync to).
+Source #1 (Sleeper weekly projections), the consensus + spread band with **its archetype-skew 3rd
+component** (§3), **Production VOR** (§4, the first roster-management read), **and now True Rank**
+(§5 first half, the first league-level read) have all landed (see "most recent build"): the borrowed
+center + a **calibration-gated, fully-3-component band** is the forward prior every later read leans
+on; VOR proves the substrate cashes into a real add/drop surface (projected ROS tracks actual at corr
+~0.95); True Rank aggregates that VOR up into a record-independent roster-strength rank (projected vs
+actual ROS ceiling at Pearson 0.802 / Spearman 0.842). **Source scouting settled the 2nd source** —
+no clean historical-2025 projection source exists but Sleeper, so the **cross-source disagreement**
+half (the Phase-2 substrate's other ingredient) comes **in-season via ffanalytics**; ESPN historical
+is deferred (cookie-gated + `espn_id` join). **Next — the sole remaining Phase-3 cash-in read:**
+**Positional Depth** (§6, a re-slice of VOR by position vs. league — the last re-aggregation of the
+VOR that landed). **Blocked, not next:** cross-source disagreement (Phase 2, needs the live 2nd
+source); **ROS outcome-shape (§2) is Phase 4**, not near-term. Python/data-layer work.
 
 ## Version Roadmap
 → **Source of truth: `scope docs/PRODUCT_ROADMAP.md`** — phase detail, the four
@@ -226,9 +232,9 @@ Summary only here:
   weekly projections + the consensus/spread band shipped; **cross-source disagreement**
   is blocked at the freeze and fills in-season via ffanalytics. Odds/Vegas optional add.
 - **Phase 3 — Cash in the projection: the quantitative forward reads** *(underway —
-  §3, §4 done)* — the reads that consume the prior (per `READ_BUILD_ORDER.md`): Weekly
-  Spread (§3 ✅), Production VOR (§4 ✅), Positional Depth (§6, next), True rank (half of
-  §5, next). The leakage coachable-fix (backlog #1, regress-to-prior — law 1) lands in
+  §3, §4, §5-half done; §6 next)* — the reads that consume the prior (per `READ_BUILD_ORDER.md`):
+  Weekly Spread (§3 ✅), Production VOR (§4 ✅), True rank (half of §5 ✅), Positional Depth
+  (§6, next). The leakage coachable-fix (backlog #1, regress-to-prior — law 1) lands in
   VOR; the shared-engines generalization is the cross-cutting *how*, not a separate gate.
 - **Phase 4 — Go live + opponent modeling** — in-season weekly refresh; opponent
   reads + manager-dossier infra; waiver and trade surfaces.
@@ -378,7 +384,7 @@ These refine shipped lenses; pick up alongside or after the Players sub-view.
 
 > **Phase labels follow `READ_BUILD_ORDER.md`** (the authority STATUS + PRODUCT_ROADMAP sync
 > to): the **substrate** (consensus + spread band) is Phase 2; the reads that **consume** it —
-> Weekly Spread §3, VOR §4 (both done), Positional Depth §6, True rank half-§5 (next) — are
+> Weekly Spread §3, VOR §4, True rank half-§5 (all done), Positional Depth §6 (next) — are
 > Phase 3 "cash in the projection." This section covers the substrate + its progress; the
 > Progress list below spans both.
 
@@ -411,14 +417,22 @@ age/injury/scheme).
   over the waiver line, normalized by pool spread; QB pool + pooled flex line from `lineup_slots`;
   tall over as_of_week. Gate (`backtest_production_vor.py`, exit 0): projected ROS tracks actual at
   corr 0.944 QB / 0.955 FLEX, VOR tiers monotonic in realized production. Market VOR + trade gap V4.
+- ✅ **True Rank (§5, first half) — first league-level substrate-consuming read (DONE).**
+  `compute_true_rank.py` → `derived/true_rank_{season}.parquet`: per team, optimal-lineup ros_value
+  sum → record-independent roster-strength rank + spectrum_pos + bench_value; re-aggregates
+  Production VOR over the lineup rules (optimal-lineup greedy lifted into `_analytics` as shared
+  `expand_slots`/`optimal_lineup`); tall over as_of_week. Gate (`backtest_true_rank.py`, exit 0):
+  projected strength tracks the actual ROS ceiling at Pearson 0.802 / Spearman 0.842 (freeze wk4,
+  n=10, floor 0.60); strong half +261.7 ROS over weak. Slot-aware (a 2-QB roster ranks by its one
+  startable QB). No UI (data+gate). Bracket-math Monte Carlo (§5 full) is Phase 4.
 - **2nd source — scouted, resolved:** no clean historical-2025 weekly projection source but Sleeper
   (ffanalytics = live-scrape + R; fantasyfootballdatapros = 2019/20 ESPN snapshot + actuals; ESPN =
   cookie-gated + `espn_id` join). Plan: **ffanalytics for the in-season live cross-source
   disagreement** (2026); ESPN historical only if we later want to backtest disagreement against 2025.
-- **Next transforms:** cross-source **disagreement** (in-season, blocked at the freeze), then
-  **Positional Depth** (§6, a re-slice of VOR by position) and **True rank** (half of §5, VOR
-  aggregated to optimal-lineup roster strength) — both now near-term (they consume the VOR that
-  landed) — plus **ROS outcome-shape** (§2).
+- **Next transform — the sole remaining Phase-3 cash-in read:** **Positional Depth** (§6, a
+  re-slice of VOR by position vs. league — the last re-aggregation of the VOR that landed). **Blocked,
+  not next:** cross-source **disagreement** (in-season, needs the live 2nd source). **ROS
+  outcome-shape** (§2) is Phase 4.
 - **Optional cheap add:** Vegas game totals via an `odds.py` fetcher (game environment).
 
 (Older note, lower priority: continue the V1 Dashboard Build Order — standings with

@@ -73,7 +73,7 @@ answer key. **The `disagreement` half is BLOCKED at the freeze** — a cross-sou
 via ffanalytics** (the `disagreement_ppr` column is scaffolded null till then — a value change, not a
 schema change). **Still the highest-leverage build** — everything below leans on it. (= roadmap Phase 2.)
 
-### Phase 3 — Cash in the projection: the quantitative forward reads *(UNDERWAY — §3, §4 done)* → §3, §4, §6, half of §5
+### Phase 3 — Cash in the projection: the quantitative forward reads *(UNDERWAY — §3, §4, §5-half done; §6 next)* → §3, §4, §6, half of §5
 Once the prior exists, these are near-term and mostly mechanical:
 - ✅ **Weekly Projection Spread (§3) — DONE.** Percentile band around the borrowed weekly center
   (`compute_projection_consensus.py`), all three components incl. archetype skew; per-tail
@@ -82,9 +82,12 @@ Once the prior exists, these are near-term and mostly mechanical:
   waiver line, normalized by pool spread (QB pool + pooled flex line); gated (projected ROS tracks
   actual at corr ~0.95, VOR tiers monotonic). → roster management (adds/drops). **Market VOR + the
   Production−Market gap remain V4** (LeagueLogs redraft profile) — the trade layer is not built here.
-- **Positional Depth (§6) — NEXT.** Immediate re-slice of Production VOR by position vs. league. → roster shape.
-- **True rank (half of §5) — NEXT.** Aggregate Production VOR over each team's optimal lineup → roster
-  strength. → half of posture. *(Reuses the optimal-lineup logic in `compute_team_leakage`.)*
+- ✅ **True rank (half of §5) — DONE.** `compute_true_rank.py`: aggregate Production VOR over each
+  team's optimal lineup → record-independent roster-strength rank. → half of posture. *(Reused the
+  optimal-lineup logic from `compute_team_leakage`, lifted into `_analytics` as shared
+  `expand_slots`/`optimal_lineup`.)* Gated (projected strength tracks the actual ROS ceiling at
+  Pearson 0.802 / Spearman 0.842, n=10 teams; strong half out-produces weak). Bracket math (§5 full) is Phase 4.
+- **Positional Depth (§6) — NEXT (sole remaining Phase-3 read).** Immediate re-slice of Production VOR by position vs. league. → roster shape.
 
 All quantitative, all leaning directly on the Phase-2 prior. VOR is also where the leakage-fix
 "regress realized rate toward the prior" lands, and the *shared-engines* generalization (roadmap
@@ -120,10 +123,11 @@ guidance. Falls out of the critique-first design. (= roadmap Phase 5.)
 
 ## Status snapshot *(updated 2026-07-09)*
 - **Done:** Phase 0 (descriptive dashboard); Phase 1 (Opportunity / spike signal-quality, refined to
-  spec); **Phase 2 substrate** (Sleeper source + consensus/spread band, all 3 §3 components); and **2
-  of the 4 Phase-3 cash-in reads — Weekly Spread (§3) and Production VOR (§4)** — both answer-key gated.
-- **We are into Phase 3.** **Next:** the remaining two cash-in reads — **Positional Depth (§6)** and
-  **True rank (half of §5)** — both re-aggregations of the Production VOR that just landed.
+  spec); **Phase 2 substrate** (Sleeper source + consensus/spread band, all 3 §3 components); and **3
+  of the 4 Phase-3 cash-in reads — Weekly Spread (§3), Production VOR (§4), and True rank (half of
+  §5)** — all answer-key gated.
+- **We are into Phase 3.** **Next:** the *sole remaining* cash-in read — **Positional Depth (§6)** —
+  the last re-aggregation of the Production VOR that landed (a re-slice by position vs. league).
 - **Blocked (not next):** cross-source **disagreement** (the Phase-2 substrate's 2nd half) — needs a
   live 2nd source, fills in-season via ffanalytics. Market VOR + the trade gap (§4) remain V4.
 - Everything past the substrate is gated on it; §3 + §4 confirm the substrate cashes in.
