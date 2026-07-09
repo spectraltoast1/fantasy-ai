@@ -297,6 +297,61 @@ def write_leaguelogs_market_snapshot(df: pl.DataFrame, snapshot_date) -> None:
     df.write_parquet(path)
 
 
+# --- Projections (multi-source: Sleeper now, FantasyPros in-season) ---
+# The borrowed forward prior every Phase-2 read rests on (Product Roadmap Phase 2).
+# Normalized, source-agnostic entity: one growing file per season, with `source` as a
+# COLUMN (not a directory) — so consensus + disagreement across providers is a group-by
+# and "pick a source" is a filter, and adding FantasyPros later is a new `source` value,
+# not a schema change. Snapshot/append (mirrors write_leaguelogs_market_snapshot): a
+# re-fetch of a (season, week, source) slice replaces it rather than duplicating. Rows
+# carry snapshot_date + source_updated_at so an in-season daily history of how a
+# projection moved can extend the dedup key later without a rewrite.
+
+
+def _projections_path(season: int) -> Path:
+    return _SNAPSHOT_DIR / "projections" / f"projections_{season}.parquet"
+
+
+def write_projections(df: pl.DataFrame, season: int, week: int, source: str) -> None:
+    """Append one (season, week, source) projection slice to the season file.
+
+    `df` is treated as the complete set of rows for (season, week, source). If the
+    season file already exists, any rows matching that combo are dropped first (dedup
+    guard) so re-running a week/source replaces it rather than duplicating. Concat is
+    diagonal so a future source carrying extra component columns doesn't break the append.
+    """
+    path = _projections_path(season)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        existing = pl.read_parquet(path).filter(
+            ~(
+                (pl.col("season") == season)
+                & (pl.col("week") == week)
+                & (pl.col("source") == source)
+            )
+        )
+        df = pl.concat([existing, df], how="diagonal")
+    df.write_parquet(path)
+
+
+def read_projections(season: int, week: int | None = None, source: str | None = None) -> pl.DataFrame:
+    """Read the season projections file, optionally filtered by week and/or source.
+
+    `source=None` returns every source (the multi-source read the consensus/disagreement
+    transform consumes); passing a source is the "pick a provider" selection seam.
+    """
+    df = pl.read_parquet(_projections_path(season))
+    if week is not None:
+        df = df.filter(pl.col("week") == week)
+    if source is not None:
+        df = df.filter(pl.col("source") == source)
+    return df
+
+
+def projections_exist(season: int) -> bool:
+    return _projections_path(season).exists()
+
+
 # --- Derived Analytics ---
 # Pre-computed Team Overview analytics, promoted out of the front-end seam
 # (queries.js) into polars transforms. Each is now a tall snapshot file per season,
