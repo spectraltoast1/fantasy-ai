@@ -466,3 +466,36 @@ def read_projection_consensus(season: int, week: int | None = None) -> pl.DataFr
     if week is not None:
         df = df.filter(pl.col("week") == week)
     return df
+
+
+# --- Production VOR ---
+# The first read that *consumes* the projection substrate (DECISION_READS.md §4):
+# rest-of-season production value per rostered player, anchored so the waiver line = 0 and
+# normalised by the pool spread (top rosterable − waiver). Tall over as_of_week like the
+# three team/player analytics — for each cutoff N the ROS value sums the borrowed weekly
+# centres over the *remaining* schedule (weeks > N) and the waiver line is resolved against
+# the roster-as-of-N, so the read plugs into the same "As of" week selector. Only Production
+# VOR here; Market VOR (LeagueLogs) + the trade gap are V4.
+
+
+def _production_vor_path(season: int) -> Path:
+    return _SNAPSHOT_DIR / "derived" / f"production_vor_{season}.parquet"
+
+
+def write_production_vor(df: pl.DataFrame, season: int) -> None:
+    """Write the per-(as_of_week, player) Production VOR read for a season (overwrite).
+
+    Output of transforms/compute_production_vor.py: one row per rostered skill player per
+    as-of week, carrying the rest-of-season production value (sum of borrowed weekly
+    projection centres over the remaining schedule), the pool waiver line + top used to
+    normalise it, and the resulting vor (waiver = 0, negative = dead weight, ~1 = a top
+    rosterable player at that pool). QB is its own pool; RB/WR/TE share one flex pool.
+    """
+    path = _production_vor_path(season)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
+
+def read_production_vor(season: int, as_of_week=None) -> pl.DataFrame:
+    """Read the Production VOR read for one as-of week (default = latest)."""
+    return _as_of_slice(pl.read_parquet(_production_vor_path(season)), as_of_week)
