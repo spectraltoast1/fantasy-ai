@@ -9,6 +9,7 @@ Public API:
 import json
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import polars as pl
@@ -25,11 +26,41 @@ sys.path.insert(0, str(_DATA_DIR))
 import data_layer
 
 _SLEEPER_BASE = "https://api.sleeper.app/v1"
+# Projections/stats live on a separate host (no /v1), distinct from the main league API.
+_SLEEPER_STATS_BASE = "https://api.sleeper.com"
 
 _PLAYERS_CACHE_MAX_AGE_SECONDS = 86_400  # 24 hours
 
 # Columns to keep from the /players/nfl response — the full payload has 100+ fields.
 _PLAYERS_KEEP_COLS = ["sleeper_player_id", "full_name", "position", "team", "status"]
+
+# V1 is skill positions only; the projections endpoint also returns FB/CB noise.
+SKILL_POSITIONS = {"QB", "RB", "WR", "TE"}
+
+# Pinned schema for the projections write so the growing season file stays type-stable
+# across weeks/sources (mirrors leaguelogs.py's _SCHEMA). This is the normalized,
+# source-agnostic contract data_layer.write_projections persists — see its docstring.
+_PROJECTIONS_SCHEMA = {
+    "season": pl.Int64,
+    "week": pl.Int64,
+    "source": pl.Utf8,          # the provider we pull from ("sleeper")
+    "company": pl.Utf8,         # the underlying projection house Sleeper serves (e.g. "rotowire")
+    "sleeper_player_id": pl.Utf8,
+    "position": pl.Utf8,
+    "proj_pts_ppr": pl.Float64,
+    "proj_pts_half": pl.Float64,
+    "proj_pts_std": pl.Float64,
+    "proj_pass_yd": pl.Float64,
+    "proj_pass_td": pl.Float64,
+    "proj_rush_yd": pl.Float64,
+    "proj_rush_td": pl.Float64,
+    "proj_rec": pl.Float64,
+    "proj_rec_yd": pl.Float64,
+    "proj_rec_td": pl.Float64,
+    "snapshot_date": pl.Date,       # when WE captured it (append/history axis)
+    "source_updated_at": pl.Utf8,   # when the source last revised the projection
+    "fetched_at": pl.Utf8,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +251,95 @@ def fetch_roster_positions(league_id: str, year: int) -> None:
     print(f"  slots: {slots}")
 
 
+def _ms_to_iso(ms) -> str | None:
+    """Convert a Sleeper epoch-milliseconds timestamp to an ISO-8601 UTC string."""
+    if ms is None:
+        return None
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat(timespec="seconds")
+
+
+def _projection_rows(payload: list, season: int, week: int, snapshot_date, fetched_at: str) -> list[dict]:
+    """Normalise the Sleeper projections payload into the source-agnostic schema.
+
+    One row per skill-position player (FB/CB and other non-skill rows dropped). `season`
+    and `week` come from the caller (authoritative) rather than the row so the write's
+    dedup key is exact. Player id is kept as a string — never cast to int (it's the
+    sleeperPlayerId join key). Points (pts_ppr/half/std) are already computed by the
+    source; component stats are carried as legible evidence and default to null when a
+    position doesn't produce them (a QB has no rec_yd).
+    """
+    rows = []
+    for r in payload:
+        player = r.get("player") or {}
+        position = player.get("position")
+        if position not in SKILL_POSITIONS:
+            continue
+        stats = r.get("stats") or {}
+        rows.append({
+            "season": season,
+            "week": week,
+            "source": "sleeper",
+            "company": r.get("company"),
+            "sleeper_player_id": str(r["player_id"]),
+            "position": position,
+            "proj_pts_ppr": stats.get("pts_ppr"),
+            "proj_pts_half": stats.get("pts_half_ppr"),
+            "proj_pts_std": stats.get("pts_std"),
+            "proj_pass_yd": stats.get("pass_yd"),
+            "proj_pass_td": stats.get("pass_td"),
+            "proj_rush_yd": stats.get("rush_yd"),
+            "proj_rush_td": stats.get("rush_td"),
+            "proj_rec": stats.get("rec"),
+            "proj_rec_yd": stats.get("rec_yd"),
+            "proj_rec_td": stats.get("rec_td"),
+            "snapshot_date": snapshot_date,
+            "source_updated_at": _ms_to_iso(r.get("updated_at") or r.get("last_modified")),
+            "fetched_at": fetched_at,
+        })
+    return rows
+
+
+def fetch_projections(season: int, week: int) -> bool:
+    """Fetch one week of Sleeper (RotoWire) projections and append via data_layer.
+
+    League-agnostic — this is the whole NFL skill-position pool's forward prior, not a
+    league entity, so it takes no league_id. Written with source="sleeper" to the shared
+    multi-source projections file; a re-run of the same (season, week) replaces its
+    sleeper slice (dedup guard in write_projections). Returns False (skips the write) on
+    an empty response.
+    """
+    now = datetime.now(timezone.utc)
+    resp = requests.get(
+        f"{_SLEEPER_STATS_BASE}/projections/nfl/{season}/{week}",
+        params={
+            "season_type": "regular",
+            "position[]": ["QB", "RB", "WR", "TE"],
+            "order_by": "pts_ppr",
+        },
+    )
+    resp.raise_for_status()
+    rows = _projection_rows(
+        resp.json(), season, week, now.date(), now.isoformat(timespec="seconds")
+    )
+    if not rows:
+        print(f"  projections {season} week {week}: empty response — skipping write.")
+        return False
+    df = pl.DataFrame(rows, schema_overrides=_PROJECTIONS_SCHEMA)
+    data_layer.write_projections(df, season, week, source="sleeper")
+    print(f"  projections {season} week {week}: {len(df)} skill players "
+          f"→ snapshots/projections/projections_{season}.parquet")
+    return True
+
+
+def fetch_projections_season(season: int, through_week: int = 18) -> None:
+    """Backfill every regular-season week's Sleeper projections for a season."""
+    print(f"Backfilling Sleeper projections for {season} (weeks 1–{through_week})...")
+    for week in range(1, through_week + 1):
+        fetch_projections(season, week)
+        time.sleep(0.3)  # be polite; Sleeper's limit is generous
+    print(f"Projections backfill complete for {season}.")
+
+
 def backfill(league_id: str, year: int) -> None:
     """Fetch all completed regular-season weeks and write parquet snapshots."""
     print(f"Backfilling Sleeper data for league {league_id} ({year})...")
@@ -301,7 +421,8 @@ if __name__ == "__main__":
     usage = (
         "Usage: sleeper.py backfill <year> | sleeper.py refresh | "
         "sleeper.py fetch-players | sleeper.py fetch-teams <year> | "
-        "sleeper.py fetch-roster-positions <year>"
+        "sleeper.py fetch-roster-positions <year> | "
+        "sleeper.py projections <season> [week]"
     )
 
     if len(sys.argv) < 2:
@@ -309,6 +430,19 @@ if __name__ == "__main__":
         sys.exit(1)
 
     cmd = sys.argv[1]
+
+    # projections are league-agnostic (the whole NFL pool's forward prior) — handled
+    # before the league_resolver import so they need no league config to run.
+    if cmd == "projections":
+        if len(sys.argv) < 3:
+            print(usage)
+            sys.exit(1)
+        _season = int(sys.argv[2])
+        if len(sys.argv) >= 4:
+            fetch_projections(_season, int(sys.argv[3]))
+        else:
+            fetch_projections_season(_season)
+        sys.exit(0)
 
     # league_resolver lives in application/shared/ — insert application/ into sys.path
     sys.path.insert(0, str(_HERE.parent.parent))
