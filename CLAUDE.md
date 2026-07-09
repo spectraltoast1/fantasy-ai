@@ -38,7 +38,8 @@ One session = one worktree = a bounded chunk of work = one merge. Full detail in
 2. Update STATUS.md (and TECHNICAL_ARCHITECTURE.md if the stack, folder structure,
    or a technical decision changed).
 3. `scripts/worktree-close.sh` to review the diff, then
-   `scripts/worktree-close.sh --merge` to merge into main and remove the worktree.
+   `scripts/worktree-close.sh --merge` to merge into main, remove the worktree, and
+   delete the now-merged branch (it self-cleans — no leftover branches/worktrees).
 4. Done. The next task is a **fresh session + fresh worktree.**
 
 **Commit cap: 3 per session.** It's a forced checkpoint, not red tape — it
