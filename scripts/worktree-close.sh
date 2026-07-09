@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Worktree closedown — review, then merge the session branch into main and
-# remove the worktree.
+# Worktree closedown — review, then merge the session branch into main, remove the
+# worktree, and delete the now-merged branch (so merged sessions leave no cruft).
 #
 #   scripts/worktree-close.sh            # review only: status, diff, commit count
-#   scripts/worktree-close.sh --merge    # execute: merge into main + remove worktree
+#   scripts/worktree-close.sh --merge    # execute: merge + remove worktree + delete branch
 #
 # Run the review form first, confirm it looks right, then re-run with --merge.
 # See: project_management/co-build guides/SESSION_GUIDE.md
@@ -86,7 +86,19 @@ echo "Removing worktree..."
 # --force: a worktree always holds untracked runtime (the setup symlinks,
 # generated parquets), which a plain remove would refuse on.
 git -C "$MAIN_ROOT" worktree remove --force "$WT_ROOT"
+
+# 6. Delete the now-merged branch + prune stale worktree admin state, so merged
+# sessions don't accumulate dead branches/worktrees. `branch -d` is the SAFE delete —
+# it succeeds only because the branch is already merged into main (a stray unmerged
+# branch would be kept, not force-dropped). It must run AFTER the worktree is gone: a
+# branch checked out in a worktree cannot be deleted. Guarded with `|| echo` so a
+# cleanup hiccup can never fail a close whose merge already landed.
+echo "Deleting merged branch $BRANCH..."
+git -C "$MAIN_ROOT" branch -d "$BRANCH" \
+  || echo "  ⚠ could not delete $BRANCH (unmerged, or checked out elsewhere) — left in place."
+git -C "$MAIN_ROOT" worktree prune
+
 echo
-echo "✓ Merged into local main and removed the worktree."
+echo "✓ Merged into local main, removed the worktree, deleted the branch."
 echo "  Push when ready:  git -C \"$MAIN_ROOT\" push"
 echo "  Next task = fresh session + fresh worktree."

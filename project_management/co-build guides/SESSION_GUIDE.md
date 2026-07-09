@@ -84,11 +84,14 @@ All work committed; `git status` shows nothing but intended edits.
 ### 3.3 Review, then merge
 ```bash
 scripts/worktree-close.sh            # review: status, diff, commit count, doc reminder
-scripts/worktree-close.sh --merge    # merge into main + remove the worktree
+scripts/worktree-close.sh --merge    # merge into main + remove worktree + delete branch
 ```
 The review form is a dry run — read the diff and commit list it prints. When it
-looks right, re-run with `--merge`. It merges the branch into your local main and
-removes the worktree (and with it, the signposts).
+looks right, re-run with `--merge`. It merges the branch into your local main,
+removes the worktree (and with it, the signposts), and **deletes the now-merged
+branch + prunes stale worktree state** so merged sessions leave nothing behind. The
+branch delete is the *safe* `git branch -d` — a stray unmerged branch is kept, not
+dropped — and runs after the worktree is gone (a checked-out branch can't be deleted).
 
 ### 3.4 Push
 The merge is local. Push main when ready:
