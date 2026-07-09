@@ -434,3 +434,35 @@ def write_player_signal(df: pl.DataFrame, season: int) -> None:
 def read_player_signal(season: int, as_of_week=None) -> pl.DataFrame:
     """Read the per-player signal-quality read for one as-of week (default = latest)."""
     return _as_of_slice(pl.read_parquet(_player_signal_path(season)), as_of_week)
+
+
+def _projection_consensus_path(season: int) -> Path:
+    return _SNAPSHOT_DIR / "derived" / f"projection_consensus_{season}.parquet"
+
+
+def write_projection_consensus(df: pl.DataFrame, season: int) -> None:
+    """Write the per-(week, player) projection consensus + spread band for a season (overwrite).
+
+    Output of transforms/compute_projection_consensus.py: one row per (week,
+    sleeper_player_id) over the whole skill pool, carrying the borrowed consensus center
+    (median proj across sources), a percentile band (p25/p50/p75) whose width is the
+    player's residual std shrunk toward a positional prior, and the cross-source
+    disagreement column (null until a 2nd source lands). The Phase-2 forward prior /
+    law-2 confidence band (DECISION_READS.md §3).
+
+    Unlike the other derived analytics this is NOT tall over as_of_week: a projection for
+    week W is a fixed forward statement, and its band uses only history from weeks < W —
+    the as-of information is baked into the projected week, so the read is keyed on `week`
+    (like the projections entity it derives from), not on an as_of_week slice.
+    """
+    path = _projection_consensus_path(season)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
+
+def read_projection_consensus(season: int, week: int | None = None) -> pl.DataFrame:
+    """Read the projection consensus + spread for a season, optionally filtered to one week."""
+    df = pl.read_parquet(_projection_consensus_path(season))
+    if week is not None:
+        df = df.filter(pl.col("week") == week)
+    return df
