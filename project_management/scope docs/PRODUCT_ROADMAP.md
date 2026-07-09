@@ -169,10 +169,19 @@ the same engines with no duplicated logic, and no shipped read grades on outcome
 
 ---
 
-## Phase 4 — Go live + opponent modeling
+## Phase 4 — Integration + go live + opponent modeling *(UNDERWAY)*
 
-Move from frozen-at-W4 to a living season, and add the "read the other team" half.
+Move from frozen-at-W4 to a living season, add the posture integration point, and the
+"read the other team" half.
 
+- ✅ **Posture Evidence (§5, full) — bracket-math Monte Carlo DONE.** `compute_bracket_sim.py`:
+  team weekly score distributions (μ from the optimal-lineup projection, σ from the §3 band) →
+  per-matchup win prob → a 10k-sim season over the real remaining schedule → playoff odds +
+  magic number. With True Rank = §5 Posture complete. Config-light answer-key gate (Brier 0.224
+  beats coin-flip; expected-wins Spearman 0.756; 6/6 actual playoff teams). The posture
+  *presentation* (odds adjacent to true rank, the risk-appetite lens) is the front-end half.
+- **ROS Outcome Shape (§2) skeleton** and **manager dossiers (§7)** are the remaining reads;
+  **front-end surfacing** of the five gated forward reads turns the engines into product.
 - In-season weekly refresh (the old V1.5 scheduler idea) — fetchers + transforms
   run on cadence; readiness gates from Phase 1 handle early-season thinness.
 - **Opponent modeling:** their roster, needs, and tendencies — feeds trades, FAAB,
