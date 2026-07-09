@@ -16,8 +16,26 @@ Per (week, player) over the whole skill pool it derives:
     history accrues. `stdev(actual − proj)`, not raw score variance: the center already
     absorbs the mean, so residual spread is what makes the ~50%-in-IQR calibration mean
     something (a sharper reading of §3's "historical weekly variance").
-  - p25_ppr / p50_ppr / p75_ppr: center ± BAND_Z·band, floored at 0 (points can't go
-    negative — a mild practical right-skew; archetype skew, §3 component 3, is a follow-on).
+  - p25_ppr / p50_ppr / p75_ppr: the percentile band. p50 = the borrowed center (law 3).
+    p25/p75 = center + band·(∓BAND_Z + shift), floored at 0, where `shift` is a
+    skewness-driven Cornish-Fisher quantile adjustment (§3 component 3, the skew term).
+    The shift = SKEW_GAIN·(g/6)·(BAND_Z²−1) with `g` the player's **residual skewness**
+    shrunk toward a full-pool positional prior (same shrink idiom as the width, one moment
+    up). Because BAND_Z < 1, a right-skewed residual (g > 0 — the universal case: boom weeks
+    are the long tail) drives `shift` **negative**, moving both breakpoints down: the
+    borrowed center sits *above* the realized median (projections lean mildly optimistic),
+    so honest 25/25 tails need the band shifted under the center, giving a slightly longer
+    lower gap. Tuned + validated per-tail on the 2025 answer key — see the note below and
+    backtest_projection_consensus.py.
+  - skew_ppr: the shrunk residual skewness `g` used for the shift (evidence; null when the
+    positional prior itself is null, which won't happen for skill positions).
+  - Empirical footnote (worth recording): the *archetype-from-opportunity* driver §3
+    literally names (TD-dependence: share of projected points from TDs) was measured against
+    the 2025 answer key and **did not track** residual skew (high-TD players skew 0.64, low-TD
+    0.89 — backwards and negligible), while the per-player residual third moment shrunk to the
+    positional prior does. So the skew is driven by measured residual skewness (the realized
+    boom/bust), not the projection's component mix — honest to the calibration (law 2), and the
+    exact parallel to how the width uses the residual second moment.
   - disagreement_ppr: cross-source spread (std across sources) — NULL until a 2nd source
     lands (ffanalytics in-season). Present now so the additive source is a value change,
     not a schema change (the entity is source-agnostic by design).
@@ -47,7 +65,7 @@ _TRANSFORMS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_TRANSFORMS_DIR.parent))  # application/data → data_layer
 sys.path.insert(0, str(_TRANSFORMS_DIR))          # transforms → _analytics
 import data_layer
-from _analytics import round1, stdev
+from _analytics import round1, skewness, stdev
 
 # Variance-shrink weight, in "games of prior": the player's residual variance is pooled
 # with the positional prior as (n·player_var + K·pos_var)/(n + K). Mirrors
@@ -55,13 +73,23 @@ from _analytics import round1, stdev
 # the week-4 freeze a player has ≤ 3 residuals, so K = 4 gives the prior a shade over
 # half the weight — honest for thin samples, tilting to his own history as it accrues.
 SHRINK_K = 4
-# Band half-width multiplier on the residual std: p25/p75 = center ± BAND_Z·band. The
-# normal-theory value for the 25th/75th percentiles is 0.6745·σ; residuals are non-normal
+# Band half-width multiplier on the residual std: p25/p75 = center + band·(∓BAND_Z + shift).
+# The normal-theory value for the 25th/75th percentiles is 0.6745·σ; residuals are non-normal
 # (peaked in the middle with fat boom/bust tails that inflate σ), so the empirical
 # multiplier that lands IQR coverage at ~50% is tuned on the 2025 answer key
 # (backtest_projection_consensus.py --sweep) and baked here — tested, not guessed. The
-# 2025 sweep chose 0.6 (coverage 0.514), below the normal 0.6745. Re-tune in-season.
-BAND_Z = 0.6
+# 2025 sweep chose 0.55 once the skew term (below) shares the calibration load. Re-tune
+# in-season — width and skew are swept jointly.
+BAND_Z = 0.55
+# Skew-shrink weight, in "games of prior": the player's residual *skewness* (third moment)
+# is pooled with the positional-skew prior as (n·g_player + K·g_pos)/(n + K). Larger than
+# SHRINK_K because a third moment is noisier than a variance, so it leans on the prior
+# longer — early season the skew is essentially the position's.
+SKEW_SHRINK_K = 8
+# Multiplier on the Cornish-Fisher skewness term: shift = SKEW_GAIN·(g/6)·(BAND_Z²−1). Pure
+# Cornish-Fisher is gain 1.0; the 2025 answer-key sweep chose 1.5 (both tails within ~0.006
+# of the 0.25 target). Tuned, not assumed — same discipline as BAND_Z.
+SKEW_GAIN = 1.5
 
 
 def _consensus(proj_ppr) -> dict:
@@ -76,36 +104,53 @@ def _consensus(proj_ppr) -> dict:
     return {"center_ppr": center, "n_sources": n}
 
 
-def _projection_band(center, resid_history, pos_resid_std, *, shrink_k, band_z) -> dict:
+def _projection_band(center, resid_history, pos_resid_std, pos_resid_skew, *,
+                     shrink_k, band_z, skew_shrink_k, skew_gain) -> dict:
     """Percentile band around a borrowed projection center for one player-week.
 
     `center`: the consensus projection (becomes p50). `resid_history`: the player's
     realized (actual − projection) residuals over weeks strictly before this one
-    (out-of-sample). `pos_resid_std`: the position's residual std over the full pool — the
-    prior the thin per-player estimate shrinks toward. Constants injected (not module
-    globals) so the backtest exercises this exact function.
+    (out-of-sample). `pos_resid_std` / `pos_resid_skew`: the position's residual std and
+    skewness over the full pool — the priors the thin per-player estimates shrink toward.
+    Constants injected (not module globals) so the backtest exercises this exact function.
 
     Band width = residual std shrunk toward the positional prior by `shrink_k` games:
     shrunk_var = (n·player_var + K·pos_var)/(n + K); band = √shrunk_var. With < 2
     residuals the player estimate is undefined → the band is the positional prior (a wide,
-    honest default). p25/p75 = center ± band_z·band, floored at 0 (points can't go
-    negative — mild practical right-skew).
+    honest default).
+
+    Skew = residual skewness (one moment up) shrunk toward the positional-skew prior by
+    `skew_shrink_k` games; < 3 residuals → the positional prior. It feeds a Cornish-Fisher
+    quantile shift = skew_gain·(g/6)·(band_z²−1), the same additive term on both breakpoints:
+      p25/p75 = center + band·(∓band_z + shift), p50 = center (borrowed, unshifted).
+    Because band_z < 1, a right-skewed residual (g > 0) makes shift < 0 → both breakpoints
+    move down under the center (the borrowed center sits above the realized median), giving
+    honest 25/25 tails with a slightly longer lower gap. Floored at 0 (points can't go
+    negative).
     """
-    player_std = stdev(resid_history)  # None when < 2 residuals
     n = len(resid_history)
-    if player_std is None:
-        band = pos_resid_std
-    else:
-        band = ((n * player_std ** 2 + shrink_k * pos_resid_std ** 2) / (n + shrink_k)) ** 0.5
-    half = band_z * band
+    player_std = stdev(resid_history)  # None when < 2 residuals
+    band = pos_resid_std if player_std is None else (
+        (n * player_std ** 2 + shrink_k * pos_resid_std ** 2) / (n + shrink_k)
+    ) ** 0.5
+
+    player_skew = skewness(resid_history)  # None when < 3 residuals
+    skew = pos_resid_skew if player_skew is None else (
+        (n * player_skew + skew_shrink_k * pos_resid_skew) / (n + skew_shrink_k)
+    )
+    shift = skew_gain * (skew / 6.0) * (band_z ** 2 - 1) if skew is not None else 0.0
+
     return {
         "center_ppr": round1(center),
-        "p25_ppr": round1(max(0.0, center - half)),
+        "p25_ppr": round1(max(0.0, center + band * (-band_z + shift))),
         "p50_ppr": round1(center),
-        "p75_ppr": round1(center + half),
+        "p75_ppr": round1(center + band * (band_z + shift)),
         "band_ppr": round(band, 3),
+        "skew_ppr": round(skew, 3) if skew is not None else None,
         "resid_std_raw": round(player_std, 3) if player_std is not None else None,
         "resid_std_pos": round(pos_resid_std, 3),
+        "resid_skew_raw": round(player_skew, 3) if player_skew is not None else None,
+        "resid_skew_pos": round(pos_resid_skew, 3) if pos_resid_skew is not None else None,
         "n_resid": n,
     }
 
@@ -152,14 +197,21 @@ def compute(season: int) -> pl.DataFrame:
     consensus = _consensus_frame(proj)
     matched = _residuals(consensus, actual)
 
-    # Positional residual-std prior over the full pool (borrowed substrate), + a global
-    # fallback for any position that never matched (defensive; won't happen for skill).
+    # Positional residual-std + residual-skew priors over the full pool (borrowed
+    # substrate), + global fallbacks for any position that never matched (defensive; won't
+    # happen for skill). skewness() is the shared pure helper, applied to each position's
+    # residual list so the prior matches the per-player estimate it shrinks toward.
     pos_resid_std = {
         r["position"]: float(r["s"])
         for r in matched.group_by("position").agg(pl.col("resid").std(ddof=0).alias("s")).iter_rows(named=True)
         if r["s"] is not None
     }
     global_resid_std = float(matched["resid"].std(ddof=0))
+    resid_by_pos: dict = {}
+    for r in matched.select("position", "resid").iter_rows(named=True):
+        resid_by_pos.setdefault(r["position"], []).append(float(r["resid"]))
+    pos_resid_skew = {p: skewness(v) for p, v in resid_by_pos.items()}
+    global_resid_skew = skewness([r for v in resid_by_pos.values() for r in v])
 
     # Per-player residual history, sorted by week, for the weeks-< W lookup.
     resid_by_player: dict = {}
@@ -171,7 +223,10 @@ def compute(season: int) -> pl.DataFrame:
         pid, wk, pos = r["sleeper_player_id"], int(r["week"]), r["position"]
         hist = [resid for (w, resid) in resid_by_player.get(pid, []) if w < wk]
         pos_std = pos_resid_std.get(pos, global_resid_std)
-        band = _projection_band(r["center_ppr"], hist, pos_std, shrink_k=SHRINK_K, band_z=BAND_Z)
+        pos_skew = pos_resid_skew.get(pos, global_resid_skew)
+        band = _projection_band(r["center_ppr"], hist, pos_std, pos_skew,
+                                shrink_k=SHRINK_K, band_z=BAND_Z,
+                                skew_shrink_k=SKEW_SHRINK_K, skew_gain=SKEW_GAIN)
         rows.append({
             "season": season,
             "week": wk,
@@ -186,11 +241,13 @@ def compute(season: int) -> pl.DataFrame:
     max_week = int(df["week"].max())
     print(f"=== Projection consensus + spread: season={season}  weeks 1..{max_week}  "
           f"(rows={df.height}, sources={sorted(proj['source'].unique().to_list())}) ===")
-    print("  positional residual std (band prior): "
+    print("  positional residual std (band prior):  "
           + ", ".join(f"{p} {s:.2f}" for p, s in sorted(pos_resid_std.items())))
-    print(f"  week {max_week} top projections (center | p25–p75 band | n_resid):")
+    print("  positional residual skew (skew prior): "
+          + ", ".join(f"{p} {s:.2f}" for p, s in sorted(pos_resid_skew.items()) if s is not None))
+    print(f"  week {max_week} top projections (center | p25–p75 band | skew | n_resid):")
     print(df.filter(pl.col("week") == max_week).head(8).select(
-        "sleeper_player_id", "position", "center_ppr", "p25_ppr", "p75_ppr", "band_ppr", "n_resid"
+        "sleeper_player_id", "position", "center_ppr", "p25_ppr", "p75_ppr", "band_ppr", "skew_ppr", "n_resid"
     ))
     return df
 
