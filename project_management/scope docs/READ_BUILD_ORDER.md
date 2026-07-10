@@ -1,14 +1,15 @@
 # READ BUILD ORDER
 
-**Last reviewed:** 2026-07-09
+**Last reviewed:** 2026-07-10
 **Companion to:** `PRODUCT_ROADMAP.md` (the *why* — phases, four design laws, scope filter) and the
 **Decision Reads spec** (`DECISION_READS.md` — the *what*, full definition of each read).
-This doc is the ***sequence*** — the order the seven reads get built and why that order is forced by
-their dependencies.
+This doc is now the ***state of build*** — what's Built (Backend / Frontend) and what's
+Unbuilt+Blocked — kept in front of a condensed record of the sequencing logic that got us here.
 
 > **Source-of-truth split.** Roadmap = phases & principles. Decision Reads spec = read definitions.
-> This = build sequence. If a read's *definition* changes, edit the spec; if the *sequencing logic*
-> changes, edit here; phases & design laws stay in the roadmap. Don't duplicate across the three.
+> This = build sequence **+ the Built/Unbuilt breakdown**. `STATUS.md` = current state, recent-build
+> changelog, and the immediate next move. If a read's *definition* changes, edit the spec; if the
+> *sequencing logic* changes, edit here; phases & design laws stay in the roadmap. Don't duplicate.
 
 ---
 
@@ -16,130 +17,137 @@ their dependencies.
 
 **Player reads:** (1) Opportunity, (2) ROS Outcome Shape, (3) Weekly Projection Spread, (4) Value/VOR.
 **League reads:** (5) Posture Evidence, (6) Positional Depth, (7) Manager Dossiers.
-Full definitions are in the Decision Reads spec; this doc references them by number (§1–§7).
+Full definitions in the Decision Reads spec; referenced here by number (§1–§7).
 
-## The dependency spine (why the order is forced)
+## The dependency spine (why the order was forced)
 
-Three facts set the whole sequence:
+Three facts set the whole sequence — kept because they still explain *why* the Built set looks the
+way it does:
 
 1. **Opportunity is the only read buildable with no projections** — descriptive, backward, running on
-   usage data already in hand. So it's first (and already largely built — Phase 1).
-2. **The borrowed projection substrate is the hinge.** Outcome shape, weekly spread, value/VOR, and the
-   bracket simulation are all impossible without a forward prior. So the projection fetcher (Phase 2)
-   is the single highest-leverage build — not one feature, but the gate on most of the read layer.
+   usage already in hand. So it went first (Phase 1).
+2. **The borrowed projection substrate is the hinge.** Outcome shape, weekly spread, value/VOR, and
+   the bracket sim are all impossible without a forward prior, so the projection substrate (Phase 2)
+   was the single highest-leverage build — the gate on most of the read layer.
 3. **Posture is the integration point.** Player Value aggregates up into true rank; the bracket sim
-   consumes rank + weekly-spread variance; posture then flows back *down* as the risk-appetite lens on
-   outcome shape and VOR. So posture builds late — it sits on top of nearly everything.
+   consumes rank + weekly-spread variance; posture flows back *down* as the risk-appetite lens. So it
+   built late — it sits on top of nearly everything.
 
-Everything else is downstream of those three.
-
-## Cross-cutting (every stage — from the roadmap's design laws)
-
-- **No fused "ultimate number."** Each read stays a separate, legible signal; the user synthesizes.
-  That separation is the product — resist collapsing reads into one score.
-- **Borrow the center, build the layer (law 3).** Projections and rankings are ingested, never built.
-  Every forward read leans on the borrowed prior and adds only the decision layer.
-- **Confidence-gated + dynamic (law 2).** Every read carries a confidence signal and degrades cleanly
-  early season (the readiness gate shipped in Phase 1). Reads that shift over the season (ROS, posture)
-  update on evidence + time decay.
-- **AI in exactly two spots** — ROS *situation/narrative* (§2) and manager dossiers (§7), the two
-  qualitative reads. Always confidence-gated, reasoning always shown, never a bare number.
-- **Scope filter (roadmap):** nothing ships unless it's a borrowed input, a shared engine, or a
-  decision-framed surface.
+**Cross-cutting design laws** (from the roadmap): no fused "ultimate number" (each read stays a
+separate legible signal); borrow the center, build only the decision layer (law 3);
+confidence-gated + dynamic (law 2); AI in exactly two spots — ROS situation/narrative (§2) and
+manager dossiers (§7); nothing ships unless it's a borrowed input, a shared engine, or a
+decision-framed surface.
 
 ---
 
-## The phased build order
+## Built — Backend
 
-Phase numbers track `PRODUCT_ROADMAP.md`; this maps the seven reads onto that spine.
+Every read below is **data + answer-key gate** (validated against the full-2025 answer key or, where
+behaviour has no answer key, an internal-consistency gate). All are `compute_*.py` → `derived/*.parquet`
+with a paired `backtest_*.py` / `check_*.py`. **No UI yet on any of these** — see Unbuilt.
 
-### Phase 1 — Opportunity *(DONE — refined to spec 2026-07-08)* → §1
-The descriptive base, shipped as `compute_player_signal`. **Delta closed:** `quality_rate` (weighted/
-value-adjusted opportunity, from a new PBP `td_prob` aggregation), the **trust** axis (`direction` +
-`reliability` from the player's own series; `security` from Sleeper injury/depth-chart data), and the
-**point-correlation** companion (`pearson(xtd, td_pts)`) are now all shipped, kept separate from the
-core volume/efficiency read per "don't collapse the axes." Sourcing the PBP quality signal and the
-Sleeper injury/depth-chart fields broke the original "no new dependency" note on purpose — both came
-from packages/endpoints already integrated, not a new external service. *Sharpens every forward read
-that leans on opportunity.*
+- **§1 Opportunity** — `compute_player_signal.py` (+ `backtest_player_signal.py`). Sticky opportunity
+  vs. fragile efficiency, regression_risk, sample-gated read; Trust axis (direction/reliability/security)
+  + point-correlation companion. *Caveat: the Quality axis (`quality_rate`) is a TD-probability proxy,
+  not the full empirical-EV-weight spec — see `710_AUDIT.md` item 3.*
+- **§3 Weekly Projection Spread** — `compute_projection_consensus.py` (+ `backtest_projection_consensus.py`).
+  Borrowed center + spread band, all three components (width = shrunk residual std, skew =
+  Cornish-Fisher from shrunk residual skewness); per-tail calibration-gated.
+- **§4 Production VOR** — `compute_production_vor.py` (+ `backtest_production_vor.py`). ROS value over
+  the waiver line, normalized by pool spread; QB pool + pooled flex line. (*Production* only; Market
+  VOR + the trade gap are Unbuilt.)
+- **§5 Posture (complete)** — True Rank `compute_true_rank.py` (+ `backtest_true_rank.py`,
+  record-independent roster strength) **and** bracket-math `compute_bracket_sim.py`
+  (+ `backtest_bracket_sim.py`, 10k-sim playoff odds over the real remaining schedule; Brier 0.224
+  beats coin-flip, expected-wins Spearman 0.756, top-4 by odds = 3/4 actual playoff teams).
+- **§6 Positional Depth** — `compute_positional_depth.py` (+ `backtest_positional_depth.py`).
+  Production VOR re-sliced per position net of starting need → surplus / gap vs league.
+- **§2 ROS Outcome Shape (quantitative skeleton)** — `compute_ros_outcome_shape.py`
+  (+ `backtest_ros_outcome_shape.py`). Bull/bear = borrowed ROS centre ± BULL_Z·√Σband², floored,
+  emergent time decay; situation/security carried as evidence. *Missing: the preseason ADP/draft-capital
+  anchor and the AI narrative + 1–10 roll-up — see Unbuilt / `710_AUDIT.md` item 4.*
+- **§7 Manager Dossiers (complete)** — Phase A: cross-league acquisition (`sleeper.py fetch-manager-activity`
+  → `manager_activity`) + deterministic features (`compute_manager_features.py` → `manager_features`,
+  gated by `backtest_manager_features.py`). Phase B: the AI layer — `application/ai/` writes one
+  API-key-gated Claude-Haiku dossier per manager (`write_manager_dossiers.py` → `manager_dossiers`,
+  gated by `check_manager_dossiers.py`).
 
-### Phase 2 — The projection substrate *(substrate DONE; disagreement blocked)* → enables §2, §3, §4, §5-bracket
-The forward prior every read below rests on. **Source #1 — Sleeper weekly projections** (historical,
-so it lines up with the frozen-2025 answer key) landed in a source-agnostic `projections` entity, and
-`compute_projection_consensus.py` turns it into the borrowed **consensus center + spread band**, now
-with **all three §3 components** (center / width / archetype skew), calibration-gated on the 2025
-answer key. **The `disagreement` half is BLOCKED at the freeze** — a cross-source spread needs a live
-2nd source, and no source but Sleeper serves *historical* 2025 weekly projections; it fills **in-season
-via ffanalytics** (the `disagreement_ppr` column is scaffolded null till then — a value change, not a
-schema change). **Still the highest-leverage build** — everything below leans on it. (= roadmap Phase 2.)
+**Supporting substrate (built, underpins the reads):** `data_layer.py` (the single I/O seam); fetchers
+`nfl_stats.py` / `sleeper.py` / `leaguelogs.py`; joins `join_nfl_sleeper_weekly.py` + `audit_join.py`;
+`derive_lineup_slots.py`; the `_scoring.py` dispatcher + custom-scoring recompute engine; shared pure
+helpers `_analytics.py` / `_manager.py`; the `league_settings` entity; the multi-source `projections`
+entity; the season-replay `as_of_week` tall dimension; and the `position_pools` / any-league
+generalization (superflex, custom scoring, division seeding).
 
-### Phase 3 — Cash in the projection: the quantitative forward reads *(COMPLETE — §3, §4, §5-half, §6 all done)* → §3, §4, §6, half of §5
-Once the prior exists, these are near-term and mostly mechanical:
-- ✅ **Weekly Projection Spread (§3) — DONE.** Percentile band around the borrowed weekly center
-  (`compute_projection_consensus.py`), all three components incl. archetype skew; per-tail
-  calibration-gated on the 2025 answer key. → start/sit. *(Built alongside the Phase-2 substrate.)*
-- ✅ **Value / VOR (§4) — Production VOR DONE.** `compute_production_vor.py`: production VOR over the
-  waiver line, normalized by pool spread (QB pool + pooled flex line); gated (projected ROS tracks
-  actual at corr ~0.95, VOR tiers monotonic). → roster management (adds/drops). **Market VOR + the
-  Production−Market gap remain V4** (LeagueLogs redraft profile) — the trade layer is not built here.
-- ✅ **True rank (half of §5) — DONE.** `compute_true_rank.py`: aggregate Production VOR over each
-  team's optimal lineup → record-independent roster-strength rank. → half of posture. *(Reused the
-  optimal-lineup logic from `compute_team_leakage`, lifted into `_analytics` as shared
-  `expand_slots`/`optimal_lineup`.)* Gated (projected strength tracks the actual ROS ceiling at
-  Pearson 0.802 / Spearman 0.842, n=10 teams; strong half out-produces weak). Bracket math (§5 full) is Phase 4.
-- ✅ **Positional Depth (§6) — DONE.** `compute_positional_depth.py`: re-slice Production VOR per
-  position (QB/RB/WR/TE), net of the dedicated starting requirement, benchmarked vs the league →
-  surplus / gap (marginal_vor gap indicator, surplus_startable = trade capital, advisory shape).
-  → roster shape (trade + waiver/FAAB). Gated (per-position projected starter_value tracks the actual
-  ROS ceiling, mean corr 0.861, n=10/pos; top half out-produces bottom). **Closes Phase 3.**
+## Built — Frontend
 
-All quantitative, all leaning directly on the Phase-2 prior. VOR is also where the leakage-fix
-"regress realized rate toward the prior" lands, and the *shared-engines* generalization (roadmap
-Phase 3's framing) is the cross-cutting *how* of these reads, not a separate gate.
+Production front end — **React + Vite + DuckDB-WASM**, reads live parquet client-side. `src/queries.js`
+is the single data-access seam (the front-end mirror of `data_layer.py`); `src/db.js` is the DuckDB-WASM
+loader; view components are pure renderers. Frozen at Week 4 of 2025 for building. *(This is the full
+build detail — its former home in STATUS.md's "V1 Dashboard Build Order" section has been retired.)*
 
-### Phase 4 — Integration + going live *(UNDERWAY — §5 bracket math done)* → §2 (skeleton), §5 (full), §7
-- ✅ **Posture Evidence (§5, full) — bracket-math Monte Carlo DONE.** `compute_bracket_sim.py`: team
-  weekly score distributions (μ from the optimal-lineup projection, σ from the §3 band) → analytic
-  per-matchup win prob → a 10k-sim season over the **real remaining schedule** (all 18 wks of matchup
-  snapshots are on hand) → **playoff odds** + proj wins/seed + magic number. With True Rank = §5
-  complete. Config-light gate on actual 2025 results (Brier 0.224 beats coin-flip; expected-wins
-  Spearman 0.756; top-6 by odds = 6/6 actual playoff teams). Playoff config (reg-season end wk15, 6
-  teams) inferred from the schedule — documented latent. The **posture presentation** (odds shown
-  adjacent to true rank, the risk-appetite lens) is the deferred front-end half.
-- **ROS Outcome Shape — quantitative skeleton (§2)** — bull/bear anchored on the borrowed ROS
-  projection ± variance + time decay; situation/security from *structured* inputs (draft capital, depth
-  chart, injury status). The AI narrative comes in Phase 6.
-- **Manager Dossiers (§7)** — opponent behavioral profiles from transaction history. → trade targeting
-  + waiver competition. (= roadmap Phase 4 — go live + opponent modeling.)
+- **Skeleton + seam** — `App.jsx` tab shell, `LeaguePanel.jsx` / `TeamPanel.jsx` views, `queries.js`
+  data-access layer, `db.js` loader, `readiness.jsx` gate, `posColors.js`.
+- **Power Rankings (League)** — teams ranked by avg PPG with a QB/RB/WR/TE positional breakdown, record,
+  week-to-week consistency, and a 0–100 power score.
+- **Team drill-down drawer (League)** — all-play true record, lineup efficiency, weekly scoring,
+  consistency + positional-shape spectrums.
+- **Tab nav shell** — League | Team split (`App.jsx` shell + the two panels).
+- **Team tab foundation** — your-team resolver (`loadTeams` + `MY_USERNAME`), team switcher,
+  Overview / Players sub-tabs.
+- **Team Overview — lenses 1–4:** (1–2) rate-based depth chart + league-relative star dependence +
+  auto-surfaced lineup/hole signals; (3) Form / trajectory — recency-weighted EWMA slope (half-life
+  2wk), Fading↔Surging spectrum, weekly beat/below-median chart; (4) Where-you-leave-points — season
+  points-left split into variance vs. coachable, efficiency % on a Leaky↔Optimal spectrum
+  (reframed retrospective → improvement).
+- **Team tab — Players sub-view** — the per-player spike signal-quality read (recent /g, directional
+  verdict, volume rank, TD share); direction-not-projection, question-framed, sample-gated.
+- **Per-panel readiness gate** — `readiness.jsx` (`assessReadiness` + `Gate`): structural /
+  point-in-time / trend regimes → ready / building / tooEarly, with a "too early" fallback slot.
+- **Season-replay week selector** — global "As of" week dropdown in the App shell; one selection drives
+  League + Team and persists across tabs; threads through `queries.js` (`asOfSlice` / `weekCutoff`),
+  drives the readiness gate, retired the `?weeksOverride` QA param. Default = latest; travels back only.
+- **Architecture refactor** — the heavy Team Overview math (form + leakage) was extracted from
+  `queries.js` into Python transforms (`compute_team_form.py` / `compute_team_leakage.py` → `derived/`);
+  `queries.js` slimmed to a thin read + assemble seam.
 
-### Phase 5 — Model of you → extends §7
-The dossier engine turned inward: graded decisions accumulate into *your* tendencies and personalize the
-guidance. Falls out of the critique-first design. (= roadmap Phase 5.)
+## Unbuilt + Blocked
 
-### Phase 6 — AI interpretation layer + forward advisory → completes §2, new surfaces
-- **ROS situation — the AI half of §2:** interpret news into signals, write the bull/bear narrative,
-  roll narrative + signals into the 1-10 grade. Confidence-gated, reasoning always shown.
-- **Forward advisory loop** — the same engines pointed forward ("the better call *now*").
-- **New surfaces** — draft & streaming, once the engine pattern is proven. (= roadmap Phase 6.)
+Each with the reason it isn't built. Ordered roughly by how soon it matters.
+
+- **Front-end surfacing of the 8 gated backend reads** — UNBUILT, and the **immediate next work.** Of
+  the 11 derived parquets on disk, the front end surfaces only `team_form` / `team_leakage` /
+  `player_signal`. No UI yet for `production_vor` (§4), `true_rank` / `bracket_odds` (§5),
+  `positional_depth` (§6), `ros_outcome_shape` (§2), `projection_consensus` (§3), `manager_features` /
+  `manager_dossiers` (§7). Includes the posture *presentation* (True Rank + odds shown adjacent, the
+  risk-appetite lens).
+- **§3 cross-source disagreement** — BLOCKED at the freeze. A cross-source spread needs a live 2nd
+  projection source, and no source but Sleeper serves *historical* 2025 weekly projections.
+  `disagreement_ppr` is scaffolded null; it fills **in-season via ffanalytics** (a value change, not a
+  schema change).
+- **§4 Market VOR + the Production−Market trade gap** — UNBUILT (V4). LeagueLogs market values are
+  being snapshotted daily but **nothing consumes them yet** — the entire trade layer of §4 (and the
+  §6→§7 trade-targeting handoff) is absent.
+- **§2 preseason anchor** (realistic draft-capital / ADP ceiling & floor for bull/bear) — UNBUILT; the
+  shipped band is a pure statistical spread off the projection. See `710_AUDIT.md` item 4.
+- **§2 AI narrative + 1–10 roll-up** — deferred to Phase 6 (the AI-interpretation half of §2).
+- **§1 full Quality spec** (empirical EV-weights per chance-type, re-derived under league scoring) —
+  UNBUILT; the shipped `quality_rate` is a TD-probability proxy. See `710_AUDIT.md` item 3.
+- **Fetchers** — `fantasypros.py` (the §3 2nd source, in-season), `odds.py` (Vegas game totals —
+  optional environment add), `weather.py` — none built.
+- **Multi-user / multi-league plumbing** — UNBUILT. Storage keys, config, and front-end addressing are
+  single-league / single-user (`{season}`-keyed paths, one `SLEEPER_LEAGUE_ID`, hardcoded
+  `MY_USERNAME` / single-season parquet names in `db.js`). The *any-league engine* (scoring / roster /
+  playoff config) is built; the *plumbing* to hold more than one league at once is not. Seams are
+  documented in `TECHNICAL_ARCHITECTURE.md`.
+- **Deployment / hosting** — UNBUILT (static client-side today). Going server-side is expected, not
+  hypothetical; the `queries.js` seam is the swap point.
 
 ---
 
 ## Open flags (carried from the reads spec)
 - ROS **dynamic-update model** + the **1-10 precision-display** question (§2).
-- **Redraft / format-matched market source** for market VOR (§4).
-- ~~**Opportunity spec delta** — weighted opportunity + trust axis + point-correlation~~ — **closed
-  2026-07-08** (the Phase-1 refinement).
-
-## Status snapshot *(updated 2026-07-09)*
-- **Done:** Phase 0 (descriptive dashboard); Phase 1 (Opportunity / spike signal-quality, refined to
-  spec); **Phase 2 substrate** (Sleeper source + consensus/spread band, all 3 §3 components); and **all
-  4 Phase-3 cash-in reads — Weekly Spread (§3), Production VOR (§4), True rank (half of §5), and
-  Positional Depth (§6)** — all answer-key gated, data + gate only (no UI yet).
-- **Phase 3 is COMPLETE; Phase 4 is UNDERWAY** — the **§5 bracket-math Monte Carlo** shipped
-  (`compute_bracket_sim.py` → playoff odds; with True Rank = §5 Posture complete), config-light gated on
-  actual 2025 results (Brier 0.224; expected-wins Spearman 0.756; 6/6 actual playoff teams). **Next —
-  remaining Phase 4:** the §2 ROS outcome-shape quantitative skeleton, manager dossiers (§7), and the
-  **front-end surfacing** of the five gated forward reads (incl. the posture presentation).
-- **Blocked (not next):** cross-source **disagreement** (the Phase-2 substrate's 2nd half) — needs a
-  live 2nd source, fills in-season via ffanalytics. Market VOR + the trade gap (§4) remain V4.
-- Everything past the substrate is gated on it; §3 + §4 + §5-half + §6 confirm the substrate cashes in.
+- **Redraft / format-matched market source** for Market VOR (§4).
+- **Backend hygiene backlog** — packaging, the append pattern, spec-completeness gaps, config/deps/doc
+  drift — tracked in **`710_AUDIT.md`** (LLM context).
