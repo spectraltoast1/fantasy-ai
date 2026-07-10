@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-07-09 (Any-league pieces 2 & 3 — roster-shape/superflex generalization (VOR + leakage derive swap/replacement pools from lineup_slots via shared `_analytics.position_pools`; standard byte-identical) and division-aware playoff seeding (synthetic-gated latent; also fixed the bracket sim's fixed-SEED non-reproducibility). The "any league" project is complete. Phase 4 still UNDERWAY)
+**Last updated:** 2026-07-10 (ROS Outcome Shape — the §2 bull/bear/situation quantitative skeleton: bull/bear = borrowed ROS centre ± BULL_Z·√Σband² over the remaining schedule, floored at 0, with emergent time decay; situation/security borrows the player_signal trust axis. Calibration-gated on the 2025 answer key (coverage 0.835, BULL_Z→1.645 swept). Completes the player-read backend, §1–§4. Phase 4 still UNDERWAY — remaining: §7 dossiers + front-end surfacing)
 **Target ship:** NFL kickoff, mid August 2026
 
 ---
@@ -34,6 +34,35 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**ROS Outcome Shape — the §2 bull/bear/situation quantitative skeleton (completes the player-read backend, §1–§4).**
+The forward player read that frames "what's the realistic rest-of-season range for this player, and how solid
+is the ground under the bet?" — built as the **ROS-horizon analog of the already-calibrated §3 weekly spread.**
+`compute_ros_outcome_shape.py` → `derived/ros_outcome_shape_{season}.parquet`, tall over (as_of_week, roster_id,
+player). **Bull/bear = the borrowed ROS centre ± BULL_Z·ros_sigma, floored at 0:** `ros_center` is Production
+VOR's `ros_value` **reused directly** (Σ weekly consensus centres over the remaining schedule — borrowed, can't
+drift from §4, law 3); `ros_sigma = √(Σ band_ppr² over the same remaining weeks)` — the §3 shrunk weekly
+residual std combined under **weekly independence** (the same assumption `compute_bracket_sim`'s team σ
+documents). New pure `_ros_sigma` (mirrors `_ros_values` but aggregates band²) + `_outcome_band`; `ros_cv =
+sigma/centre` as a fragility proxy; a per-position league-relative `spectrum_pos` on the bull ceiling. **Time
+decay is emergent, not a mechanism:** as N advances the remaining schedule shrinks → Σband² shrinks → the band
+compresses toward the realised path (verified: 0 of 142 players' σ grew wk1→wk4; mean σ 23.0→20.8), exactly
+§2's dynamic. **Situation/security borrows the player_signal trust axis** — the Sleeper `security` tier +
+`direction`/`reliability`, carried as structured evidence (not fused into a grade; the AI narrative + 1-10
+roll-up is Phase 6). New `data_layer.write/read_ros_outcome_shape` (mirrors the Production VOR tall block).
+**Gate** (`backtest_ros_outcome_shape.py`, exit 0, imports the shipped `_ros_sigma`/`_outcome_band`):
+(1) **calibration** — freeze-wk actual ROS lands in [bear, bull] at **0.835** (target 0.80 ± 0.05; answer key =
+Σ realised PPR over remaining weeks); `--sweep` tuned **BULL_Z → 1.645**, a real finding — it sits *above* the
+normal-theory 1.28 for 80% because a player's weekly residuals are **positively autocorrelated** over a season
+(a bust persists), so realised ROS is more dispersed than the independent sum and the band must widen to stay
+honest. (2) **decision-relevant** — actual ROS rises monotonically by `ros_bull` tercile (dead 58 < mid 126 <
+stud 206). **Bonus:** the situation axis carries signal — non-stable players broke their bear floor **15.9%** vs
+stable **9.8%**. Symmetric-by-design (no ROS-level skew term — a documented deferral; the §3 per-week band
+already carries the skew this sums over). No-regression: reads-only of production_vor/consensus/player_signal
+(untouched). No UI (data + gate). **Next — remaining Phase 4:** manager dossiers (§7 — transaction data on hand,
+372 rows over wks 1–17, but its AI-synthesis core is Phase 6) and the **front-end surfacing** of the now-six
+gated forward reads (Spread/VOR/True Rank/Positional Depth/Bracket Odds/ROS Outcome Shape).
+
+> earlier build
 **Any-league pieces 2 & 3 — roster-shape/superflex generalization + division-aware seeding (project complete).**
 Finishes the "any league" project (piece 1 = the custom-scoring engine, prior build). Both are
 **generalizations** with no real-data answer key (the real league is standard 1QB PPR, no divisions), so
@@ -63,7 +92,8 @@ exit 0): Brier 0.224 / Spearman 0.756 unchanged, plus NEW determinism (two runs 
 (Σ playoff_odds = playoff_teams every as-of week), and synthetic 2-division correctness (a low-record
 division winner is seeded into the top slots and makes the bracket where flat seeding drops it).
 **Next — the "any league" project is done; remaining Phase 4:** §2 ROS outcome-shape skeleton, manager
-dossiers (§7), and front-end surfacing of the five gated forward reads.
+dossiers (§7), and front-end surfacing of the gated forward reads. *(Update 2026-07-10: the §2 skeleton
+has since shipped — see the most recent build. Remaining Phase 4 is now §7 + front-end surfacing.)*
 
 > earlier build
 **Custom-scoring recompute engine — the "any league" project's first piece (fills the stub).**
@@ -99,38 +129,6 @@ seam proven). **Custom leagues now run the whole read spine.** **Next in the "an
 seeding tiebreakers/divisions in the bracket sim; roster-shape/superflex generalization (the leakage
 miss-attribution + VOR superflex latents); richer custom scoring (first-down/threshold) when the
 projection source carries the component.
-
-> earlier build
-**League settings drive scoring + playoff behavior (foundation for the "any league" project).**
-The §5 bracket-sim review surfaced two things that were hardcoded/generic instead of read from the
-league; this closes both. **The trigger:** the sim's playoff cut was **inferred from the schedule and
-wrong** — I read wk16's "4 matchups + 2 idle" as "6 teams with 2 byes," but the league runs a **4-team**
-championship playoff (top 4), a 4-team toilet bowl, and 2 idle middle teams. A plausible, silent wrong
-answer — exactly what reading real settings eliminates. **(1) Persist settings:** new
-`sleeper.py fetch-league-config` pulls `scoring_settings` + playoff config from the same `/league`
-object `fetch_roster_positions` already hit (previously discarded) → `data_layer.write/read_league_settings`
-(tall section/key/value) + `read_scoring_settings`/`read_playoff_settings`. **(2) Scoring dispatcher**
-(`transforms/_scoring.py`, open/closed): `scoring_profile()` classifies **ppr/half/std/custom** from
-`scoring_settings` (rec ∈ {1,.5,0} with the shape-defining offensive keys standard, no bonuses/TE-
-premium/first-down → standard; else custom); standard → select the canned projection column + matching
-nfl_stats actual expr; **custom → `recompute_custom_points()` stub that raises** (the recompute-from-
-components engine is the next project — only its body fills in when built; the dispatcher + call sites
-don't change). Skill-offense only; turnover penalties treated as within canned-column tolerance.
-**(3) Wire scoring** into `compute_projection_consensus` (center/disagreement column + residual actual
-expr both league-driven); this league = **profile=ppr** → `proj_pts_ppr` + `fantasy_points_ppr`, so the
-consensus parquet is **byte-identical** (verified frame-equal) ⇒ VOR / True Rank / Positional Depth
-unchanged, their gates green. Output columns keep the `*_ppr` suffix (documented naming wart — they now
-hold *league* points; rename deferred). **(4) Wire playoff** into `compute_bracket_sim` + its backtest
-via `_playoff_config(season)` (playoff_week_start−1, playoff_teams), injected as params (SOLID), **no
-hardcoded fallback — raises if settings absent**. **Confirmed on the real league:** `playoff_teams=4`,
-`playoff_week_start=16` (reg season ends wk15); scoring profile ppr. Bracket sim now uses the true
-4-team cut → **Σ playoff_odds = 4.00** (corrected invariant; was a wrong 6); the config-light gate is
-unchanged (Brier 0.224 / Spearman 0.756, exit 0), and the evidence line now honestly reads **top-4 vs
-actual playoff → 3/4** (was a fake "6/6" against the wrong cut). Classifier verified: 6pt-pass-TD /
-TE-premium / first-down / 0.75-PPR → custom (stub raises). **Standard PPR/half/std leagues now fully
-supported; scoring + playoff are settings-driven.** **Next — the "any league" project:** the
-custom-scoring recompute engine (fills the stub), tiebreakers/divisions in seeding, and the roster-shape
-generalization; plus the remaining Phase-4 reads (§2 ROS skeleton, §7 dossiers) and front-end surfacing.
 
 > built
     - nflreadpy fetcher
@@ -168,6 +166,7 @@ generalization; plus the remaining Phase-4 reads (§2 ROS skeleton, §7 dossiers
     - League settings (scoring + playoff) persisted + consumed — sleeper.py fetch-league-config pulls scoring_settings + playoff config from the /league object → data_layer write/read_league_settings (tall section/key/value) + read_scoring_settings/read_playoff_settings. transforms/_scoring.py dispatcher: scoring_profile ppr/half/std/custom; standard selects the canned projection column + nfl_stats actual expr; custom → recompute_custom_points() stub (raises; engine is the next project). Wired into compute_projection_consensus (scoring, byte-identical for this ppr league) + compute_bracket_sim/backtest (playoff via _playoff_config, injected, no hardcoded fallback). Real league: playoff_teams=4, playoff_week_start=16, profile=ppr. Corrects the sim's playoff cut 6→4 (Σ playoff_odds=4.00); all gates green. Standard PPR/half/std leagues now supported; foundation for the "any league" project.
     - Custom-scoring recompute engine ("any league" piece 1) — fills `_scoring.recompute_custom_points()` (was a stub that raised) with a **delta-on-canned-baseline** engine: `points_league = std_baseline (proj_pts_std/fantasy_points) + Σ(w_custom−w_std)·component`, exact for standard by construction. Same weights on `proj_*` + `nfl_stats` so residuals stay matched. Supports non-{0,.5,1} PPR, 6-pt pass TD, non-standard yardage/TD, position-conditional reception bonuses (TE premium `bonus_rec_te`/`_rb`/`_wr`/`_qb`); rejects (raises, names key) first-down / threshold-yardage bonuses (no projection component); turnovers/2pt carried in baseline (tolerance). `recompute_custom_points(scoring, side)` → `pl.Expr`; `projection_column`→`projection_points_expr`; `actual_points_expr` gains scoring; `compute_projection_consensus.compute(season, scoring=None)` injectable. New `backtest_scoring_recompute.py` (exit 0): equivalence (custom==canned on standard: actuals exact, proj ~0.01 rounding), exact custom deltas, rejection, end-to-end custom consensus (100% QB centers rise under 6-pt pass TD). No-regression: real-ppr recompute == on-disk consensus parquet frame-for-frame (downstream gates unaffected); VOR runs on a custom consensus. Custom leagues now run the whole read spine.
     - Any-league pieces 2 & 3 (project complete) — **roster-shape/superflex:** new shared `_analytics.position_pools(slot_rows)` derives swap/replacement pools from `lineup_slots` (positions sharing a multi-position slot pooled; key = broadest inducing slot). `compute_production_vor._pool_of` + `compute_team_leakage._cls` now use it (fixes the `SUPER_FLEX` latent + generalizes leakage swap classes); standard config byte-identical, superflex pools QB with flex. `backtest_roster_shape.py` (exit 0): no-regression frame-equal on vor/leakage/true_rank/positional_depth + synthetic superflex. **Division seeding (synthetic-gated latent):** `_seed_table` extracted from `compute_bracket_sim._simulate`, division-aware when a roster→division map is present (winners seeded ahead of wildcards) else flat (proven identical); `sleeper.py fetch-league-config` persists `settings.divisions`; `_division_map` None today (teams entity has no `division` col — rosters-endpoint population deferred). NOT validated on a real division league. **Also fixed:** the fixed-SEED bracket sim wasn't reproducible (polars group_by order + zero-score bye ties) — sorting schedule pairings + roster player lists restores determinism (shared `optimal_lineup` untouched). `backtest_bracket_sim.py` extended (exit 0): Brier 0.224/Spearman 0.756 unchanged + determinism + Σ-invariant + synthetic 2-division correctness.
+    - ROS Outcome Shape (§2 quantitative skeleton — completes the player-read backend §1–§4) — compute_ros_outcome_shape.py → derived/ros_outcome_shape_{season}.parquet, tall over (as_of_week, roster_id, player). Bull/bear = the borrowed ROS centre (Production VOR ros_value, reused directly) ± BULL_Z·ros_sigma, floored at 0, where ros_sigma = √(Σ band_ppr² over the remaining schedule) — the §3 weekly band summed under weekly independence (compute_bracket_sim's documented assumption). New pure `_ros_sigma` (mirrors `_ros_values`, aggregates band²) + `_outcome_band`; ros_cv = sigma/centre (fragility), per-position spectrum_pos on the bull ceiling. Time decay emergent (shrinking horizon → tighter band; 0/142 σ grew wk1→wk4). Situation/security borrows the player_signal trust axis (security tier + direction/reliability) as structured evidence — the AI narrative + 1-10 roll-up is Phase 6. New data_layer write/read_ros_outcome_shape (mirrors the Production VOR tall block). Gate (backtest_ros_outcome_shape.py, exit 0): calibration — freeze-wk actual ROS in [bear, bull] = 0.835 (target 0.80±0.05), BULL_Z swept to 1.645 (above the normal 1.28 because weekly residuals are positively autocorrelated → realised ROS more dispersed than the independent sum); decision-relevant — actual ROS monotonic by ros_bull tercile (dead 58 < mid 126 < stud 206); bonus — non-stable players broke their bear floor 15.9% vs stable 9.8%. Symmetric-by-design (ROS-level skew deferred). No-regression (reads-only of the three source parquets). No UI (data + gate).
 
 > not yet built
     >> backend
@@ -220,11 +219,13 @@ Posture read**. Gated config-light on actual 2025 results (Brier 0.224 beats coi
 Spearman 0.756; top-6 by odds = 6/6 actual playoff teams). **Source scouting settled the 2nd source**
 — no clean historical-2025 projection source exists but Sleeper, so the **cross-source disagreement**
 half (the Phase-2 substrate's other ingredient) comes **in-season via ffanalytics**; ESPN historical
-is deferred (cookie-gated + `espn_id` join). **Next — remaining Phase 4:** the §2 **ROS outcome-shape**
-quantitative skeleton, **manager dossiers** (§7), and the deliberate **front-end surfacing** of the
-now-five gated forward reads (Spread/VOR/True Rank/Positional Depth/Bracket Odds) — including the
-posture *presentation* (True Rank + odds shown adjacent, the risk-appetite lens). **Blocked, not
-next:** cross-source disagreement (Phase 2, needs the live 2nd source). Python/data-layer + front-end work.
+is deferred (cookie-gated + `espn_id` join). **The §2 ROS outcome-shape skeleton is now DONE** (bull/bear/
+situation, calibration-gated — see the most recent build), which **completes the player-read backend
+(§1–§4).** **Next — remaining Phase 4:** **manager dossiers** (§7 — transaction data on hand, 372 rows, but
+its AI-synthesis core is Phase 6), and the deliberate **front-end surfacing** of the now-six gated forward
+reads (Spread/VOR/True Rank/Positional Depth/Bracket Odds/ROS Outcome Shape) — including the posture
+*presentation* (True Rank + odds shown adjacent, the risk-appetite lens). **Blocked, not next:** cross-source
+disagreement (Phase 2, needs the live 2nd source). Python/data-layer + front-end work.
 
 ## Version Roadmap
 → **Source of truth: `scope docs/PRODUCT_ROADMAP.md`** — phase detail, the four
@@ -247,9 +248,9 @@ Summary only here:
   (§6 ✅). The leakage coachable-fix (backlog #1, regress-to-prior — law 1) lands in
   VOR; the shared-engines generalization is the cross-cutting *how*, not a separate gate.
 - **Phase 4 — Integration + go live + opponent modeling** *(UNDERWAY — §5 bracket
-  math done)* — the §5 posture read (bracket-math Monte Carlo ✅ + True Rank = complete),
-  §2 ROS outcome-shape skeleton, manager dossiers (§7); front-end surfacing of the gated
-  forward reads; in-season weekly refresh; waiver and trade surfaces.
+  math + §2 ROS skeleton done)* — the §5 posture read (bracket-math Monte Carlo ✅ + True Rank = complete),
+  §2 ROS outcome-shape skeleton (✅ bull/bear/situation, calibration-gated), manager dossiers (§7 — next);
+  front-end surfacing of the gated forward reads; in-season weekly refresh; waiver and trade surfaces.
 - **Phase 5 — Model of YOU** — graded decisions compound into a per-manager
   tendency profile that personalizes guidance.
 - **Phase 6 — Forward advisory + AI layer (later)** — real-time "better call now";
@@ -453,9 +454,13 @@ age/injury/scheme).
 - ✅ **§5 bracket-math Monte Carlo (DONE — Phase 4 begun).** `compute_bracket_sim.py` → playoff odds
   from the forward reads; with True Rank = §5 Posture complete. Gated config-light (Brier 0.224 beats
   coin-flip; expected-wins Spearman 0.756; 6/6 actual playoff teams). See "most recent build".
-- **Next — remaining Phase 4:** the §2 **ROS outcome-shape** skeleton, **manager dossiers** (§7), and
-  the **front-end surfacing** of the five gated forward reads (incl. posture presentation). **Blocked,
-  not next:** cross-source **disagreement** (in-season, needs the live 2nd source).
+- ✅ **§2 ROS Outcome Shape skeleton (DONE — Phase 4).** `compute_ros_outcome_shape.py` → bull/bear (borrowed
+  ROS centre ± BULL_Z·√Σband², floored, emergent time decay) + situation/security (player_signal trust axis).
+  Calibration-gated (coverage 0.835; BULL_Z swept to 1.645; monotonic by bull tercile). **Completes the
+  player-read backend (§1–§4).** See "most recent build".
+- **Next — remaining Phase 4:** **manager dossiers** (§7 — transaction data on hand, AI-synthesis core is
+  Phase 6) and the **front-end surfacing** of the six gated forward reads (incl. posture presentation).
+  **Blocked, not next:** cross-source **disagreement** (in-season, needs the live 2nd source).
 - **Optional cheap add:** Vegas game totals via an `odds.py` fetcher (game environment).
 
 (Older note, lower priority: continue the V1 Dashboard Build Order — standings with

@@ -2,7 +2,7 @@
 
 > Engineering context document for Claude Code. Describes the stack, folder structure, data layer design, and technical principles. Updated regularly as the project evolves.
 
-**Last reviewed:** 2026-07-09
+**Last reviewed:** 2026-07-10
 
 ---
 
@@ -181,7 +181,8 @@ fantasy-ai/
             │   ├── production_vor_2025.parquet          # per (as_of_week, roster, player) §4 read: ROS value (borrowed centers summed over remaining weeks) over the waiver line, normalized by pool spread; QB pool + pooled flex line
             │   ├── true_rank_2025.parquet               # per (as_of_week, team) §5-half read: optimal-lineup ROS strength (production_vor re-aggregated over lineup slots) → record-independent rank + spectrum_pos + bench_value
             │   ├── positional_depth_2025.parquet        # per (as_of_week, team, position) §6 read: production_vor re-sliced per position net of starting need → starter/surplus value, marginal_vor (gap), spectrum_pos vs league, surplus/adequate/gap shape
-            │   └── bracket_odds_2025.parquet            # per (as_of_week, team) §5 bracket-math: Monte Carlo playoff odds from team weekly score dists (μ optimal-lineup projection, σ from §3 band) over the real remaining schedule → playoff_odds, proj_wins/seed, magic_wins
+            │   ├── bracket_odds_2025.parquet            # per (as_of_week, team) §5 bracket-math: Monte Carlo playoff odds from team weekly score dists (μ optimal-lineup projection, σ from §3 band) over the real remaining schedule → playoff_odds, proj_wins/seed, magic_wins
+            │   └── ros_outcome_shape_2025.parquet      # per (as_of_week, roster, player) §2 read: bull/bear rest-of-season range (borrowed ros_value centre ± BULL_Z·√Σband² over remaining weeks, floored, emergent time decay) + ros_cv fragility + situation/security (player_signal trust axis); the ROS-horizon analog of the §3 weekly band
             ├── leaguelogs/
             │   └── market_values.parquet            # daily market-value history, all profiles
             ├── projections/
@@ -221,7 +222,9 @@ fantasy-ai/
         ├── compute_bracket_sim.py           # ✅ built — §5 bracket-math Monte Carlo (Posture, Phase 4): team weekly score dists → analytic win prob → 10k-sim season over the real schedule → playoff odds → derived/bracket_odds
         ├── backtest_bracket_sim.py          # ✅ built — Bracket Odds gate (config-light): win-prob Brier 0.224 beats coin-flip + expected-wins Spearman 0.756 vs actual + determinism (two runs frame-equal) + Σ-odds invariant + synthetic 2-division seeding correctness (exit 0)
         ├── backtest_scoring_recompute.py    # ✅ built — custom-scoring recompute gate (reconciliation): custom path == canned columns on standard inputs + exact custom deltas + rejects unscoreable keys + end-to-end custom consensus (exit 0)
-        └── backtest_roster_shape.py         # ✅ built — roster-shape (superflex) gate: no-regression frame-equal on vor/leakage/true_rank/positional_depth (standard league) + synthetic superflex correctness via position_pools (exit 0)
+        ├── backtest_roster_shape.py         # ✅ built — roster-shape (superflex) gate: no-regression frame-equal on vor/leakage/true_rank/positional_depth (standard league) + synthetic superflex correctness via position_pools (exit 0)
+        ├── compute_ros_outcome_shape.py     # ✅ built — ROS Outcome Shape §2 (quantitative skeleton, completes the player-read backend): bull/bear = borrowed ros_value ± BULL_Z·√Σband² over remaining weeks (floored, emergent time decay) + situation/security from the player_signal trust axis → derived/ros_outcome_shape
+        └── backtest_ros_outcome_shape.py    # ✅ built — ROS Outcome Shape gate: freeze-wk bull/bear coverage 0.835 (target 0.80, BULL_Z→1.645 swept) + monotonic realised ROS by bull tercile on the 2025 answer key (exit 0)
     ├── config.example.py
     └── requirements.txt
 ```
@@ -294,6 +297,7 @@ now. Everything in **parquet** goes through data_layer.
 | compute_positional_depth transform | snapshots/derived/ | positional_depth_{season}.parquet — **tall, grain (as_of_week, roster_id, position)** (position = **fine** QB/RB/WR/TE, not VOR's QB/FLEX pool): per as-of week N, one row per team per position with the DECISION_READS §6 read. **No new engine** — it re-slices `production_vor` (`read_production_vor(season, as_of_week="all")`) per position, **net of the position's dedicated starting requirement**. `starter_need` from `lineup_slots` (`_starter_needs`: QB1/RB2/WR2/TE1; the shared FLEX×2 is *excluded*, so flex-worthy depth surfaces as **surplus** — which is what makes it trade capital). Fields: **starter_value** (top-`starter_need` ros_value), **surplus_value** + **surplus_startable** (beyond-need players clearing the waiver line, vor>0 = real depth), **marginal_vor** (the last dedicated starter's VOR — the **gap indicator**, ≤0 = starting replacement level; null when the roster can't fill the slots), **spectrum_pos** (league-relative 0–1 of starter_value **within that position's cohort** — the spec's "vs league" benchmark), and an **advisory** `shape` ∈ {surplus, adequate, gap} off marginal_vor + spectrum_pos (evidence-first: numbers lead, the manager adjudicates — per the advisory-framing principle). **One row per (team, position) even at zero roster count**, so a body-count gap isn't invisible in a rostered-only frame. Roster-as-of-N inherited from the VOR slice. The re-slice is **lossless** (per-position rostered_value sums to the team's total VOR ros_value). Calibration-gated by backtest_positional_depth.py (per position, projected starter_value tracks the actual ROS ceiling — top-need by realized points — mean corr 0.861 across QB/RB/WR/TE, freeze wk4 n=10/pos; exit 0). Decision homes: trade shape + waiver/FAAB. Closes the Phase-3 read set |
 | compute_bracket_sim transform | snapshots/derived/ | bracket_odds_{season}.parquet — **tall, grain (as_of_week, roster_id)**: per as-of week N, one row per team with the DECISION_READS §5 **bracket-math** read (the second half of Posture; True Rank is the first). A **Monte Carlo season simulation**: each team's weekly score distribution — mean μ from the optimal-lineup borrowed projection (`projection_consensus.center_ppr`), std σ from the §3 band (`band_ppr`) — drives analytic per-matchup win probabilities Φ((μA−μB)/√(σA²+σB²)); `SIMS`=10k runs draw weekly scores ~N(μ,σ²), pair by the **real remaining schedule** (matchup_id from the all-18-weeks matchup snapshots, read via `read_season_matchups`), accumulate onto the actual as-of-N standings, and seed the top-`PLAYOFF_TEAMS` (`_seed_table` — **division-aware**: division winners seeded ahead of wildcards when a roster→division map is present, else the flat wins/points-for seed; synthetic-gated latent, see below) → **playoff_odds** (Σ across the league = exactly `PLAYOFF_TEAMS`, a hard invariant), **proj_wins/proj_points**, **avg_seed**, **magic_wins** (a clinch proxy), plus current wins/points. **numpy** (fixed seed) is the one compute dependency — **now truly deterministic** run-to-run (any-league piece 3 sorted the schedule pairings + roster player lists; polars group_by order + zero-score bye ties had made the fixed seed non-reproducible). **Playoff config** (reg-season-end + playoff-teams) is read from the persisted `league_settings` via `_playoff_config` (`playoff_week_start−1`, `playoff_teams`) — **not** hardcoded; the sim raises if settings are absent. For this league that's a **4-team** playoff starting wk16 (reg season ends wk15), which corrected an earlier wrong schedule-inferred "6". The gate is config-light (independent of the cut). Calibration-gated by backtest_bracket_sim.py (win-prob Brier 0.224 beats the 0.25 coin-flip; expected-wins Spearman 0.756 vs actual; top-4 by odds = 3/4 actual playoff teams; exit 0). **Simplifications:** starter independence (no covariance), Normal draw (no §3 skew), frozen-roster byes reduce μ. Decision home: posture + urgency (shown adjacent to True Rank — the front-end presentation is the deferred half) |
 | compute_production_vor transform | snapshots/derived/ | production_vor_{season}.parquet — **tall, grain (as_of_week, roster_id, player)**: per as-of week N, one row per rostered skill player with the DECISION_READS §4 Production VOR read. **ros_value** = sum of the borrowed weekly consensus centers (projection_consensus.center_ppr) over the *remaining* schedule (weeks > N) — borrows the projection (law 3), builds only the anchor+normalization. **vor** = (ros_value − waiver_line) / (pool_top − waiver_line): waiver line = 0, pool top ≈ 1, negative = dead weight; §4's settled normalization (divide by pool spread, not the waiver value). **Pools from lineup_slots** via shared `_analytics.position_pools` (not hard-coded): dedicated QB slot = its own pool, flex-eligible RB/WR/TE = one pooled waiver line (§4 flex reconciliation); **superflex pools QB with the flex automatically** (any-league piece 2 — the old `_pool_of` matched only a slot named `FLEX`). Roster-as-of-N (latest team ≤ N, the shared arg_max idiom); roster frozen wks 1–4 so N bounded there, projection horizon → wk 18. Calibration-gated by backtest_production_vor.py (projected ROS tracks actual at corr ~0.95 per pool; VOR tiers monotonic in realized production — exit 0); superflex pooling gated by backtest_roster_shape.py. **Documented simplification:** the pooled flex line doesn't model dedicated-slot scarcity (a scarce TE is measured vs the flex replacement). Market VOR (LeagueLogs) + the Production−Market trade gap are V4, not built here |
+| compute_ros_outcome_shape transform | snapshots/derived/ | ros_outcome_shape_{season}.parquet — **tall, grain (as_of_week, roster_id, player)**: per as-of week N, one row per rostered skill player with the DECISION_READS §2 ROS Outcome Shape read (**quantitative skeleton**; the AI narrative + 1-10 roll-up is Phase 6). **Bull/bear is the ROS-horizon analog of the §3 weekly spread:** **ros_center** = Production VOR's `ros_value` **reused directly** (`read_production_vor(season, as_of_week="all")` — the borrowed Σ weekly centres over remaining weeks, so it can't drift from §4); **ros_sigma** = √(Σ `band_ppr`² over the *same* remaining weeks) — the §3 shrunk weekly residual std combined under **weekly independence** (the assumption `compute_bracket_sim`'s team σ documents); **ros_bull/ros_bear** = ros_center ± `BULL_Z`·ros_sigma, **floored at 0** (a season can't go negative). **BULL_Z=1.645** is backtest-tuned (above the normal-theory 1.28 for an 80% interval — realised ROS is more dispersed than the independent sum because weekly residuals are positively autocorrelated over a season). Also **ros_cv** = ros_sigma/ros_center (fragility proxy) and a per-position league-relative **spectrum_pos** on the bull ceiling. **Time decay is emergent** — as N advances the remaining schedule shrinks → Σband² shrinks → the band compresses toward the realised path (§2's dynamic, no separate mechanism). **Situation/security** carries the structured `security` tier + `direction`/`reliability` from `player_signal` (the forward face of the Opportunity Trust axis) as evidence, not fused. **No new engine** — new pure `_ros_sigma` (mirrors `_ros_values`, aggregates band²) + `_outcome_band`; reads-only of production_vor/projection_consensus/player_signal. Calibration-gated by backtest_ros_outcome_shape.py (freeze-wk actual ROS in [bear,bull] = 0.835 vs target 0.80; actual ROS monotonic by ros_bull tercile; exit 0). **Documented simplification:** symmetric band (no ROS-level skew term — the §3 per-week band already carries the skew this sums over). Decision home: hold/upside reads; the risk-appetite lens (§5 posture) sets how bull/bear is read |
 
 **Projections entity (multi-source forward prior — Phase 2).** A single normalized,
 source-agnostic file (`snapshots/projections/projections_{season}.parquet`) that any projection
@@ -664,6 +668,40 @@ via data_layer.py, performs a single join, and writes via data_layer.py.
   reports (not gated) that the top-`PLAYOFF_TEAMS` by `playoff_odds` = **6/6** actual playoff teams —
   the season aggregate is where the modest per-game edge accumulates. Same answer-key template as the
   other gates.
+
+- `compute_ros_outcome_shape.py` — **the forward player read (DECISION_READS §2): ROS Outcome Shape,
+  the quantitative skeleton.** Reads `read_production_vor(season, as_of_week="all")` (the borrowed ROS
+  centre), `read_projection_consensus(season)` (the §3 weekly band), and `read_player_signal(season,
+  as_of_week="all")` (the situation/security evidence); emits one row per (as_of_week, rostered player).
+  Per law 3 it borrows the centre and the band and builds **only** the ROS-horizon aggregation. **Bull/
+  bear is the rest-of-season analog of the §3 weekly spread:** pure `_ros_sigma` mirrors
+  `compute_production_vor._ros_values` but aggregates the weekly band's *variance* (`band_ppr²`) over the
+  same remaining weeks → `ros_sigma = √(Σ band²)` (weekly independence — the same assumption
+  `compute_bracket_sim`'s team σ documents); pure `_outcome_band` forms `ros_bull/ros_bear = ros_center ±
+  BULL_Z·ros_sigma`, floored at 0, plus `ros_cv = sigma/centre`. SOLID shape: pure helpers with the
+  injected `BULL_Z`, `compute()` the composition root looping as_of_week, `_analytics.spectrum_positions`
+  for the per-position bull spectrum. **Time decay is emergent** (shrinking horizon → smaller Σband² →
+  tighter band; §2's dynamic with no separate mechanism). **Situation/security** carries the player_signal
+  trust axis (`security`/`direction`/`reliability`) as structured evidence — not fused into a grade; the
+  AI narrative + 1-10 roll-up is Phase 6. **Documented simplifications:** symmetric band (no ROS-level
+  skew term — a deferral; the §3 per-week band already carries the skew this sums over) and the
+  weekly-independence σ (autocorrelation is absorbed into the tuned `BULL_Z`, not modelled). No UI yet
+  (data + gate). Completes the player-read backend (§1–§4).
+
+- `backtest_ros_outcome_shape.py` — **the calibration gate for ROS Outcome Shape.** Imports the same pure
+  `_ros_sigma`/`_outcome_band` the transform ships (no re-derivation). The per-player realised ROS answer
+  key is a simple Σ actual PPR over the remaining weeks (`_actual_weekly` idiom from
+  backtest_true_rank.py; a player read, not a team read — no `optimal_lineup`); the band's forward inputs
+  never see the actuals they're tested against (no leakage). Two verdicts on the 2025 answer key (exit 0
+  iff both): (1) *calibration* — freeze-week fraction of players whose actual ROS lands in [ros_bear,
+  ros_bull] within `COVERAGE_TOL` of `TARGET_COVERAGE`=0.80 (2025: **0.835**); tails reported (the band is
+  symmetric-by-design). **`--sweep`** tunes `BULL_Z` against the answer key — the ROS analog of the §3
+  gate's `BAND_Z` sweep; 2025 chose **1.645**, *above* the normal 1.28 for 80% because realised ROS is
+  more dispersed than the independent sum (positive weekly-residual autocorrelation over a season) — the
+  real finding the gate exists to surface. (2) *decision-relevant* — actual ROS rises monotonically by
+  `ros_bull` tercile (2025: dead 58 < mid 126 < stud 206). Also reports (not gated) that non-stable
+  players break their bear floor more often than stable ones (2025: 15.9% vs 9.8%) — the situation axis
+  carries signal. Same answer-key template as the other gates.
 
 ## Technical Principles
 

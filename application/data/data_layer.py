@@ -658,3 +658,40 @@ def write_bracket_odds(df: pl.DataFrame, season: int) -> None:
 def read_bracket_odds(season: int, as_of_week=None) -> pl.DataFrame:
     """Read the Bracket Odds read for one as-of week (default = latest)."""
     return _as_of_slice(pl.read_parquet(_bracket_odds_path(season)), as_of_week)
+
+
+# --- ROS Outcome Shape ---
+# The forward player read (DECISION_READS.md §2): bull season / bear season / situation-security
+# per rostered player. This is the *quantitative skeleton* — bull/bear is the rest-of-season-horizon
+# analog of the §3 weekly spread: the borrowed ROS centre (Production VOR's ros_value) ± an
+# accumulated band (√Σ of the §3 weekly band² over the remaining schedule, weekly independence),
+# floored at 0. Time decay is emergent — fewer remaining weeks shrink the band toward the realised
+# path. Situation/security carries the structured Sleeper security tier + the player_signal trust
+# axis (direction/reliability) as evidence, not a fused grade. The AI narrative + 1-10 roll-up is
+# Phase 6. Tall over as_of_week like the other derived analytics, so it plugs into the same "As of"
+# week selector.
+
+
+def _ros_outcome_shape_path(season: int) -> Path:
+    return _SNAPSHOT_DIR / "derived" / f"ros_outcome_shape_{season}.parquet"
+
+
+def write_ros_outcome_shape(df: pl.DataFrame, season: int) -> None:
+    """Write the per-(as_of_week, roster_id, player) ROS Outcome Shape read for a season (overwrite).
+
+    Output of transforms/compute_ros_outcome_shape.py: one row per rostered skill player per as-of
+    week, carrying the borrowed ROS centre (ros_center), the bull/bear rest-of-season band
+    (ros_bull/ros_bear = centre ± bull_z·ros_sigma, floored at 0), the accumulated band std
+    (ros_sigma = √Σ weekly band² over the remaining schedule) + relative dispersion (ros_cv), the
+    number of remaining projected weeks, and the structured situation/security evidence
+    (security tier + direction/reliability from the player_signal trust axis). Borrows the centre and
+    band — builds only the ROS-horizon aggregation and the situation carry-through.
+    """
+    path = _ros_outcome_shape_path(season)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
+
+def read_ros_outcome_shape(season: int, as_of_week=None) -> pl.DataFrame:
+    """Read the ROS Outcome Shape read for one as-of week (default = latest)."""
+    return _as_of_slice(pl.read_parquet(_ros_outcome_shape_path(season)), as_of_week)
