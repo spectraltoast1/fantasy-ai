@@ -44,10 +44,13 @@ Not tall over as_of_week (unlike the other derived analytics): a projection for 
 a fixed forward statement, and its band uses only weeks < W, so the as-of information is
 baked into the projected week. Keyed on `week`, like the projections entity it reads.
 
-Scoring: center uses proj_pts_ppr, residuals use nfl_stats fantasy_points_ppr — correct
-because the league is full PPR (generic PPR = league-exact today). The scoring_settings
-selection/recompute for half-PPR / custom leagues stays the documented latent item in
-TECHNICAL_ARCHITECTURE.md §Projections — not built here.
+Scoring is **league-driven** via the scoring dispatcher (_scoring.py): the league's
+scoring_settings pick both the projection column (center + disagreement) and the nfl_stats
+actual column (residuals). Standard PPR/half/std leagues select the matching canned columns;
+custom scoring routes to the recompute engine (not built — its selectors raise). For this full-PPR
+league profile=ppr → proj_pts_ppr + fantasy_points_ppr (unchanged output). Output columns keep the
+*_ppr suffix (they now hold league points — a documented naming wart, rename deferred to the
+any-league project).
 
 Output: snapshots/derived/projection_consensus_{season}.parquet, one row per (week, player).
 
@@ -66,6 +69,7 @@ sys.path.insert(0, str(_TRANSFORMS_DIR.parent))  # application/data → data_lay
 sys.path.insert(0, str(_TRANSFORMS_DIR))          # transforms → _analytics
 import data_layer
 from _analytics import round1, skewness, stdev
+from _scoring import scoring_profile, projection_column, actual_points_expr
 
 # Variance-shrink weight, in "games of prior": the player's residual variance is pooled
 # with the positional prior as (n·player_var + K·pos_var)/(n + K). Mirrors
@@ -155,21 +159,22 @@ def _projection_band(center, resid_history, pos_resid_std, pos_resid_skew, *,
     }
 
 
-def _consensus_frame(proj: pl.DataFrame) -> pl.DataFrame:
+def _consensus_frame(proj: pl.DataFrame, proj_col: str = "proj_pts_ppr") -> pl.DataFrame:
     """Collapse the multi-source projections to one consensus row per (week, player):
     median center, source count, and the cross-source disagreement std (null < 2 sources).
-    Rows with no usable center (all-null proj) are dropped — no band without a center."""
+    Rows with no usable center (all-null proj) are dropped — no band without a center.
+    `proj_col` is the league-scored projection column the scoring dispatcher selected."""
     return (
         proj.group_by("week", "sleeper_player_id")
         .agg(
             pl.col("position").first().alias("position"),
-            pl.col("proj_pts_ppr").median().alias("center_ppr"),
+            pl.col(proj_col).median().alias("center_ppr"),
             pl.col("source").n_unique().alias("n_sources"),
             # Cross-source disagreement std — NULL (not 0.0) with a single source, so
             # "can't measure disagreement" stays distinct from "sources agreed exactly"
             # (law 2). Fills in-season when ffanalytics adds a 2nd source.
             pl.when(pl.col("source").n_unique() >= 2)
-            .then(pl.col("proj_pts_ppr").std(ddof=0))
+            .then(pl.col(proj_col).std(ddof=0))
             .otherwise(None)
             .alias("disagreement_ppr"),
         )
@@ -185,16 +190,26 @@ def _residuals(consensus: pl.DataFrame, actual: pl.DataFrame) -> pl.DataFrame:
 
 
 def compute(season: int) -> pl.DataFrame:
+    # Scoring dispatcher: the league's scoring_settings pick the projection column + the actual
+    # column, so center/residuals are league-scored. Standard (ppr/half/std) is selected here;
+    # custom scoring raises in the selectors (its recompute engine is the next project). The
+    # output column names keep the *_ppr suffix (a documented wart — they now hold league points).
+    profile = scoring_profile(data_layer.read_scoring_settings(season))
+    proj_col = projection_column(profile)
+
     proj = data_layer.read_projections(season)
     actual = (
         data_layer.read_nfl_stats(season)
-        .select("sleeper_player_id", pl.col("week").cast(pl.Int64), "fantasy_points_ppr")
+        .select(
+            "sleeper_player_id", pl.col("week").cast(pl.Int64),
+            actual_points_expr(profile).alias("actual_ppr"),
+        )
         .drop_nulls("sleeper_player_id")
         .group_by("sleeper_player_id", "week")
-        .agg(pl.col("fantasy_points_ppr").first().alias("actual_ppr"))
+        .agg(pl.col("actual_ppr").first())
     )
 
-    consensus = _consensus_frame(proj)
+    consensus = _consensus_frame(proj, proj_col)
     matched = _residuals(consensus, actual)
 
     # Positional residual-std + residual-skew priors over the full pool (borrowed

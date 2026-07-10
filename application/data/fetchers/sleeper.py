@@ -251,6 +251,47 @@ def fetch_roster_positions(league_id: str, year: int) -> None:
     print(f"  slots: {slots}")
 
 
+def fetch_league_config(league_id: str, year: int) -> None:
+    """Fetch the league object and persist its scoring_settings + playoff/league settings.
+
+    Produces league_settings_{year}.parquet (section, key, value) via data_layer — the league's
+    real scoring rules (so the scoring dispatcher picks the right projection column instead of
+    assuming PPR) and playoff config (playoff_teams / playoff_week_start, so the bracket sim reads
+    them instead of hardcoding). Same /league object fetch_roster_positions uses; the interesting
+    keys were previously discarded.
+    """
+    print(f"Fetching Sleeper league config for league {league_id} ({year})...")
+
+    resp = requests.get(f"{_SLEEPER_BASE}/league/{league_id}")
+    resp.raise_for_status()
+    league = resp.json()
+
+    scoring = league.get("scoring_settings") or {}
+    settings = league.get("settings") or {}
+    # Only the playoff/postseason keys the sim needs; the full settings blob has dozens of
+    # unrelated knobs (waiver_type, trade_deadline, …) — keep the persisted set intentional.
+    playoff_keys = ("playoff_teams", "playoff_week_start", "playoff_type",
+                    "playoff_round_type", "playoff_seed_type", "num_teams")
+
+    rows = []
+    for key, value in scoring.items():
+        rows.append({"section": "scoring", "key": str(key), "value": float(value)})
+    for key in playoff_keys:
+        if key in settings and settings[key] is not None:
+            rows.append({"section": "league", "key": key, "value": float(settings[key])})
+
+    if not rows:
+        print("  No scoring_settings/settings on the league object — nothing to write.")
+        return
+
+    df = pl.DataFrame(rows, schema={"section": pl.Utf8, "key": pl.Utf8, "value": pl.Float64})
+    data_layer.write_league_settings(df, year)
+    print(f"  league_settings: {df.height} keys ({len(scoring)} scoring) → "
+          f"snapshots/sleeper/{year}/league_settings_{year}.parquet")
+    _lg = {r["key"]: r["value"] for r in df.filter(pl.col("section") == "league").iter_rows(named=True)}
+    print(f"  playoff config: {_lg}")
+
+
 def _ms_to_iso(ms) -> str | None:
     """Convert a Sleeper epoch-milliseconds timestamp to an ISO-8601 UTC string."""
     if ms is None:
@@ -422,6 +463,7 @@ if __name__ == "__main__":
         "Usage: sleeper.py backfill <year> | sleeper.py refresh | "
         "sleeper.py fetch-players | sleeper.py fetch-teams <year> | "
         "sleeper.py fetch-roster-positions <year> | "
+        "sleeper.py fetch-league-config <year> | "
         "sleeper.py projections <season> [week]"
     )
 
@@ -477,6 +519,14 @@ if __name__ == "__main__":
         _year = int(sys.argv[2])
         _league_id = league_resolver.resolve_league_id(_year)
         fetch_roster_positions(_league_id, _year)
+
+    elif cmd == "fetch-league-config":
+        if len(sys.argv) < 3:
+            print(usage)
+            sys.exit(1)
+        _year = int(sys.argv[2])
+        _league_id = league_resolver.resolve_league_id(_year)
+        fetch_league_config(_league_id, _year)
 
     elif cmd == "fetch-players":
         fetch_players(force=True)
