@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-07-09 (Phase 4 UNDERWAY — §5 bracket-math Monte Carlo ships: playoff odds from the forward reads, answer-key gated. With True Rank it completes the §5 Posture read; next Phase-4 items are §2 ROS skeleton, §7 dossiers, and front-end surfacing)
+**Last updated:** 2026-07-09 (League settings — scoring + playoff config now persisted from the Sleeper /league object and consumed via a scoring dispatcher; corrects the bracket sim's playoff cut 6→4. Standard PPR/half/std leagues supported; custom scoring stubbed. Foundation for the "any league" project. Phase 4 still UNDERWAY)
 **Target ship:** NFL kickoff, mid August 2026
 
 ---
@@ -34,6 +34,38 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**League settings drive scoring + playoff behavior (foundation for the "any league" project).**
+The §5 bracket-sim review surfaced two things that were hardcoded/generic instead of read from the
+league; this closes both. **The trigger:** the sim's playoff cut was **inferred from the schedule and
+wrong** — I read wk16's "4 matchups + 2 idle" as "6 teams with 2 byes," but the league runs a **4-team**
+championship playoff (top 4), a 4-team toilet bowl, and 2 idle middle teams. A plausible, silent wrong
+answer — exactly what reading real settings eliminates. **(1) Persist settings:** new
+`sleeper.py fetch-league-config` pulls `scoring_settings` + playoff config from the same `/league`
+object `fetch_roster_positions` already hit (previously discarded) → `data_layer.write/read_league_settings`
+(tall section/key/value) + `read_scoring_settings`/`read_playoff_settings`. **(2) Scoring dispatcher**
+(`transforms/_scoring.py`, open/closed): `scoring_profile()` classifies **ppr/half/std/custom** from
+`scoring_settings` (rec ∈ {1,.5,0} with the shape-defining offensive keys standard, no bonuses/TE-
+premium/first-down → standard; else custom); standard → select the canned projection column + matching
+nfl_stats actual expr; **custom → `recompute_custom_points()` stub that raises** (the recompute-from-
+components engine is the next project — only its body fills in when built; the dispatcher + call sites
+don't change). Skill-offense only; turnover penalties treated as within canned-column tolerance.
+**(3) Wire scoring** into `compute_projection_consensus` (center/disagreement column + residual actual
+expr both league-driven); this league = **profile=ppr** → `proj_pts_ppr` + `fantasy_points_ppr`, so the
+consensus parquet is **byte-identical** (verified frame-equal) ⇒ VOR / True Rank / Positional Depth
+unchanged, their gates green. Output columns keep the `*_ppr` suffix (documented naming wart — they now
+hold *league* points; rename deferred). **(4) Wire playoff** into `compute_bracket_sim` + its backtest
+via `_playoff_config(season)` (playoff_week_start−1, playoff_teams), injected as params (SOLID), **no
+hardcoded fallback — raises if settings absent**. **Confirmed on the real league:** `playoff_teams=4`,
+`playoff_week_start=16` (reg season ends wk15); scoring profile ppr. Bracket sim now uses the true
+4-team cut → **Σ playoff_odds = 4.00** (corrected invariant; was a wrong 6); the config-light gate is
+unchanged (Brier 0.224 / Spearman 0.756, exit 0), and the evidence line now honestly reads **top-4 vs
+actual playoff → 3/4** (was a fake "6/6" against the wrong cut). Classifier verified: 6pt-pass-TD /
+TE-premium / first-down / 0.75-PPR → custom (stub raises). **Standard PPR/half/std leagues now fully
+supported; scoring + playoff are settings-driven.** **Next — the "any league" project:** the
+custom-scoring recompute engine (fills the stub), tiebreakers/divisions in seeding, and the roster-shape
+generalization; plus the remaining Phase-4 reads (§2 ROS skeleton, §7 dossiers) and front-end surfacing.
+
+> earlier build
 **Phase 4 begins — the §5 bracket-math Monte Carlo ships: playoff odds from the forward reads.**
 The **posture integration point** the whole read spine converges toward (player value → True Rank →
 per-matchup win prob → season sim → playoff odds). `compute_bracket_sim.py` →
@@ -97,34 +129,6 @@ deliberate **front-end surfacing** of these four gated forward reads (VOR/True R
 Depth/Spread), which have shipped as data only. Cross-source disagreement (Phase-2 2nd half) stays
 blocked at the freeze → in-season ffanalytics.
 
-> earlier build
-**Phase 3 — True Rank (§5, first half) ships: team roster strength from the borrowed VOR.** The
-2nd of the four Phase-3 cash-in reads to consume the substrate (after §3 spread + §4 VOR) and the
-first **league-level** one. `compute_true_rank.py` → `derived/true_rank_2025.parquet` sums each
-team's **optimal-lineup** ROS value (fill the declared QB/RB/WR/TE + FLEX slots from the roster by
-`ros_value`, most-constrained slot first, sum the starters) into a **record-independent**
-roster-strength rank. **No new engine** (law 3 all the way down): it re-aggregates the Production
-VOR that just landed over the league's lineup rules — the optimal-lineup greedy was **lifted from
-`compute_team_leakage` into `_analytics` as shared `expand_slots`/`optimal_lineup`** (pure,
-points-agnostic; leakage now imports them aliased, behavior-preserving) and fed `ros_value` as its
-`pts`. Tall over `as_of_week` (roster-as-of-N inherited free from the VOR slice); carries
-`bench_value` (depth / a §6 trade-capital hint) + a league-relative `spectrum_pos`. **Slot-aware
-payoff, verified on 2025:** roster 9 holds the single biggest ROS player (a 310-pt QB) yet ranks
-**9th of 10** — one QB slot means a 2nd elite QB rides the bench and can't inflate strength; True
-Rank rewards a balanced *startable* lineup, not capped-position hoarding (a naive roster-sum gets
-this backwards). Ranks reshuffle across as-of weeks (roster-as-of-N moving). **Gate**
-(`backtest_true_rank.py`, exit 0): projected roster strength tracks each team's **actual ROS
-ceiling** — management-independent (optimal lineup set weekly on realized points, so it measures
-roster *quality*, not lineup-setting skill, which is leakage's domain) — at **Pearson 0.802 /
-Spearman 0.842** (freeze wk 4, n=10 teams, floor 0.60); the strong half out-produces the weak half
-by **+261.7 ROS pts**. Small-sample honest: the **freeze snapshot is the gate**, the
-pooled-over-weeks corr is evidence only (the same team at N=1..4 isn't independent). **Data-layer
-add:** `_as_of_slice` gains an `"all"` sentinel so a re-aggregating consumer reads the whole tall
-frame through the seam (no direct `read_parquet`). No UI (data + gate only, like VOR — a front-end
-follow-up). **Next:** **Positional Depth (§6)** is now the *sole* remaining Phase-3 cash-in read (a
-re-slice of VOR by position vs. league); cross-source disagreement stays blocked at the freeze
-(Phase-2 2nd half → in-season ffanalytics); ROS outcome-shape (§2) is Phase 4.
-
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
@@ -157,7 +161,8 @@ re-slice of VOR by position vs. league); cross-source disagreement stays blocked
     - Phase 2 Production VOR (§4) — compute_production_vor.py → derived/production_vor_{season}.parquet, the first read that consumes the substrate. Per rostered player: ROS value = sum of borrowed weekly consensus centers over remaining weeks; anchored waiver line=0, normalized by pool spread (top−waiver); QB its own pool, flex-eligible RB/WR/TE share a pooled waiver line (from lineup_slots). Tall over as_of_week (roster-as-of-N, roster frozen wks 1–4, projection horizon wk 18). New data_layer write/read_production_vor. Gate (backtest_production_vor.py, exit 0): projected ROS tracks actual at corr 0.944 QB / 0.955 FLEX, VOR tiers monotonic (dead<mid<stud). Simplifications documented: pooled flex line ignores dedicated-slot scarcity; superflex latent; Market VOR + trade gap V4.
     - Phase 3 True Rank (§5, first half) — compute_true_rank.py → derived/true_rank_{season}.parquet, the first league-level read consuming the substrate. Per team: roster_strength = sum of the optimal-lineup ros_value (fill QB/RB/WR/TE+FLEX from the roster by ros_value, most-constrained slot first) → record-independent roster-strength rank + league-relative spectrum_pos + bench_value. Re-aggregates Production VOR (no new engine); the optimal-lineup greedy lifted from compute_team_leakage into _analytics as shared expand_slots/optimal_lineup (leakage imports them, behavior-preserving). Tall over as_of_week (roster-as-of-N inherited from the VOR slice). New data_layer write/read_true_rank; _as_of_slice gains an "all" sentinel for whole-frame re-aggregation through the seam. Slot-aware: a 2-elite-QB roster ranks by its one startable QB (verified — roster 9 holds a 310-pt QB, ranks 9th of 10). Gate (backtest_true_rank.py, exit 0): projected strength tracks the actual ROS ceiling (mgmt-independent optimal lineup on realized points) at Pearson 0.802 / Spearman 0.842 (freeze wk4, n=10, floor 0.60); strong half +261.7 ROS over weak. No UI (data+gate, like VOR).
     - Phase 3 Positional Depth (§6) — compute_positional_depth.py → derived/positional_depth_{season}.parquet, the 4th and last Phase-3 cash-in read (3rd VOR re-aggregation). Per (as_of_week, roster_id, fine position QB/RB/WR/TE): re-slices the borrowed ros_value/vor net of the position's dedicated starter_need (from lineup_slots; shared FLEX excluded → flex-worthy depth = surplus). Carries starter_value, surplus_value + surplus_startable (beyond-need vor>0), marginal_vor (last dedicated starter's VOR = gap indicator), spectrum_pos within each position cohort, advisory surplus/adequate/gap shape (evidence-first). One row per (team, position) even at zero count (body-count gaps visible). Tall over as_of_week (roster-as-of-N from VOR). New data_layer write/read_positional_depth. Lossless re-slice (per-pos rostered_value sums to team VOR ros_value). Gate (backtest_positional_depth.py, exit 0): per position, projected starter_value tracks actual ROS ceiling (top-need by realized pts) at QB 0.792 / RB 0.867 / WR 0.855 / TE 0.928, mean 0.861 (freeze wk4, n=10/pos, floor 0.50); top half +85.3 over bottom. No UI (data+gate). Closes the Phase-3 read set (4/4).
-    - Phase 4 Bracket Odds (§5 bracket-math) — compute_bracket_sim.py → derived/bracket_odds_{season}.parquet, the bracket-math half of Posture (with True Rank = §5 complete). Per team weekly score dist (μ = optimal-lineup Σ center_ppr, σ = √Σ band_ppr²; starters independent), analytic per-matchup win prob Φ((μA−μB)/√(σA²+σB²)) via math.erf; standings as-of-N from actual results; Monte Carlo (numpy, fixed seed, 10k) over the real remaining schedule → playoff_odds, proj_wins/points, avg_seed, magic_wins. Enabled by raw Sleeper matchups existing for all 18 wks. Playoff config (REG_SEASON_END_WEEK=15, PLAYOFF_TEAMS=6) inferred from schedule — documented latent. New data_layer write/read_bracket_odds + read_season_matchups. Verified wk4: Σ playoff_odds=6.00 (hard invariant); deterministic. Gate (backtest_bracket_sim.py, exit 0, config-light): Brier 0.224 beats coin-flip; expected wins vs actual Spearman 0.756; top-6 by odds = 6/6 actual playoff teams. numpy is the one compute dep. Simplifications: starter independence, Normal draw (no §3 skew), frozen-roster byes reduce μ.
+    - Phase 4 Bracket Odds (§5 bracket-math) — compute_bracket_sim.py → derived/bracket_odds_{season}.parquet, the bracket-math half of Posture (with True Rank = §5 complete). Per team weekly score dist (μ = optimal-lineup Σ center_ppr, σ = √Σ band_ppr²; starters independent), analytic per-matchup win prob Φ((μA−μB)/√(σA²+σB²)) via math.erf; standings as-of-N from actual results; Monte Carlo (numpy, fixed seed, 10k) over the real remaining schedule → playoff_odds, proj_wins/points, avg_seed, magic_wins. Enabled by raw Sleeper matchups existing for all 18 wks. Playoff config (REG_SEASON_END_WEEK=15, PLAYOFF_TEAMS=6) inferred from schedule — documented latent. New data_layer write/read_bracket_odds + read_season_matchups. Verified wk4: Σ playoff_odds=6.00 (hard invariant); deterministic. Gate (backtest_bracket_sim.py, exit 0, config-light): Brier 0.224 beats coin-flip; expected wins vs actual Spearman 0.756; top-6 by odds = 6/6 actual playoff teams. numpy is the one compute dep. Simplifications: starter independence, Normal draw (no §3 skew), frozen-roster byes reduce μ. **[Superseded: the playoff config REG_SEASON_END_WEEK/PLAYOFF_TEAMS is now read from real league settings — 4 teams, not the wrong inferred 6 — see the league-settings build.]**
+    - League settings (scoring + playoff) persisted + consumed — sleeper.py fetch-league-config pulls scoring_settings + playoff config from the /league object → data_layer write/read_league_settings (tall section/key/value) + read_scoring_settings/read_playoff_settings. transforms/_scoring.py dispatcher: scoring_profile ppr/half/std/custom; standard selects the canned projection column + nfl_stats actual expr; custom → recompute_custom_points() stub (raises; engine is the next project). Wired into compute_projection_consensus (scoring, byte-identical for this ppr league) + compute_bracket_sim/backtest (playoff via _playoff_config, injected, no hardcoded fallback). Real league: playoff_teams=4, playoff_week_start=16, profile=ppr. Corrects the sim's playoff cut 6→4 (Σ playoff_odds=4.00); all gates green. Standard PPR/half/std leagues now supported; foundation for the "any league" project.
 
 > not yet built
     >> backend
