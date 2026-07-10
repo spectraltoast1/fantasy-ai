@@ -196,7 +196,7 @@ fantasy-ai/
     ├── shared/                     # league detection, config loaders
     ├── transforms/ # one Python script per join/transform
         ├── _analytics.py              # shared pure helpers (round1, mean, median, stdev, skewness, pearson, spectrum_positions, expand_slots/optimal_lineup — the slot-aware greedy lineup engine, shared by team_leakage + true_rank)
-        ├── _scoring.py                # scoring dispatcher — scoring_profile (ppr/half/std/custom) selects the league's projection + actual columns; custom → recompute_custom_points() stub (engine unbuilt)
+        ├── _scoring.py                # scoring dispatcher + custom-scoring recompute engine — scoring_profile (ppr/half/std/custom); standard selects canned columns, custom recomputes via recompute_custom_points(scoring, side) as a delta on the std canned baseline (built; supports PPR variants / non-std TD-yardage / TE-premium reception bonuses; raises on first-down/threshold bonuses)
         ├── join_nfl_sleeper_weekly.py # ✅ built
         ├── audit_join.py              # ✅ built — resolves unknown-position remainders
         ├── derive_lineup_slots.py     # ✅ built — roster_positions → lineup_slots (starting skill slots)
@@ -213,7 +213,8 @@ fantasy-ai/
         ├── compute_positional_depth.py      # ✅ built — Positional Depth §6 (last Phase-3 read): production_vor re-sliced per position net of starting need → surplus/gap vs league → derived/positional_depth
         ├── backtest_positional_depth.py     # ✅ built — Positional Depth gate: per-position projected starter_value tracks actual ROS ceiling (mean corr 0.861, n=10/pos) on the 2025 answer key
         ├── compute_bracket_sim.py           # ✅ built — §5 bracket-math Monte Carlo (Posture, Phase 4): team weekly score dists → analytic win prob → 10k-sim season over the real schedule → playoff odds → derived/bracket_odds
-        └── backtest_bracket_sim.py          # ✅ built — Bracket Odds gate (config-light): win-prob Brier 0.224 beats coin-flip + expected-wins Spearman 0.756 vs actual on the 2025 answer key
+        ├── backtest_bracket_sim.py          # ✅ built — Bracket Odds gate (config-light): win-prob Brier 0.224 beats coin-flip + expected-wins Spearman 0.756 vs actual on the 2025 answer key
+        └── backtest_scoring_recompute.py    # ✅ built — custom-scoring recompute gate (reconciliation): custom path == canned columns on standard inputs + exact custom deltas + rejects unscoreable keys + end-to-end custom consensus (exit 0)
     ├── config.example.py
     └── requirements.txt
 ```
@@ -298,7 +299,7 @@ component evidence. Source #1 = Sleeper (RotoWire); FantasyPros next. This is th
 prior every Phase-2 read (§2/§3/§4/§5-bracket) depends on.
 
 **Projection scoring is matched to the league via the scoring dispatcher (`transforms/_scoring.py`) —
-standard done, custom stubbed.** The entity stays *generic* (`pts_ppr`/`pts_half`/`pts_std` + component
+standard + custom both built.** The entity stays *generic* (`pts_ppr`/`pts_half`/`pts_std` + component
 stats), and scoring is applied at the **consumption layer** (`compute_projection_consensus`) so the same
 projections serve any league. `scoring_profile(read_scoring_settings(season))` classifies the league:
   - **Standard (ppr/half/std) — built.** `rec` ∈ {1, .5, 0} with the shape-defining offensive keys at
@@ -306,17 +307,28 @@ projections serve any league. `scoring_profile(read_scoring_settings(season))` c
     projection column + the matching nfl_stats actual expr (`fantasy_points_ppr`; `fantasy_points` for
     std; their mean for half). This closes the old "projection must match league" latent for the vast
     majority of leagues; `League of Random People 2.0` is profile=ppr so output is byte-identical.
-  - **Custom — stubbed.** Any scoring the canned columns can't express (6-pt pass TD, TE premium,
-    reception / first-down bonuses, non-{0,.5,1} PPR) → `recompute_custom_points()`, a defined interface
-    that **raises** today. The recompute-from-components engine (both projections and nfl_stats actuals
-    under `scoring_settings`) is the first piece of the "any league" project; the stored components
-    (`proj_pass_yd/td`, …) were carried to enable it (a fully custom league may need a wider set). When
-    built, only that function's body fills in — the dispatcher + every call site stay unchanged.
-  Turnover penalties (`pass_int`, `fum_lost`) are treated as within the canned column's tolerance (they
-  vary by a point and move skill scoring only marginally), so they don't force the custom path. Note the
-  consensus output columns still carry the `*_ppr` suffix (they now hold *league* points — a documented
-  naming wart; the rename is deferred to the any-league project). Ties to the "league scoring settings"
-  cross-cutting input in DECISION_READS §1/§3/§4.
+  - **Custom — built (delta-on-canned-baseline engine).** Any scoring the canned columns can't express →
+    `recompute_custom_points(scoring, side)` returns a `pl.Expr` that adds, to the **standard canned
+    baseline** (`proj_pts_std` / `fantasy_points`), only the *delta* between the league's weight and the
+    standard weight per component: `points = std_baseline + Σ(w_custom−w_std)·component`. **Not** a
+    from-scratch sum — RotoWire's `proj_pts_ppr` embeds unexposed contributions (off ~2 pts if rebuilt);
+    the delta form is **exact for standard by construction** and robust to what the vendor baked in. Same
+    weights applied to the `proj_*` and `nfl_stats` columns so the projection center and the realized
+    actual stay matched (residual = actual − center). **Supported:** non-{0,.5,1} PPR, non-standard
+    TD/yardage rates (6-pt pass TD), position-conditional reception bonuses (`bonus_rec_te`/`_rb`/`_wr`/
+    `_qb` = TE premium, scored `bonus·receptions` gated on position). **Rejected — raises naming the key
+    (law 2):** first-down (`pass_fd`/`rush_fd`/`rec_fd`) and threshold/yardage bonuses — the projections
+    carry no component, so the center can't be scored faithfully; unlock when a component-carrying
+    projection source lands in-season. Reconciliation-gated by `backtest_scoring_recompute.py` (custom ==
+    canned on standard inputs; exact custom deltas; rejection; end-to-end custom consensus — exit 0). The
+    stored components (`proj_pass_yd/td`, …) enable it. `projection_column` was renamed
+    `projection_points_expr`; `actual_points_expr` + `compute()` gained an injectable `scoring`.
+  Turnover penalties (`pass_int`, `fum_lost`) and 2-pt conversions are carried in the std baseline at the
+  standard rate (tolerance — the projections have no component to adjust them, and they move skill scoring
+  only marginally), so they don't force or reshape the custom path. Note the consensus output columns
+  still carry the `*_ppr` suffix (they now hold *league* points — a documented naming wart; the rename is
+  deferred to the any-league project). Ties to the "league scoring settings" cross-cutting input in
+  DECISION_READS §1/§3/§4.
 
 These assignments reflect current v1 decisions, not permanent rules. Future versions may snapshot additional sources (e.g., odds history for post-hoc analysis).
 

@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-07-09 (League settings — scoring + playoff config now persisted from the Sleeper /league object and consumed via a scoring dispatcher; corrects the bracket sim's playoff cut 6→4. Standard PPR/half/std leagues supported; custom scoring stubbed. Foundation for the "any league" project. Phase 4 still UNDERWAY)
+**Last updated:** 2026-07-09 (Custom-scoring recompute engine — fills the `recompute_custom_points` stub via a delta-on-canned-baseline engine; the "any league" project's first piece. Custom leagues (non-{0,.5,1} PPR, 6-pt pass TD, TE premium) now run end-to-end through the single consensus scoring seam; standard leagues byte-identical. Phase 4 still UNDERWAY)
 **Target ship:** NFL kickoff, mid August 2026
 
 ---
@@ -34,6 +34,41 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**Custom-scoring recompute engine — the "any league" project's first piece (fills the stub).**
+The last build left `_scoring.recompute_custom_points()` as a stub that **raised**: standard PPR/half/std
+leagues ran, any custom scoring hard-failed. This builds the engine. **Design — delta on the canned
+baseline, not from-scratch:** the data settled it — RotoWire's `proj_pts_ppr` is **not** reconstructable
+from the 7 exposed projection components (off by up to ~2 pts; it bakes in projected turnovers/minor
+bonuses the components don't expose). So the engine takes the **standard canned baseline**
+(`proj_pts_std` / `fantasy_points`) and adds, per component, only the *delta* between the league's weight
+and standard: `points_league = std_baseline + Σ(w_custom−w_std)·component`. **Exact for a standard league
+by construction** (all deltas 0 ⇒ the canned column), robust to whatever the vendor baked in, and it
+touches only the components that changed — applied with the **same weights on both sides** (`proj_*` and
+`nfl_stats`) so residuals stay matched. **Supported:** any PPR value (incl. 0.75), any TD/yardage rate
+(6-pt pass TD), and **position-conditional reception bonuses** (`bonus_rec_te`/`_rb`/`_wr`/`_qb` = TE
+premium) as `bonus·receptions` gated on position. **Rejected — raises naming the key, never silently
+mis-scores (law 2):** first-down (`pass_fd`/`rush_fd`/`rec_fd`) and threshold/yardage bonuses
+(`bonus_rush_yd_100`, …) — the projections carry no component, so the *center* can't be scored faithfully;
+they unlock when a component-carrying projection source lands in-season (ffanalytics/FantasyPros).
+Turnovers/2pt are carried in the baseline at the standard rate (tolerance, as before). **Interface:**
+`recompute_custom_points(scoring, side)` now returns a `pl.Expr` (the delta engine); `projection_column`
+→ `projection_points_expr(profile, scoring)`; `actual_points_expr` gains `scoring`; the sole call site
+`compute_projection_consensus.compute(season, scoring=None)` is now **injectable** (defaults to the
+persisted settings) so the gate can exercise custom profiles without touching the parquet. **Gate**
+(`backtest_scoring_recompute.py`, exit 0, reconciliation-style — the "answer key" is the canned columns):
+(A) **equivalence** — custom path reproduces the canned columns on standard inputs (actuals **exact 0.0**,
+projections **~0.01** = 2-dp component rounding); (B) **custom deltas exact** — 6-pt pass TD Δ = +2·pass_td,
+TE premium Δ = +0.5·rec **TE-only**, 0.75-PPR Δ = −0.25·rec; (C) **rejection** raises naming the key;
+(D) **end-to-end** — consensus runs under a real custom profile (0.75-PPR + 6-pt pass TD + TE premium),
+**100% of QB centers rise**. **Verified no-regression:** recompute with the real (ppr) settings equals the
+on-disk `projection_consensus_2025.parquet` **frame-for-frame**, so VOR/True Rank/Positional Depth/Bracket
+gates (which read it) are unaffected; and **VOR runs on a custom consensus** in-memory (the downstream
+seam proven). **Custom leagues now run the whole read spine.** **Next in the "any league" project:**
+seeding tiebreakers/divisions in the bracket sim; roster-shape/superflex generalization (the leakage
+miss-attribution + VOR superflex latents); richer custom scoring (first-down/threshold) when the
+projection source carries the component.
+
+> earlier build
 **League settings drive scoring + playoff behavior (foundation for the "any league" project).**
 The §5 bracket-sim review surfaced two things that were hardcoded/generic instead of read from the
 league; this closes both. **The trigger:** the sim's playoff cut was **inferred from the schedule and
@@ -98,37 +133,6 @@ quantitative skeleton, manager dossiers (§7), and the **front-end surfacing** o
 forward reads (Spread/VOR/True Rank/Positional Depth/Bracket Odds) — plus the posture *presentation*
 (True Rank + odds shown adjacent, the risk-appetite lens).
 
-> earlier build
-**Phase 3 COMPLETE — Positional Depth (§6) ships: the VOR read re-sliced by position vs. league.**
-The **4th and last** Phase-3 cash-in read, and the third re-aggregation of the Production VOR
-substrate (after True Rank §5). `compute_positional_depth.py` → `derived/positional_depth_2025.parquet`,
-per (as_of_week, roster_id, **fine position** QB/RB/WR/TE — not VOR's QB/FLEX pool, since the value
-is per-position "deep at WR, thin at TE"). Per law 3 it borrows nothing new — it re-slices the borrowed
-`ros_value`/`vor` **net of the position's dedicated starting requirement** (`starter_need` from
-`lineup_slots`: QB1/RB2/WR2/TE1; the shared FLEX×2 is *excluded*, so flex-worthy depth surfaces as
-surplus — which is exactly what makes it trade capital). Each row carries `starter_value`,
-`surplus_value` + `surplus_startable` (beyond-need players clearing the waiver line, vor>0 = real
-depth), `marginal_vor` (the last dedicated starter's VOR — the **gap indicator**, ≤0 = starting
-replacement level), a league-relative `spectrum_pos` **within each position cohort** (the "vs league"
-benchmark), and an **advisory** `surplus/adequate/gap` `shape` (evidence-first; numbers lead, the
-manager adjudicates the trade/waiver — per the advisory-framing principle). **One row per (team,
-position) even at zero roster count**, so a body-count gap isn't invisible in a rostered-only frame.
-Tall over as_of_week (roster-as-of-N inherited from the VOR slice). **Verified 2025 wk4:** 40 rows
-(10 teams × 4 pos); the re-slice is **lossless** — per-position `rostered_value` sums back to the
-team's total VOR `ros_value` (diff ~4e-13); shape split 26 adequate / 8 gap / 6 surplus; a weak-QB
-roster flags a QB gap (`marginal_vor` −1.478, worst in league). **Gate** (`backtest_positional_depth.py`,
-exit 0): per position, projected `starter_value` tracks each team's **actual ROS ceiling** (top-need
-by realized points — management-independent, the True-Rank answer-key style) at **QB 0.792 / RB 0.867
-/ WR 0.855 / TE 0.928, mean 0.861** (freeze wk4, n=10/pos, floor 0.50); the top half by projected
-strength out-produces the bottom half by **+85.3** actual ceiling. Small-sample honest (freeze is the
-gate; pooled Pearson 0.971 is evidence). `data_layer.write/read_positional_depth`; no UI (data + gate,
-like VOR/True Rank). **This closes the Phase-3 read set (4/4).** **Next — Phase 4 (integration + going
-live):** the §5 bracket-math Monte Carlo (the full posture read, consumes True Rank + weekly-spread
-variance), the §2 ROS-outcome-shape quantitative skeleton, and manager dossiers (§7) — plus the
-deliberate **front-end surfacing** of these four gated forward reads (VOR/True Rank/Positional
-Depth/Spread), which have shipped as data only. Cross-source disagreement (Phase-2 2nd half) stays
-blocked at the freeze → in-season ffanalytics.
-
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
@@ -163,6 +167,7 @@ blocked at the freeze → in-season ffanalytics.
     - Phase 3 Positional Depth (§6) — compute_positional_depth.py → derived/positional_depth_{season}.parquet, the 4th and last Phase-3 cash-in read (3rd VOR re-aggregation). Per (as_of_week, roster_id, fine position QB/RB/WR/TE): re-slices the borrowed ros_value/vor net of the position's dedicated starter_need (from lineup_slots; shared FLEX excluded → flex-worthy depth = surplus). Carries starter_value, surplus_value + surplus_startable (beyond-need vor>0), marginal_vor (last dedicated starter's VOR = gap indicator), spectrum_pos within each position cohort, advisory surplus/adequate/gap shape (evidence-first). One row per (team, position) even at zero count (body-count gaps visible). Tall over as_of_week (roster-as-of-N from VOR). New data_layer write/read_positional_depth. Lossless re-slice (per-pos rostered_value sums to team VOR ros_value). Gate (backtest_positional_depth.py, exit 0): per position, projected starter_value tracks actual ROS ceiling (top-need by realized pts) at QB 0.792 / RB 0.867 / WR 0.855 / TE 0.928, mean 0.861 (freeze wk4, n=10/pos, floor 0.50); top half +85.3 over bottom. No UI (data+gate). Closes the Phase-3 read set (4/4).
     - Phase 4 Bracket Odds (§5 bracket-math) — compute_bracket_sim.py → derived/bracket_odds_{season}.parquet, the bracket-math half of Posture (with True Rank = §5 complete). Per team weekly score dist (μ = optimal-lineup Σ center_ppr, σ = √Σ band_ppr²; starters independent), analytic per-matchup win prob Φ((μA−μB)/√(σA²+σB²)) via math.erf; standings as-of-N from actual results; Monte Carlo (numpy, fixed seed, 10k) over the real remaining schedule → playoff_odds, proj_wins/points, avg_seed, magic_wins. Enabled by raw Sleeper matchups existing for all 18 wks. Playoff config (REG_SEASON_END_WEEK=15, PLAYOFF_TEAMS=6) inferred from schedule — documented latent. New data_layer write/read_bracket_odds + read_season_matchups. Verified wk4: Σ playoff_odds=6.00 (hard invariant); deterministic. Gate (backtest_bracket_sim.py, exit 0, config-light): Brier 0.224 beats coin-flip; expected wins vs actual Spearman 0.756; top-6 by odds = 6/6 actual playoff teams. numpy is the one compute dep. Simplifications: starter independence, Normal draw (no §3 skew), frozen-roster byes reduce μ. **[Superseded: the playoff config REG_SEASON_END_WEEK/PLAYOFF_TEAMS is now read from real league settings — 4 teams, not the wrong inferred 6 — see the league-settings build.]**
     - League settings (scoring + playoff) persisted + consumed — sleeper.py fetch-league-config pulls scoring_settings + playoff config from the /league object → data_layer write/read_league_settings (tall section/key/value) + read_scoring_settings/read_playoff_settings. transforms/_scoring.py dispatcher: scoring_profile ppr/half/std/custom; standard selects the canned projection column + nfl_stats actual expr; custom → recompute_custom_points() stub (raises; engine is the next project). Wired into compute_projection_consensus (scoring, byte-identical for this ppr league) + compute_bracket_sim/backtest (playoff via _playoff_config, injected, no hardcoded fallback). Real league: playoff_teams=4, playoff_week_start=16, profile=ppr. Corrects the sim's playoff cut 6→4 (Σ playoff_odds=4.00); all gates green. Standard PPR/half/std leagues now supported; foundation for the "any league" project.
+    - Custom-scoring recompute engine ("any league" piece 1) — fills `_scoring.recompute_custom_points()` (was a stub that raised) with a **delta-on-canned-baseline** engine: `points_league = std_baseline (proj_pts_std/fantasy_points) + Σ(w_custom−w_std)·component`, exact for standard by construction. Same weights on `proj_*` + `nfl_stats` so residuals stay matched. Supports non-{0,.5,1} PPR, 6-pt pass TD, non-standard yardage/TD, position-conditional reception bonuses (TE premium `bonus_rec_te`/`_rb`/`_wr`/`_qb`); rejects (raises, names key) first-down / threshold-yardage bonuses (no projection component); turnovers/2pt carried in baseline (tolerance). `recompute_custom_points(scoring, side)` → `pl.Expr`; `projection_column`→`projection_points_expr`; `actual_points_expr` gains scoring; `compute_projection_consensus.compute(season, scoring=None)` injectable. New `backtest_scoring_recompute.py` (exit 0): equivalence (custom==canned on standard: actuals exact, proj ~0.01 rounding), exact custom deltas, rejection, end-to-end custom consensus (100% QB centers rise under 6-pt pass TD). No-regression: real-ppr recompute == on-disk consensus parquet frame-for-frame (downstream gates unaffected); VOR runs on a custom consensus. Custom leagues now run the whole read spine.
 
 > not yet built
     >> backend
