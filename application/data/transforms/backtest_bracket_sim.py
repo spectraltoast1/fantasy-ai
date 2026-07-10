@@ -35,12 +35,16 @@ sys.path.insert(0, str(_TRANSFORMS_DIR))
 import data_layer
 from _analytics import mean, pearson, expand_slots
 from compute_production_vor import _roster_as_of
+import numpy as np
+
 from compute_bracket_sim import (
     SKILL_POSITIONS,
     _playoff_config,
+    _seed_table,
     _standings_as_of,
     _team_week_dist,
     _win_prob,
+    compute as _bracket_compute,
 )
 
 # Brier must beat the 0.25 coin-flip baseline by at least this margin.
@@ -181,11 +185,40 @@ def run(season: int) -> bool:
     except Exception as e:  # bracket_odds not built yet — evidence only, never gates
         print(f"  evidence: (bracket_odds parquet not available: {e})")
 
-    ok = brier_ok and corr_ok
+    # --- Determinism + invariant (the fixed SEED must reproduce; Σ odds = playoff_teams) ---
+    _reg, playoff_teams = _playoff_config(season)
+    a = _bracket_compute(season).sort(["as_of_week", "roster_id"])
+    b = _bracket_compute(season).sort(["as_of_week", "roster_id"])
+    det_ok = a.equals(b)
+    sums = a.group_by("as_of_week").agg(pl.col("playoff_odds").sum().alias("s"))["s"].to_list()
+    inv_ok = all(abs(s - playoff_teams) < 0.02 for s in sums)
+    print()
+    print(f"  determinism: two runs frame-equal = {det_ok}  {'PASS' if det_ok else 'FAIL'}")
+    print(f"  invariant:   Σ playoff_odds ≈ {playoff_teams} every as-of week = {inv_ok}  {'PASS' if inv_ok else 'FAIL'}")
+
+    # --- Synthetic division-seeding correctness (no real division league in the answer key) ---
+    # 10 teams, 2 divisions; div-1's winner (idx 5, 5 wins) has a worse record than several div-0
+    # non-winners. Division-aware seeding must still seat the division winner in the top slots
+    # (Sleeper default), so it makes the bracket where flat seeding drops it for a higher-record team.
+    wins = np.array([[10., 9., 8., 7., 6., 5., 1., 1., 1., 1.]])
+    pts = np.array([[500., 490., 480., 470., 460., 450., 400., 400., 400., 400.]])
+    divs = [0, 0, 0, 0, 0, 1, 1, 1, 1, 1]
+    seed_flat, made_flat = _seed_table(wins, pts, 4, None)
+    seed_div, made_div = _seed_table(wins, pts, 4, divs)
+    div_ok = (
+        bool(made_div[0, 5]) and not bool(made_flat[0, 5])   # div winner makes it only w/ divisions
+        and int(seed_div[0, 5]) <= 2                          # division winners take the top seeds
+        and not bool(made_div[0, 3]) and bool(made_flat[0, 3])  # a higher-record non-winner is bumped
+    )
+    print(f"  synthetic divisions: low-record division winner seeded ahead of wildcards = {div_ok}  "
+          f"{'PASS' if div_ok else 'FAIL'}  (div-winner seed={int(seed_div[0,5])}, flat made={bool(made_flat[0,5])})")
+
+    ok = brier_ok and corr_ok and det_ok and inv_ok and div_ok
     print()
     print(f"  VERDICT: {'PASS' if ok else 'FAIL'} — win probabilities "
           f"{'beat' if brier_ok else 'do NOT beat'} coin-flip (Brier {brier:.3f}); expected wins "
-          f"{'track' if corr_ok else 'do NOT track'} actual (Spearman {r_s:.2f}).")
+          f"{'track' if corr_ok else 'do NOT track'} actual (Spearman {r_s:.2f}); sim deterministic; "
+          f"division seeding correct on the synthetic league.")
     return ok
 
 

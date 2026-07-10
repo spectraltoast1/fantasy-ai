@@ -270,8 +270,11 @@ def fetch_league_config(league_id: str, year: int) -> None:
     settings = league.get("settings") or {}
     # Only the playoff/postseason keys the sim needs; the full settings blob has dozens of
     # unrelated knobs (waiver_type, trade_deadline, …) — keep the persisted set intentional.
+    # `divisions` is the division count — the bracket sim seeds division winners ahead of
+    # wildcards when it's ≥ 2 (the per-roster division assignment lives on the rosters endpoint;
+    # persisting that map onto the teams entity is a follow-up when a real division league lands).
     playoff_keys = ("playoff_teams", "playoff_week_start", "playoff_type",
-                    "playoff_round_type", "playoff_seed_type", "num_teams")
+                    "playoff_round_type", "playoff_seed_type", "num_teams", "divisions")
 
     rows = []
     for key, value in scoring.items():
