@@ -695,3 +695,51 @@ def write_ros_outcome_shape(df: pl.DataFrame, season: int) -> None:
 def read_ros_outcome_shape(season: int, as_of_week=None) -> pl.DataFrame:
     """Read the ROS Outcome Shape read for one as-of week (default = latest)."""
     return _as_of_slice(pl.read_parquet(_ros_outcome_shape_path(season)), as_of_week)
+
+
+# --- Manager Activity (cross-league, DECISION_READS.md §7) ---
+# The FIRST cross-league / user-keyed entity — every other store is single-league,
+# per-season. Acquired by sleeper.py's `fetch-manager-activity` mode: for each manager in
+# the target league, their behaviour across their *comparable* other Sleeper leagues (same
+# scoring profile + size + QB structure + format). `owner_id` (Sleeper user_id) is the
+# identity key and `source_league_id` / `source_season` are COLUMNS (the projections
+# "source-as-a-column" idiom) so one tall file spans every manager, league, and season.
+# Two row kinds share the file (a `kind` column): "league" markers (one per searched
+# comparable league — so a league a manager was inactive in still counts toward signal
+# depth) and "txn" rows (one per that manager's transaction). Written INCREMENTALLY per
+# manager (replace-by-owner_id), so a mid-fan-out failure leaves completed managers on disk
+# and a re-run is idempotent — the leaguelogs reliability lesson applied to an expensive
+# once-a-season fan-out. Consumed by compute_manager_features.py.
+
+
+def _manager_activity_path(season: int) -> Path:
+    return _SNAPSHOT_DIR / "sleeper" / str(season) / f"manager_activity_{season}.parquet"
+
+
+def write_manager_activity(df: pl.DataFrame, season: int, owner_id: str) -> None:
+    """Append one manager's complete activity slice to the season file (replace-by-owner_id).
+
+    `df` is treated as the COMPLETE set of rows for `owner_id` (their league markers + txn
+    rows). If the season file exists, any existing rows for that owner_id are dropped first
+    so re-fetching a manager replaces their slice rather than duplicating (and a stale
+    no-longer-comparable league can't linger). Concat is diagonal so a schema tweak on a
+    later run doesn't break the append.
+    """
+    path = _manager_activity_path(season)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        existing = pl.read_parquet(path).filter(pl.col("owner_id") != owner_id)
+        df = pl.concat([existing, df], how="diagonal")
+    df.write_parquet(path)
+
+
+def read_manager_activity(season: int, owner_id: str | None = None) -> pl.DataFrame:
+    """Read the cross-league manager activity for a season, optionally one manager."""
+    df = pl.read_parquet(_manager_activity_path(season))
+    if owner_id is not None:
+        df = df.filter(pl.col("owner_id") == owner_id)
+    return df
+
+
+def manager_activity_exists(season: int) -> bool:
+    return _manager_activity_path(season).exists()
