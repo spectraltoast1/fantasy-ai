@@ -69,7 +69,7 @@ sys.path.insert(0, str(_TRANSFORMS_DIR.parent))  # application/data → data_lay
 sys.path.insert(0, str(_TRANSFORMS_DIR))          # transforms → _analytics
 import data_layer
 from _analytics import round1, skewness, stdev
-from _scoring import scoring_profile, projection_column, actual_points_expr
+from _scoring import scoring_profile, projection_points_expr, actual_points_expr
 
 # Variance-shrink weight, in "games of prior": the player's residual variance is pooled
 # with the positional prior as (n·player_var + K·pos_var)/(n + K). Mirrors
@@ -189,27 +189,32 @@ def _residuals(consensus: pl.DataFrame, actual: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def compute(season: int) -> pl.DataFrame:
-    # Scoring dispatcher: the league's scoring_settings pick the projection column + the actual
-    # column, so center/residuals are league-scored. Standard (ppr/half/std) is selected here;
-    # custom scoring raises in the selectors (its recompute engine is the next project). The
+def compute(season: int, scoring: dict | None = None) -> pl.DataFrame:
+    # Scoring dispatcher: the league's scoring_settings pick the projection + actual points, so
+    # center/residuals are league-scored. Standard (ppr/half/std) selects the canned columns; custom
+    # is recomputed by the delta engine in _scoring. `scoring` is injectable (defaults to the persisted
+    # league settings) so the backtest can exercise custom profiles without touching the parquet. The
     # output column names keep the *_ppr suffix (a documented wart — they now hold league points).
-    profile = scoring_profile(data_layer.read_scoring_settings(season))
-    proj_col = projection_column(profile)
+    if scoring is None:
+        scoring = data_layer.read_scoring_settings(season)
+    profile = scoring_profile(scoring)
 
-    proj = data_layer.read_projections(season)
+    # League-scored projected points, per source row, before the cross-source consensus median.
+    proj = data_layer.read_projections(season).with_columns(
+        projection_points_expr(profile, scoring).alias("proj_pts_league")
+    )
     actual = (
         data_layer.read_nfl_stats(season)
         .select(
             "sleeper_player_id", pl.col("week").cast(pl.Int64),
-            actual_points_expr(profile).alias("actual_ppr"),
+            actual_points_expr(profile, scoring).alias("actual_ppr"),
         )
         .drop_nulls("sleeper_player_id")
         .group_by("sleeper_player_id", "week")
         .agg(pl.col("actual_ppr").first())
     )
 
-    consensus = _consensus_frame(proj, proj_col)
+    consensus = _consensus_frame(proj, "proj_pts_league")
     matched = _residuals(consensus, actual)
 
     # Positional residual-std + residual-skew priors over the full pool (borrowed
