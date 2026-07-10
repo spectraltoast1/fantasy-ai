@@ -7,6 +7,7 @@ Public API:
 """
 
 import json
+import random
 import sys
 import time
 from datetime import datetime, timezone
@@ -64,13 +65,68 @@ _PROJECTIONS_SCHEMA = {
 
 
 # ---------------------------------------------------------------------------
+# Shared HTTP (timeout + retry/backoff + throttle)
+# ---------------------------------------------------------------------------
+# Sleeper has no documented hard rate limit but asks for < ~1000 calls/min. The
+# once-a-season manager-activity fan-out (~10 managers x <=5 leagues x ~17 weeks)
+# issues hundreds of calls, so every request routes through _get_json: a bounded
+# timeout, exponential-backoff retry on transient failures (timeouts / connection
+# resets / 5xx), and an optional module-level throttle the fan-out raises to space
+# calls. Existing single-shot callers get the timeout + retry for free at the
+# default throttle of 0 (behaviour-preserving).
+_HTTP_TIMEOUT = 15.0     # seconds per request
+_HTTP_RETRIES = 4        # total attempts before giving up
+_HTTP_BACKOFF = 0.5      # base backoff seconds (exponential + jitter)
+_throttle_seconds = 0.0  # min gap between calls; set_throttle() raises it for the fan-out
+_last_call = 0.0
+
+
+def set_throttle(seconds: float) -> None:
+    """Set the minimum gap enforced between _get_json calls (0 disables)."""
+    global _throttle_seconds
+    _throttle_seconds = max(0.0, seconds)
+
+
+def _get_json(url: str, params=None, *, timeout: float = _HTTP_TIMEOUT,
+              retries: int = _HTTP_RETRIES, backoff: float = _HTTP_BACKOFF):
+    """GET `url` and return parsed JSON, with throttle + timeout + retry/backoff.
+
+    Retries transient failures (request timeouts, connection errors, and 5xx responses)
+    with exponential backoff + jitter, raising the last error after `retries` attempts.
+    Client errors (4xx) raise immediately and are NOT retried — a 404 for a season a
+    manager never played is an expected, non-transient "no leagues" the caller handles.
+    Honors the module-level throttle set via set_throttle().
+    """
+    global _last_call
+    last_exc = None
+    for attempt in range(retries):
+        if _throttle_seconds:
+            gap = time.monotonic() - _last_call
+            if gap < _throttle_seconds:
+                time.sleep(_throttle_seconds - gap)
+        try:
+            resp = requests.get(url, params=params, timeout=timeout)
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            last_exc = exc                       # transient network failure -> retry
+        else:
+            _last_call = time.monotonic()
+            if 400 <= resp.status_code < 500:
+                resp.raise_for_status()          # client error -> raise now, not transient
+            if resp.status_code < 400:
+                return resp.json()               # success
+            last_exc = requests.HTTPError(       # 5xx -> transient, retry
+                f"{resp.status_code} Server Error for url: {url}", response=resp)
+        if attempt < retries - 1:
+            time.sleep(backoff * (2 ** attempt) + random.uniform(0.0, backoff))
+    raise last_exc
+
+
+# ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
 
 def _get_nfl_state() -> dict:
-    resp = requests.get(f"{_SLEEPER_BASE}/state/nfl")
-    resp.raise_for_status()
-    return resp.json()
+    return _get_json(f"{_SLEEPER_BASE}/state/nfl")
 
 
 def _determine_completed_weeks(state: dict, year: int) -> int:
@@ -156,9 +212,7 @@ def fetch_players(force: bool = False) -> None:
             return
 
     print("  Fetching /players/nfl from Sleeper...")
-    resp = requests.get(f"{_SLEEPER_BASE}/players/nfl")
-    resp.raise_for_status()
-    raw: dict = resp.json()
+    raw: dict = _get_json(f"{_SLEEPER_BASE}/players/nfl")
 
     rows = []
     for player_id, player in raw.items():
@@ -185,20 +239,17 @@ def fetch_players(force: bool = False) -> None:
 def fetch_teams(league_id: str, year: int) -> None:
     """Fetch league users + rosters and write a roster_id → names map for the season.
 
-    Produces teams_{year}.parquet (roster_id, team_name, owner_name) via data_layer.
-    `team_name` is the manager's custom team name (users[].metadata.team_name); it is
-    null when a manager never set one — the consumer falls back to `owner_name`
-    (their Sleeper display_name).
+    Produces teams_{year}.parquet (roster_id, team_name, owner_name, owner_id) via
+    data_layer. `team_name` is the manager's custom team name (users[].metadata.team_name);
+    it is null when a manager never set one — the consumer falls back to `owner_name`
+    (their Sleeper display_name). `owner_id` is the Sleeper user_id — the identity join
+    key the cross-league manager dossiers (DECISION_READS.md §7) key on; previously
+    dropped, it's read here transiently for the name lookup already.
     """
     print(f"Fetching Sleeper teams for league {league_id} ({year})...")
 
-    resp = requests.get(f"{_SLEEPER_BASE}/league/{league_id}/users")
-    resp.raise_for_status()
-    users = resp.json()
-
-    resp = requests.get(f"{_SLEEPER_BASE}/league/{league_id}/rosters")
-    resp.raise_for_status()
-    rosters = resp.json()
+    users = _get_json(f"{_SLEEPER_BASE}/league/{league_id}/users")
+    rosters = _get_json(f"{_SLEEPER_BASE}/league/{league_id}/rosters")
 
     # user_id → (display_name, custom team name)
     users_by_id = {
@@ -216,6 +267,7 @@ def fetch_teams(league_id: str, year: int) -> None:
             "roster_id": int(r["roster_id"]),
             "team_name": team_name,
             "owner_name": display_name,
+            "owner_id": r.get("owner_id"),
         })
 
     df = pl.from_dicts(rows)
@@ -234,9 +286,7 @@ def fetch_roster_positions(league_id: str, year: int) -> None:
     """
     print(f"Fetching Sleeper roster_positions for league {league_id} ({year})...")
 
-    resp = requests.get(f"{_SLEEPER_BASE}/league/{league_id}")
-    resp.raise_for_status()
-    league = resp.json()
+    league = _get_json(f"{_SLEEPER_BASE}/league/{league_id}")
 
     slots = league.get("roster_positions") or []
     if not slots:
@@ -262,9 +312,7 @@ def fetch_league_config(league_id: str, year: int) -> None:
     """
     print(f"Fetching Sleeper league config for league {league_id} ({year})...")
 
-    resp = requests.get(f"{_SLEEPER_BASE}/league/{league_id}")
-    resp.raise_for_status()
-    league = resp.json()
+    league = _get_json(f"{_SLEEPER_BASE}/league/{league_id}")
 
     scoring = league.get("scoring_settings") or {}
     settings = league.get("settings") or {}
@@ -353,7 +401,7 @@ def fetch_projections(season: int, week: int) -> bool:
     an empty response.
     """
     now = datetime.now(timezone.utc)
-    resp = requests.get(
+    payload = _get_json(
         f"{_SLEEPER_STATS_BASE}/projections/nfl/{season}/{week}",
         params={
             "season_type": "regular",
@@ -361,9 +409,8 @@ def fetch_projections(season: int, week: int) -> bool:
             "order_by": "pts_ppr",
         },
     )
-    resp.raise_for_status()
     rows = _projection_rows(
-        resp.json(), season, week, now.date(), now.isoformat(timespec="seconds")
+        payload, season, week, now.date(), now.isoformat(timespec="seconds")
     )
     if not rows:
         print(f"  projections {season} week {week}: empty response — skipping write.")
@@ -399,13 +446,11 @@ def backfill(league_id: str, year: int) -> None:
     for week in range(1, completed_weeks + 1):
         print(f"  Week {week}/{completed_weeks}...")
 
-        resp = requests.get(f"{_SLEEPER_BASE}/league/{league_id}/matchups/{week}")
-        resp.raise_for_status()
-        _snapshot_list(resp.json(), data_layer.write_sleeper_matchups, year, week, f"matchups week {week}")
+        _snapshot_list(_get_json(f"{_SLEEPER_BASE}/league/{league_id}/matchups/{week}"),
+                       data_layer.write_sleeper_matchups, year, week, f"matchups week {week}")
 
-        resp = requests.get(f"{_SLEEPER_BASE}/league/{league_id}/transactions/{week}")
-        resp.raise_for_status()
-        _snapshot_list(resp.json(), data_layer.write_sleeper_transactions, year, week, f"transactions week {week}")
+        _snapshot_list(_get_json(f"{_SLEEPER_BASE}/league/{league_id}/transactions/{week}"),
+                       data_layer.write_sleeper_transactions, year, week, f"transactions week {week}")
 
         time.sleep(0.5)
 
@@ -422,37 +467,22 @@ def refresh(league_id: str) -> None:
     print(f"  Current season: {year}, current week: {week}")
 
     # Cache files — current state only, overwritten each run
-    resp = requests.get(f"{_SLEEPER_BASE}/league/{league_id}")
-    resp.raise_for_status()
-    _write_json(resp.json(), CACHE_DIR / "league.json")
-
-    resp = requests.get(f"{_SLEEPER_BASE}/league/{league_id}/users")
-    resp.raise_for_status()
-    _write_json(resp.json(), CACHE_DIR / "users.json")
-
-    resp = requests.get(f"{_SLEEPER_BASE}/league/{league_id}/rosters")
-    resp.raise_for_status()
-    _write_json(resp.json(), CACHE_DIR / "rosters.json")
-
-    resp = requests.get(f"{_SLEEPER_BASE}/league/{league_id}/winners_bracket")
-    resp.raise_for_status()
-    _write_json(resp.json(), CACHE_DIR / "winners_bracket.json")
-
-    resp = requests.get(f"{_SLEEPER_BASE}/league/{league_id}/losers_bracket")
-    resp.raise_for_status()
-    _write_json(resp.json(), CACHE_DIR / "losers_bracket.json")
+    _write_json(_get_json(f"{_SLEEPER_BASE}/league/{league_id}"), CACHE_DIR / "league.json")
+    _write_json(_get_json(f"{_SLEEPER_BASE}/league/{league_id}/users"), CACHE_DIR / "users.json")
+    _write_json(_get_json(f"{_SLEEPER_BASE}/league/{league_id}/rosters"), CACHE_DIR / "rosters.json")
+    _write_json(_get_json(f"{_SLEEPER_BASE}/league/{league_id}/winners_bracket"),
+                CACHE_DIR / "winners_bracket.json")
+    _write_json(_get_json(f"{_SLEEPER_BASE}/league/{league_id}/losers_bracket"),
+                CACHE_DIR / "losers_bracket.json")
 
     # Players registry — refreshed at most once per 24 hours.
     fetch_players()
 
     # Current week snapshots — same entities as backfill
-    resp = requests.get(f"{_SLEEPER_BASE}/league/{league_id}/matchups/{week}")
-    resp.raise_for_status()
-    _snapshot_list(resp.json(), data_layer.write_sleeper_matchups, year, week, f"matchups week {week}")
-
-    resp = requests.get(f"{_SLEEPER_BASE}/league/{league_id}/transactions/{week}")
-    resp.raise_for_status()
-    _snapshot_list(resp.json(), data_layer.write_sleeper_transactions, year, week, f"transactions week {week}")
+    _snapshot_list(_get_json(f"{_SLEEPER_BASE}/league/{league_id}/matchups/{week}"),
+                   data_layer.write_sleeper_matchups, year, week, f"matchups week {week}")
+    _snapshot_list(_get_json(f"{_SLEEPER_BASE}/league/{league_id}/transactions/{week}"),
+                   data_layer.write_sleeper_transactions, year, week, f"transactions week {week}")
 
     print(f"Refresh complete for league {league_id}.")
 
