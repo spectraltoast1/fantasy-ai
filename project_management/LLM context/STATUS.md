@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-07-10 (§7 Manager Dossiers reshaped into a **cross-league, Claude-API-key-gated AI read** — the design, locked parameters, and buildable facts are recorded in `DECISION_READS.md` §7 for the next build session (a docs-only planning session; no code). Prior build: the §2 ROS Outcome Shape skeleton shipped — bull/bear = borrowed ROS centre ± BULL_Z·√Σband², calibration-gated (coverage 0.835), completing the player-read backend §1–§4. Phase 4 still UNDERWAY — remaining: §7 dossiers (design recorded) + front-end surfacing)
+**Last updated:** 2026-07-10 (§7 Manager Dossiers **Phase A shipped** — the cross-league acquisition + deterministic behavioral features, the credit-free substrate the Phase-B AI writer consumes: `fetch-manager-activity` fan-out → `manager_activity_{season}` (first cross-league / user-keyed entity) + `compute_manager_features.py` → `manager_features_{season}`, internal-consistency-gated. Verified live 2025 (10 managers, 431 activity rows, gate exit 0). Prior build: the §2 ROS Outcome Shape skeleton. Phase 4 still UNDERWAY — remaining: **§7 dossiers Phase B** (the API-key-gated Haiku writer) + front-end surfacing)
 **Target ship:** NFL kickoff, mid August 2026
 
 ---
@@ -34,6 +34,49 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**Manager Dossiers Phase A — cross-league acquisition + deterministic behavioral features (§7).**
+The credit-free substrate the Phase-B AI dossier writer consumes, built because one league's
+transaction record is too thin to profile anyone (this league had ~2 trades all season; managers
+have 9–118 moves in their *other* comparable leagues). **Three commits.** (1) **Foundation:**
+`fetch_teams` now persists `owner_id` (the Sleeper user_id — the identity join key it dropped;
+teams_2025 regenerated, 10/10 non-null, additive so the front-end's named-column reads are
+unaffected); new `_get_json` in `sleeper.py` — bounded timeout + exponential-backoff retry on
+transient failures (timeouts/resets/5xx; 4xx raise now) + an optional module throttle for the
+fan-out — and **all** bare `requests.get` calls routed through it (behaviour-preserving).
+(2) **Acquisition:** new pure `transforms/_manager.py` (comparability + attribution helpers,
+reuses `_scoring.scoring_profile`; shared by the fetch mode, the transform, and the gate — one
+source of truth); `sleeper.py fetch-manager-activity <season> [--me] [--limit N] [--throttle S]`
+fans out per manager to their **comparable** other leagues (same scoring profile + size + QB
+structure + format; **redraft-only for V1**, format tagged so dynasty turns on later), selecting
+≤5 across the current + 2 prior seasons **biased to the prior season**. Classifies candidates
+straight off the `/user/.../leagues` payload (verified it carries scoring_settings +
+roster_positions + settings) so **no per-candidate league fetch**. Persists **incrementally per
+manager** (replace-by-owner_id) so a mid-fan-out failure is recoverable and a re-run is idempotent
+(the leaguelogs reliability lesson). New **`manager_activity_{season}`** — the **first cross-league
+/ user-keyed entity** (`owner_id` key; `source_league_id`/`source_season` as columns, the
+projections idiom); two row kinds (`league` markers so a searched-but-inactive league still counts
+toward depth + `txn` rows). (3) **Features:** `compute_manager_features.py` →
+`manager_features_{season}` (one row per manager): FAAB aggression (bid-as-fraction-of-budget,
+budget-spent counting only *completed* waivers), waiver/free-agent mix, waiver success rate,
+add/drop churn, trade frequency, positional lean of adds (skill only), + signal-depth counts
+(n_leagues/n_seasons/n_transactions) + `depth_tier` + `is_primary` (Phase-B blindspot framing).
+SOLID shape (pure `manager_features` with injected constants). **Rate/lean features are null when
+undefined — never a fabricated 0** (law 2 / the `_analytics` None convention). **Gate**
+(`backtest_manager_features.py`, exit 0 — behaviour has no answer key, so **internal consistency**):
+(1) comparability invariant (every source league matches the target on all 4 axes, grounded against
+persisted scoring/size/roster facts — 0 leaked), (2) accounting round-trip (independent
+re-aggregation of counts; fractions ∈ [0,1]; shares sum to 1), (3) signal-depth honesty (all
+managers profiled; zero-signal → null, no fabrication). **Verified live 2025:** all 10 managers
+captured (431 activity rows), 0 non-comparable leagues leaked, prior-season bias working; real
+differentiation (waiver success 0.0–0.91, bid-fraction 0.03–0.26, Mr1854 RB-heavy 0.59 vs
+reeschilling WR-heavy 0.62). Signal depth is honestly thin (mostly 1 league / 1 season — this
+friend group plays recurring leagues together), exactly the case the Phase-B confidence gate is for.
+No AI, no credits, no UI (data + gate). **Next — §7 Phase B:** the API-key-gated Haiku dossier
+writer (Batch API + prompt caching + pre-filtered features, fixed dossier schema, blindspot framing
+for the primary user, hardcoded zero-signal message, run-once-per-season guard); design in
+`DECISION_READS.md` §7.
+
+> earlier build
 **ROS Outcome Shape — the §2 bull/bear/situation quantitative skeleton (completes the player-read backend, §1–§4).**
 The forward player read that frames "what's the realistic rest-of-season range for this player, and how solid
 is the ground under the bet?" — built as the **ROS-horizon analog of the already-calibrated §3 weekly spread.**
@@ -97,41 +140,6 @@ division winner is seeded into the top slots and makes the bracket where flat se
 dossiers (§7), and front-end surfacing of the gated forward reads. *(Update 2026-07-10: the §2 skeleton
 has since shipped — see the most recent build. Remaining Phase 4 is now §7 + front-end surfacing.)*
 
-> earlier build
-**Custom-scoring recompute engine — the "any league" project's first piece (fills the stub).**
-The last build left `_scoring.recompute_custom_points()` as a stub that **raised**: standard PPR/half/std
-leagues ran, any custom scoring hard-failed. This builds the engine. **Design — delta on the canned
-baseline, not from-scratch:** the data settled it — RotoWire's `proj_pts_ppr` is **not** reconstructable
-from the 7 exposed projection components (off by up to ~2 pts; it bakes in projected turnovers/minor
-bonuses the components don't expose). So the engine takes the **standard canned baseline**
-(`proj_pts_std` / `fantasy_points`) and adds, per component, only the *delta* between the league's weight
-and standard: `points_league = std_baseline + Σ(w_custom−w_std)·component`. **Exact for a standard league
-by construction** (all deltas 0 ⇒ the canned column), robust to whatever the vendor baked in, and it
-touches only the components that changed — applied with the **same weights on both sides** (`proj_*` and
-`nfl_stats`) so residuals stay matched. **Supported:** any PPR value (incl. 0.75), any TD/yardage rate
-(6-pt pass TD), and **position-conditional reception bonuses** (`bonus_rec_te`/`_rb`/`_wr`/`_qb` = TE
-premium) as `bonus·receptions` gated on position. **Rejected — raises naming the key, never silently
-mis-scores (law 2):** first-down (`pass_fd`/`rush_fd`/`rec_fd`) and threshold/yardage bonuses
-(`bonus_rush_yd_100`, …) — the projections carry no component, so the *center* can't be scored faithfully;
-they unlock when a component-carrying projection source lands in-season (ffanalytics/FantasyPros).
-Turnovers/2pt are carried in the baseline at the standard rate (tolerance, as before). **Interface:**
-`recompute_custom_points(scoring, side)` now returns a `pl.Expr` (the delta engine); `projection_column`
-→ `projection_points_expr(profile, scoring)`; `actual_points_expr` gains `scoring`; the sole call site
-`compute_projection_consensus.compute(season, scoring=None)` is now **injectable** (defaults to the
-persisted settings) so the gate can exercise custom profiles without touching the parquet. **Gate**
-(`backtest_scoring_recompute.py`, exit 0, reconciliation-style — the "answer key" is the canned columns):
-(A) **equivalence** — custom path reproduces the canned columns on standard inputs (actuals **exact 0.0**,
-projections **~0.01** = 2-dp component rounding); (B) **custom deltas exact** — 6-pt pass TD Δ = +2·pass_td,
-TE premium Δ = +0.5·rec **TE-only**, 0.75-PPR Δ = −0.25·rec; (C) **rejection** raises naming the key;
-(D) **end-to-end** — consensus runs under a real custom profile (0.75-PPR + 6-pt pass TD + TE premium),
-**100% of QB centers rise**. **Verified no-regression:** recompute with the real (ppr) settings equals the
-on-disk `projection_consensus_2025.parquet` **frame-for-frame**, so VOR/True Rank/Positional Depth/Bracket
-gates (which read it) are unaffected; and **VOR runs on a custom consensus** in-memory (the downstream
-seam proven). **Custom leagues now run the whole read spine.** **Next in the "any league" project:**
-seeding tiebreakers/divisions in the bracket sim; roster-shape/superflex generalization (the leakage
-miss-attribution + VOR superflex latents); richer custom scoring (first-down/threshold) when the
-projection source carries the component.
-
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
@@ -169,6 +177,7 @@ projection source carries the component.
     - Custom-scoring recompute engine ("any league" piece 1) — fills `_scoring.recompute_custom_points()` (was a stub that raised) with a **delta-on-canned-baseline** engine: `points_league = std_baseline (proj_pts_std/fantasy_points) + Σ(w_custom−w_std)·component`, exact for standard by construction. Same weights on `proj_*` + `nfl_stats` so residuals stay matched. Supports non-{0,.5,1} PPR, 6-pt pass TD, non-standard yardage/TD, position-conditional reception bonuses (TE premium `bonus_rec_te`/`_rb`/`_wr`/`_qb`); rejects (raises, names key) first-down / threshold-yardage bonuses (no projection component); turnovers/2pt carried in baseline (tolerance). `recompute_custom_points(scoring, side)` → `pl.Expr`; `projection_column`→`projection_points_expr`; `actual_points_expr` gains scoring; `compute_projection_consensus.compute(season, scoring=None)` injectable. New `backtest_scoring_recompute.py` (exit 0): equivalence (custom==canned on standard: actuals exact, proj ~0.01 rounding), exact custom deltas, rejection, end-to-end custom consensus (100% QB centers rise under 6-pt pass TD). No-regression: real-ppr recompute == on-disk consensus parquet frame-for-frame (downstream gates unaffected); VOR runs on a custom consensus. Custom leagues now run the whole read spine.
     - Any-league pieces 2 & 3 (project complete) — **roster-shape/superflex:** new shared `_analytics.position_pools(slot_rows)` derives swap/replacement pools from `lineup_slots` (positions sharing a multi-position slot pooled; key = broadest inducing slot). `compute_production_vor._pool_of` + `compute_team_leakage._cls` now use it (fixes the `SUPER_FLEX` latent + generalizes leakage swap classes); standard config byte-identical, superflex pools QB with flex. `backtest_roster_shape.py` (exit 0): no-regression frame-equal on vor/leakage/true_rank/positional_depth + synthetic superflex. **Division seeding (synthetic-gated latent):** `_seed_table` extracted from `compute_bracket_sim._simulate`, division-aware when a roster→division map is present (winners seeded ahead of wildcards) else flat (proven identical); `sleeper.py fetch-league-config` persists `settings.divisions`; `_division_map` None today (teams entity has no `division` col — rosters-endpoint population deferred). NOT validated on a real division league. **Also fixed:** the fixed-SEED bracket sim wasn't reproducible (polars group_by order + zero-score bye ties) — sorting schedule pairings + roster player lists restores determinism (shared `optimal_lineup` untouched). `backtest_bracket_sim.py` extended (exit 0): Brier 0.224/Spearman 0.756 unchanged + determinism + Σ-invariant + synthetic 2-division correctness.
     - ROS Outcome Shape (§2 quantitative skeleton — completes the player-read backend §1–§4) — compute_ros_outcome_shape.py → derived/ros_outcome_shape_{season}.parquet, tall over (as_of_week, roster_id, player). Bull/bear = the borrowed ROS centre (Production VOR ros_value, reused directly) ± BULL_Z·ros_sigma, floored at 0, where ros_sigma = √(Σ band_ppr² over the remaining schedule) — the §3 weekly band summed under weekly independence (compute_bracket_sim's documented assumption). New pure `_ros_sigma` (mirrors `_ros_values`, aggregates band²) + `_outcome_band`; ros_cv = sigma/centre (fragility), per-position spectrum_pos on the bull ceiling. Time decay emergent (shrinking horizon → tighter band; 0/142 σ grew wk1→wk4). Situation/security borrows the player_signal trust axis (security tier + direction/reliability) as structured evidence — the AI narrative + 1-10 roll-up is Phase 6. New data_layer write/read_ros_outcome_shape (mirrors the Production VOR tall block). Gate (backtest_ros_outcome_shape.py, exit 0): calibration — freeze-wk actual ROS in [bear, bull] = 0.835 (target 0.80±0.05), BULL_Z swept to 1.645 (above the normal 1.28 because weekly residuals are positively autocorrelated → realised ROS more dispersed than the independent sum); decision-relevant — actual ROS monotonic by ros_bull tercile (dead 58 < mid 126 < stud 206); bonus — non-stable players broke their bear floor 15.9% vs stable 9.8%. Symmetric-by-design (ROS-level skew deferred). No-regression (reads-only of the three source parquets). No UI (data + gate).
+    - Manager Dossiers Phase A (§7 — cross-league acquisition + deterministic behavioral features; the credit-free substrate the Phase-B AI writer consumes) — 3 commits. (1) sleeper.py: fetch_teams persists owner_id (the user_id identity key it dropped; teams_2025 regenerated, additive); new _get_json (timeout + backoff-retry on transient/5xx, 4xx raise, optional throttle), all bare requests.get routed through it. (2) transforms/_manager.py (pure comparability + attribution helpers, reuses _scoring.scoring_profile; shared by fetch mode + transform + gate) + sleeper.py fetch-manager-activity <season> [--me] [--limit N] [--throttle S]: per manager, fan out to their comparable other leagues (same scoring/size/QB-structure/format — redraft-only V1, format tagged), ≤5 across current+2-prior biased to prior; classifies off the /user/.../leagues payload (carries scoring_settings+roster_positions+settings, verified) so no per-candidate fetch; persists incrementally per manager (replace-by-owner_id, recoverable/idempotent). New manager_activity_{season} — the FIRST cross-league/user-keyed entity (owner_id key; source_league_id/source_season as columns; league-marker + txn row kinds). (3) compute_manager_features.py → manager_features_{season} (per manager: FAAB aggression/budget-spent [completed waivers only], waiver/FA mix, success rate, churn, trade freq, positional lean of adds, signal-depth counts + depth_tier + is_primary); pure manager_features (injected constants); rate/lean features null when undefined (law 2, never fabricated 0). Gate (backtest_manager_features.py, exit 0 — internal consistency, behaviour has no answer key): comparability invariant (0 leaked, grounded on persisted target facts) + accounting round-trip (independent re-aggregation; fractions ∈[0,1]; shares sum 1) + signal-depth honesty (all profiled; zero-signal → null). Verified live 2025: 10 managers, 431 activity rows, real differentiation; depth honestly thin (recurring-league friend group). No AI/credits/UI. Phase B (Haiku dossier writer) next.
 
 > not yet built
     >> backend
@@ -223,8 +232,10 @@ Spearman 0.756; top-6 by odds = 6/6 actual playoff teams). **Source scouting set
 half (the Phase-2 substrate's other ingredient) comes **in-season via ffanalytics**; ESPN historical
 is deferred (cookie-gated + `espn_id` join). **The §2 ROS outcome-shape skeleton is now DONE** (bull/bear/
 situation, calibration-gated — see the most recent build), which **completes the player-read backend
-(§1–§4).** **Next — remaining Phase 4:** **manager dossiers** (§7 — reshaped 2026-07-10 into a cross-league,
-Claude-API-key-gated AI read; design recorded in `DECISION_READS.md` §7), and the deliberate **front-end
+(§1–§4).** **§7 manager dossiers Phase A is now DONE** (cross-league acquisition + deterministic
+behavioral features, internal-consistency-gated — see the most recent build). **Next — remaining Phase 4:**
+**§7 dossiers Phase B** (the API-key-gated Haiku dossier writer over the Phase-A features; design in
+`DECISION_READS.md` §7), and the deliberate **front-end
 surfacing** of the now-six gated forward
 reads (Spread/VOR/True Rank/Positional Depth/Bracket Odds/ROS Outcome Shape) — including the posture
 *presentation* (True Rank + odds shown adjacent, the risk-appetite lens). **Blocked, not next:** cross-source
@@ -251,9 +262,10 @@ Summary only here:
   (§6 ✅). The leakage coachable-fix (backlog #1, regress-to-prior — law 1) lands in
   VOR; the shared-engines generalization is the cross-cutting *how*, not a separate gate.
 - **Phase 4 — Integration + go live + opponent modeling** *(UNDERWAY — §5 bracket
-  math + §2 ROS skeleton done)* — the §5 posture read (bracket-math Monte Carlo ✅ + True Rank = complete),
-  §2 ROS outcome-shape skeleton (✅ bull/bear/situation, calibration-gated), manager dossiers (§7 — next);
-  front-end surfacing of the gated forward reads; in-season weekly refresh; waiver and trade surfaces.
+  math + §2 ROS skeleton + §7 dossiers Phase A done)* — the §5 posture read (bracket-math Monte Carlo ✅ +
+  True Rank = complete), §2 ROS outcome-shape skeleton (✅ bull/bear/situation, calibration-gated),
+  manager dossiers (§7 — ✅ Phase A cross-league features; Phase B AI writer next); front-end surfacing of
+  the gated forward reads; in-season weekly refresh; waiver and trade surfaces.
 - **Phase 5 — Model of YOU** — graded decisions compound into a per-manager
   tendency profile that personalizes guidance.
 - **Phase 6 — Forward advisory + AI layer (later)** — real-time "better call now";
@@ -461,9 +473,14 @@ age/injury/scheme).
   ROS centre ± BULL_Z·√Σband², floored, emergent time decay) + situation/security (player_signal trust axis).
   Calibration-gated (coverage 0.835; BULL_Z swept to 1.645; monotonic by bull tercile). **Completes the
   player-read backend (§1–§4).** See "most recent build".
-- **Next — remaining Phase 4:** **manager dossiers** (§7 — reshaped into a cross-league, Claude-API-key-gated
-  AI read; design recorded in `DECISION_READS.md` §7) and the **front-end surfacing** of the six gated
-  forward reads (incl. posture presentation).
+- ✅ **§7 Manager Dossiers Phase A (DONE — Phase 4).** Cross-league acquisition (`fetch-manager-activity`
+  → `manager_activity_{season}`, the first cross-league/user-keyed entity) + deterministic behavioral
+  features (`compute_manager_features.py` → `manager_features_{season}`), internal-consistency-gated. The
+  credit-free substrate the Phase-B writer consumes. See "most recent build".
+- **Next — remaining Phase 4:** **§7 dossiers Phase B** (the API-key-gated Haiku dossier writer over the
+  Phase-A features — Batch API + prompt caching, fixed schema, blindspot framing, run-once guard; design
+  in `DECISION_READS.md` §7) and the **front-end surfacing** of the six gated forward reads (incl. posture
+  presentation).
   **Blocked, not next:** cross-source **disagreement** (in-season, needs the live 2nd source).
 - **Optional cheap add:** Vegas game totals via an `odds.py` fetcher (game environment).
 
