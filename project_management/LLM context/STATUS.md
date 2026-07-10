@@ -1,6 +1,7 @@
 # STATUS
 
 **Last updated:** 2026-07-10 (§7 Manager Dossiers **Phase B shipped — §7 COMPLETE** — the project's first AI-layer code: `application/ai/` writes one Claude-Haiku dossier per manager from the Phase-A `manager_features` (never raw logs), API-key-gated + opt-in, synchronous calls behind a swappable seam, run-once-per-season. New `manager_dossiers_{season}` entity (first AI-written store), internal-consistency-gated. Verified live 2025 — 10 dossiers, ~$0.025, gate exit 0; fixed schema, tendencies-not-verdicts, primary=blindspot / opponents=exploitable-edge, confidence grounded in signal depth. Prior build: §7 Phase A cross-league features. Phase 4 still UNDERWAY — remaining: **front-end surfacing** of the six §1–§6 forward reads + the dossiers)
+**Docs (2026-07-10):** Backend audit + build-doc refresh (no code changed) — `scope docs/READ_BUILD_ORDER.md` reorganized status-first (Built Backend / Built Frontend / Unbuilt+Blocked; the V1 Dashboard Build Order moved there from STATUS), and the backend hygiene backlog captured in `LLM context/710_AUDIT.md`.
 **Target ship:** NFL kickoff, mid August 2026
 
 ---
@@ -485,39 +486,7 @@ age/injury/scheme).
   **Blocked, not next:** cross-source **disagreement** (in-season, needs the live 2nd source).
 - **Optional cheap add:** Vegas game totals via an `odds.py` fetcher (game environment).
 
-(Older note, lower priority: continue the V1 Dashboard Build Order — standings with
-trajectory; manager dossiers; positional strength vs. league average; head-to-head
-matchup breakdown — now reframed under the phase roadmap below.)
-
-## V1 Dashboard Build Order
-
-Dashboard build structure:
-Build first
-    - Power rankings league overview
-        What it shows: Composite team strength score with positional breakdown (QB/RB/WR/TE) as a detail layer.
-        Data needed: nflreadpy weekly stats + Sleeper roster data + weekly data from the season join (nfl_sleeper_weekly_joined transform → season_{season}.parquet).
-    - Points scored + consistency league overview
-        What it shows: Average weekly points per team and a consistency signal — stable vs. high-variance output.
-        Data needed: Sleeper matchup snapshots only. No join required.
-
-Build second
-    - Standings with trajectory lens league overview
-        What it shows: Record + points for/against, past strength of schedule, remaining schedule difficulty, historical league baseline for wins needed to reach playoffs.
-        Data needed: Sleeper matchup history + Sleeper league schedule + prior season backfill data.
-    - Manager dossiers league overview
-        What it shows: Static AI-generated profile per manager — waiver tendencies, trade behavior, roster construction patterns, positional preferences.
-        Data needed: Sleeper transaction + waiver history. One-time AI synthesis pass per manager, output stored as static JSON or markdown.
-    - Positional strength vs. league average team overview
-        What it shows: Your team's output by position compared to league average. Identifies tradeable surplus and gaps to address.
-        Data needed: weekly data from the season join (nfl_sleeper_weekly_joined transform → season_{season}.parquet).
-    - Head-to-head position breakdown matchup overview
-        What it shows: Your lineup vs. opponent's lineup by position — where's the edge, where's the risk.
-        Data needed: Sleeper current roster + weekly data from the season join (season_{season}.parquet).
-
-Build third
-    - Production consistency per player team overview
-        What it shows: Week-to-week variance per player. Who's reliable, who's boom/bust.
-        Data needed: nflreadpy weekly stats.
-    - Key player matchups + narrative read matchup overview
-        What it shows: The 1-3 decisive spots in the matchup — who could swing the week, whether you're ahead or at risk.
-        Data needed: Sleeper live scoring + nflreadpy historical context. Natural candidate for AI layer in V5.
+> **V1 Dashboard Build Order — moved.** The dashboard build order, plus the full
+> Built / Unbuilt breakdown (Built Backend · Built Frontend · Unbuilt+Blocked), now lives in
+> `scope docs/READ_BUILD_ORDER.md`. Single source of truth — not duplicated here. The backend
+> hygiene backlog is in `LLM context/710_AUDIT.md`.
