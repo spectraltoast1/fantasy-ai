@@ -23,8 +23,7 @@ CACHE_DIR = _DATA_DIR / "cache" / "sleeper"    # raw JSON current-state dumps (s
 # data_layer.py lives one level up in application/data/ — all parquet snapshot/cache I/O
 # goes through it (the fetcher constructs no parquet paths). The raw JSON dumps written by
 # _write_json stay put: they're current-state API captures, not data-layer entities.
-sys.path.insert(0, str(_DATA_DIR))
-import data_layer
+from application.data import data_layer
 
 _SLEEPER_BASE = "https://api.sleeper.app/v1"
 # Projections/stats live on a separate host (no /v1), distinct from the main league API.
@@ -583,14 +582,14 @@ def fetch_manager_activity(league_id: str, season: int, *, only_username: str | 
 
 
 def _import_manager_helpers():
-    """Lazy-import the pure comparability helpers from transforms/ (path set up on demand).
+    """Return the pure comparability helpers from the transforms package.
 
     The fetch mode must classify + select before it can fetch, so it reuses the same pure
     helpers compute_manager_features + the backtest use (single source of truth) rather than
-    duplicating scoring_profile here. transforms/ is not a package — add it to the path.
+    duplicating scoring_profile here. Imported inside the function to defer the transforms
+    import to the one fetch mode that needs it (keeps the common sleeper.py modes lean).
     """
-    sys.path.insert(0, str(_DATA_DIR / "transforms"))
-    import _manager
+    from application.data.transforms import _manager
     return _manager
 
 
@@ -656,12 +655,11 @@ def refresh(league_id: str) -> None:
 
 if __name__ == "__main__":
     usage = (
-        "Usage: sleeper.py backfill <year> | sleeper.py refresh | "
-        "sleeper.py fetch-players | sleeper.py fetch-teams <year> | "
-        "sleeper.py fetch-roster-positions <year> | "
-        "sleeper.py fetch-league-config <year> | "
-        "sleeper.py projections <season> [week] | "
-        "sleeper.py fetch-manager-activity <season> [--me] [--limit N] [--throttle S]"
+        "Usage: python -m application.data.fetchers.sleeper <command>  (run from repo root)\n"
+        "  commands: backfill <year> | refresh | fetch-players | fetch-teams <year> | "
+        "fetch-roster-positions <year> | fetch-league-config <year> | "
+        "projections <season> [week] | "
+        "fetch-manager-activity <season> [--me] [--limit N] [--throttle S]"
     )
 
     if len(sys.argv) < 2:
@@ -683,9 +681,8 @@ if __name__ == "__main__":
             fetch_projections_season(_season)
         sys.exit(0)
 
-    # league_resolver lives in application/shared/ — insert application/ into sys.path
-    sys.path.insert(0, str(_HERE.parent.parent))
-    from shared import league_resolver
+    # league_resolver lives in application/shared/ (imported here — only the CLI modes need it)
+    from application.shared import league_resolver
 
     if cmd == "backfill":
         if len(sys.argv) < 3:
@@ -729,7 +726,7 @@ if __name__ == "__main__":
         if len(sys.argv) < 3:
             print(usage)
             sys.exit(1)
-        import config
+        from application import config
         _season = int(sys.argv[2])
         _flags = sys.argv[3:]
         _only = config.SLEEPER_USERNAME if "--me" in _flags else None

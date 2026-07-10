@@ -21,7 +21,7 @@ Also reported as evidence (not gated): how near the waiver-line anchor (vor ≈ 
 actual replacement level, and the QB-vs-flex pool spreads (why 1QB compresses QB VOR).
 
 Usage:
-    python backtest_production_vor.py --season 2025
+    python -m application.data.transforms.backtest_production_vor --season 2025
 """
 
 import argparse
@@ -30,12 +30,9 @@ from pathlib import Path
 
 import polars as pl
 
-_TRANSFORMS_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(_TRANSFORMS_DIR.parent))
-sys.path.insert(0, str(_TRANSFORMS_DIR))
-import data_layer
-from _analytics import mean, pearson
-from compute_production_vor import (
+from application.data import data_layer
+from application.data.transforms._analytics import mean, pearson
+from application.data.transforms.compute_production_vor import (
     SKILL_POSITIONS,
     _pool_lines,
     _pool_of,

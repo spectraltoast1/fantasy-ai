@@ -27,8 +27,8 @@ Two verdicts:
      `sticky` group? This is the actual product question.
 
 Usage:
-    python backtest_player_signal.py --season 2025
-    python backtest_player_signal.py --season 2025 --recent 1-6   # different freeze
+    python -m application.data.transforms.backtest_player_signal --season 2025
+    python -m application.data.transforms.backtest_player_signal --season 2025 --recent 1-6   # different freeze
 """
 
 import argparse
@@ -37,12 +37,9 @@ from pathlib import Path
 
 import polars as pl
 
-_TRANSFORMS_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(_TRANSFORMS_DIR.parent))
-sys.path.insert(0, str(_TRANSFORMS_DIR))
-import data_layer
-from _analytics import round1
-from compute_player_signal import (
+from application.data import data_layer
+from application.data.transforms._analytics import round1
+from application.data.transforms.compute_player_signal import (
     MIN_GAMES,
     OPP_HALF_LIFE_WK,
     POS_MEAN_MIN_OPP,

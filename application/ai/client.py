@@ -18,8 +18,7 @@ import sys
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(_HERE.parent))          # application/ -> config
-import config
+from application import config
 
 DEFAULT_MODEL = "claude-haiku-4-5"             # the locked §7 tier (cheap; ample for this synthesis)
 _PLACEHOLDER = "your-key-here"

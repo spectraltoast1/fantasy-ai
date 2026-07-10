@@ -40,7 +40,7 @@ VOR slice); read via read_ros_outcome_shape(season, as_of_week=None) (default = 
 Output: snapshots/derived/ros_outcome_shape_{season}.parquet, one row per (as_of_week, rostered player).
 
 Usage:
-    python compute_ros_outcome_shape.py --season 2025
+    python -m application.data.transforms.compute_ros_outcome_shape --season 2025
 """
 
 import argparse
@@ -50,11 +50,8 @@ from pathlib import Path
 
 import polars as pl
 
-_TRANSFORMS_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(_TRANSFORMS_DIR.parent))  # application/data → data_layer
-sys.path.insert(0, str(_TRANSFORMS_DIR))          # transforms → _analytics
-import data_layer
-from _analytics import round1, spectrum_positions
+from application.data import data_layer
+from application.data.transforms._analytics import round1, spectrum_positions
 
 SKILL_POSITIONS = ["QB", "RB", "WR", "TE"]
 

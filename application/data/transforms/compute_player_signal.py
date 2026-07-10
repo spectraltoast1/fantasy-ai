@@ -46,7 +46,7 @@ Output: snapshots/derived/player_signal_{season}.parquet, one row per rostered s
 player.
 
 Usage:
-    python compute_player_signal.py --season 2025
+    python -m application.data.transforms.compute_player_signal --season 2025
 """
 
 import argparse
@@ -56,11 +56,8 @@ from pathlib import Path
 
 import polars as pl
 
-_TRANSFORMS_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(_TRANSFORMS_DIR.parent))  # application/data → data_layer
-sys.path.insert(0, str(_TRANSFORMS_DIR))          # transforms → _analytics
-import data_layer
-from _analytics import mean, pearson, round1, spectrum_positions
+from application.data import data_layer
+from application.data.transforms._analytics import mean, pearson, round1, spectrum_positions
 
 SKILL_POSITIONS = ["QB", "RB", "WR", "TE"]
 

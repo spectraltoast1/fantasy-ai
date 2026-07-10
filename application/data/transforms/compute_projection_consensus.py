@@ -55,7 +55,7 @@ any-league project).
 Output: snapshots/derived/projection_consensus_{season}.parquet, one row per (week, player).
 
 Usage:
-    python compute_projection_consensus.py --season 2025
+    python -m application.data.transforms.compute_projection_consensus --season 2025
 """
 
 import argparse
@@ -64,12 +64,9 @@ from pathlib import Path
 
 import polars as pl
 
-_TRANSFORMS_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(_TRANSFORMS_DIR.parent))  # application/data → data_layer
-sys.path.insert(0, str(_TRANSFORMS_DIR))          # transforms → _analytics
-import data_layer
-from _analytics import round1, skewness, stdev
-from _scoring import scoring_profile, projection_points_expr, actual_points_expr
+from application.data import data_layer
+from application.data.transforms._analytics import round1, skewness, stdev
+from application.data.transforms._scoring import scoring_profile, projection_points_expr, actual_points_expr
 
 # Variance-shrink weight, in "games of prior": the player's residual variance is pooled
 # with the positional prior as (n·player_var + K·pos_var)/(n + K). Mirrors

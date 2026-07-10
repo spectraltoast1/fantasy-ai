@@ -17,7 +17,7 @@ pipeline is self-consistent and honest, three ways (each PASS/FAIL, exit 0 iff a
      backed by real activity.
 
 Usage:
-    python backtest_manager_features.py --season 2025
+    python -m application.data.transforms.backtest_manager_features --season 2025
 """
 
 import argparse
@@ -26,11 +26,8 @@ from pathlib import Path
 
 import polars as pl
 
-_TRANSFORMS_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(_TRANSFORMS_DIR.parent))          # -> data_layer
-sys.path.insert(0, str(_TRANSFORMS_DIR))                 # -> _manager
-import data_layer
-import _manager
+from application.data import data_layer
+from application.data.transforms import _manager
 
 _FRACTION_COLS = ("waiver_share", "waiver_success_rate", "avg_bid_frac", "max_bid_frac",
                   "budget_spent_frac", "add_qb_share", "add_rb_share", "add_wr_share", "add_te_share")

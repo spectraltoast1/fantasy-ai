@@ -23,7 +23,7 @@ from the nfl_stats answer key. Small-sample honesty (10-team league): the freeze
 read, the pooled-over-weeks correlation is reported as evidence only.
 
 Usage:
-    python backtest_positional_depth.py --season 2025
+    python -m application.data.transforms.backtest_positional_depth --season 2025
 """
 
 import argparse
@@ -32,12 +32,9 @@ from pathlib import Path
 
 import polars as pl
 
-_TRANSFORMS_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(_TRANSFORMS_DIR.parent))
-sys.path.insert(0, str(_TRANSFORMS_DIR))
-import data_layer
-from _analytics import mean, pearson
-from compute_positional_depth import SKILL_POSITIONS, _position_depth, _starter_needs
+from application.data import data_layer
+from application.data.transforms._analytics import mean, pearson
+from application.data.transforms.compute_positional_depth import SKILL_POSITIONS, _position_depth, _starter_needs
 
 # Minimum mean-across-positions freeze-week correlation (projected starter_value vs actual ceiling).
 CORR_MIN = 0.50

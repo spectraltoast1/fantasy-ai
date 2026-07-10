@@ -31,8 +31,8 @@ volatile players both near 50%, where a one-size band over-covers the steady and
 under-covers the volatile.
 
 Usage:
-    python backtest_projection_consensus.py --season 2025
-    python backtest_projection_consensus.py --season 2025 --sweep
+    python -m application.data.transforms.backtest_projection_consensus --season 2025
+    python -m application.data.transforms.backtest_projection_consensus --season 2025 --sweep
 """
 
 import argparse
@@ -41,12 +41,9 @@ from pathlib import Path
 
 import polars as pl
 
-_TRANSFORMS_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(_TRANSFORMS_DIR.parent))
-sys.path.insert(0, str(_TRANSFORMS_DIR))
-import data_layer
-from _analytics import skewness
-from compute_projection_consensus import (
+from application.data import data_layer
+from application.data.transforms._analytics import skewness
+from application.data.transforms.compute_projection_consensus import (
     BAND_Z,
     SHRINK_K,
     SKEW_GAIN,

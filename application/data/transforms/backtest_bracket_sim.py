@@ -20,7 +20,7 @@ Imports the SAME pure functions the transform ships (`_team_week_dist`, `_win_pr
 actually finished top-PLAYOFF_TEAMS.
 
 Usage:
-    python backtest_bracket_sim.py --season 2025
+    python -m application.data.transforms.backtest_bracket_sim --season 2025
 """
 
 import argparse
@@ -29,15 +29,12 @@ from pathlib import Path
 
 import polars as pl
 
-_TRANSFORMS_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(_TRANSFORMS_DIR.parent))
-sys.path.insert(0, str(_TRANSFORMS_DIR))
-import data_layer
-from _analytics import mean, pearson, expand_slots
-from compute_production_vor import _roster_as_of
+from application.data import data_layer
+from application.data.transforms._analytics import mean, pearson, expand_slots
+from application.data.transforms.compute_production_vor import _roster_as_of
 import numpy as np
 
-from compute_bracket_sim import (
+from application.data.transforms.compute_bracket_sim import (
     SKILL_POSITIONS,
     _playoff_config,
     _seed_table,

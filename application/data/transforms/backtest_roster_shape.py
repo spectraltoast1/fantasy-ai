@@ -23,15 +23,12 @@ from pathlib import Path
 
 import polars as pl
 
-_TRANSFORMS_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(_TRANSFORMS_DIR.parent))
-sys.path.insert(0, str(_TRANSFORMS_DIR))
-import data_layer
-from _analytics import position_pools
-import compute_production_vor as vor
-import compute_team_leakage as leak
-import compute_true_rank as tr
-import compute_positional_depth as depth
+from application.data import data_layer
+from application.data.transforms._analytics import position_pools
+from application.data.transforms import compute_production_vor as vor
+from application.data.transforms import compute_team_leakage as leak
+from application.data.transforms import compute_true_rank as tr
+from application.data.transforms import compute_positional_depth as depth
 
 _STD_SLOTS = [
     {"slot": "QB", "count": 1, "eligible": "QB"}, {"slot": "RB", "count": 2, "eligible": "RB"},

@@ -5,16 +5,20 @@
     <key>Label</key>
     <string>com.fantasyai.leaguelogs-snapshot</string>
 
-    <!-- Absolute paths: launchd runs with a bare environment (no user PATH). -->
+    <!-- Absolute Python path: launchd runs with a bare environment (no user PATH).
+         The script is now a package module run via `-m` (see WorkingDirectory below). -->
     <key>ProgramArguments</key>
     <array>
         <string>/Library/Frameworks/Python.framework/Versions/3.13/bin/python3</string>
-        <string>/Users/willdaniel/Documents/fantasy-ai/application/data/fetchers/leaguelogs.py</string>
+        <string>-m</string>
+        <string>application.data.fetchers.leaguelogs</string>
         <string>snapshot</string>
     </array>
 
+    <!-- Repo root: `python -m` puts the cwd on sys.path, so the `application` package
+         resolves without an editable install. -->
     <key>WorkingDirectory</key>
-    <string>/Users/willdaniel/Documents/fantasy-ai/application/data/fetchers</string>
+    <string>/Users/willdaniel/Documents/fantasy-ai</string>
 
     <!-- 04:00 in the machine's LOCAL time (America/New_York) → 4am Eastern, DST-aware.
          If the Mac is asleep at 04:00, launchd runs the job at next wake. -->
