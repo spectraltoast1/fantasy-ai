@@ -781,3 +781,37 @@ def read_manager_features(season: int, owner_id: str | None = None) -> pl.DataFr
 
 def manager_features_exists(season: int) -> bool:
     return _manager_features_path(season).exists()
+
+
+# --- Manager Dossiers (AI-written cross-league behavioural profiles, DECISION_READS.md §7) ---
+# The Phase-B AI layer's output: one qualitative dossier per manager (owner_id), synthesised by
+# Claude Haiku from the deterministic manager_features (never raw logs). The project's first
+# AI-written entity. Tendencies-not-verdicts, fixed schema (headline / waiver_faab / trade_tendency /
+# positional_lean / roster_construction / edge_or_blindspot / confidence_note) so dossiers read side
+# by side; blindspot framing for the primary user, exploitable-edge for opponents. A zero-comparable-
+# league manager gets a hardcoded "no intel" dossier (is_zero_signal=True) with the AI skipped. Rows
+# carry the signal-depth echo + provenance (model, generated_at). Written by application/ai/
+# write_manager_dossiers.py; overwrite per run (run-once-per-season unless --force).
+
+
+def _manager_dossiers_path(season: int) -> Path:
+    return _SNAPSHOT_DIR / "derived" / f"manager_dossiers_{season}.parquet"
+
+
+def write_manager_dossiers(df: pl.DataFrame, season: int) -> None:
+    """Write the per-manager AI dossiers for a season (overwrite)."""
+    path = _manager_dossiers_path(season)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
+
+def read_manager_dossiers(season: int, owner_id: str | None = None) -> pl.DataFrame:
+    """Read the per-manager AI dossiers for a season, optionally one manager."""
+    df = pl.read_parquet(_manager_dossiers_path(season))
+    if owner_id is not None:
+        df = df.filter(pl.col("owner_id") == owner_id)
+    return df
+
+
+def manager_dossiers_exist(season: int) -> bool:
+    return _manager_dossiers_path(season).exists()
