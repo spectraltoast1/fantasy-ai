@@ -1,7 +1,7 @@
 # STATUS
 
 **Last updated:** 2026-07-10 (§7 Manager Dossiers **Phase B shipped — §7 COMPLETE** — the project's first AI-layer code: `application/ai/` writes one Claude-Haiku dossier per manager from the Phase-A `manager_features` (never raw logs), API-key-gated + opt-in, synchronous calls behind a swappable seam, run-once-per-season. New `manager_dossiers_{season}` entity (first AI-written store), internal-consistency-gated. Verified live 2025 — 10 dossiers, ~$0.025, gate exit 0; fixed schema, tendencies-not-verdicts, primary=blindspot / opponents=exploitable-edge, confidence grounded in signal depth. Prior build: §7 Phase A cross-league features. Phase 4 still UNDERWAY — remaining: **front-end surfacing** of the six §1–§6 forward reads + the dossiers)
-**Docs (2026-07-10):** Backend audit + build-doc refresh (no code changed) — `scope docs/READ_BUILD_ORDER.md` reorganized status-first (Built Backend / Built Frontend / Unbuilt+Blocked; the V1 Dashboard Build Order moved there from STATUS), and the backend hygiene backlog captured in `LLM context/710_AUDIT.md`.
+**710 audit fixes (2026-07-10):** the structural item (#1) + all three hygiene items (#5/#6/#7) from `LLM context/710_AUDIT.md` are **shipped** — `application/` is now a proper Python package (6 `__init__.py` + a root `pyproject.toml`, absolute package imports, **zero `sys.path.insert`**, run via `python -m application.…` from the repo root); `config.example.py` gains `SLEEPER_LEAGUE_ID` and sheds dead keys; `pandas`/`nfl_data_py` pruned; the bracket figure reconciled to **top-4 = 3/4**. #2 (scaling) is a no-op (the documented SQLite migration trigger); #3/#4 (spec) are deferred — **#4 is blocked on a missing ADP/draft-capital source**. **Post-merge operator action: reinstall the launchd plist** (it now runs the fetcher via `-m`; the live 4am job uses the old script path until re-copied + `launchctl` reloaded — see `scheduler/README.md`). Behavior-preserving: all backtest gates pass with identical numbers. *(Prior 2026-07-10 doc pass: `scope docs/READ_BUILD_ORDER.md` reorganized status-first + the audit backlog captured in `710_AUDIT.md`.)*
 **Target ship:** NFL kickoff, mid August 2026
 
 ---
@@ -35,6 +35,37 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**710 backend-audit fixes — package refactor + hygiene (structural #1 + hygiene #5/#6/#7).**
+Cleared the highest-importance items from the 2026-07-10 backend audit (`LLM context/710_AUDIT.md`).
+**Three commits.** (1) **Hygiene bundle:** `config.example.py` gains the required `SLEEPER_LEAGUE_ID`
+(a hard `league_resolver` dependency that was missing) and sheds the dead, duplicate-keyed
+`LEAGUE_TYPES` / `EXCLUDED_LEAGUES` (consumed nowhere); `requirements.txt` drops the unused `pandas`
++ `nfl_data_py` (zero imports repo-wide; honors polars-never-pandas); the bracket-backtest figure
+reconciled across STATUS + TECHNICAL_ARCHITECTURE to the true 4-team cut (**top-4 by odds = 3/4**,
+confirmed by running the gate). (2) **Package conversion (the structural item — most likely to break
+on the server migration, hardest to retrofit):** `application/` is now a real Python package —
+`__init__.py` in the 6 dirs + a root `pyproject.toml`; **every** bare `sys.path`-dependent import
+rewritten to absolute package form (`from application.data import data_layer`,
+`from application.data.transforms._analytics import …`, sibling `compute_*` modules likewise) and
+**all 56 `sys.path.insert` lines across 31 files deleted** (zero remain). The lazy
+`_import_manager_helpers` is now a top-level package import; scripts run as
+`python -m application.<pkg>.<module>` from the repo root (no editable install — `-m` puts cwd on the
+path); ~30 docstring/runtime usage strings, the two doc call-sites (`data_layer`,
+TECHNICAL_ARCHITECTURE), and the **launchd plist** (`-m` module + `WorkingDirectory` = repo root) +
+its README were updated. (3) **Docs closedown** (this entry + the audit checklist ticked, #3/#4
+scoped). **Behavior-preserving** — every backtest gate passes via `-m` with identical numbers (True
+Rank 0.802/0.842, VOR 0.955, consensus 0.493, ROS coverage 0.835, positional-depth mean 0.861,
+bracket Brier 0.224 / top-4 = 3/4, scoring + roster-shape + manager-features + dossier gates exit 0);
+package byte-compiles clean. **Deferred:** #2 scaling (no-op — the documented SQLite/warehouse
+migration trigger, do not hand-optimize the parquet writers), #3 §1 quality axis (a net-new
+empirical-weighting transform needing a per-chance-type PBP store + historical sample + league-scoring
+weights — not a `quality_rate` tweak), #4 §2 preseason anchor (**blocked on data** — no ADP /
+draft-capital source is fetched anywhere). **Post-merge operator action:** reinstall the launchd plist
+(the live 4am snapshot runs the old script path until the plist is re-copied + `launchctl` reloaded —
+see `scheduler/README.md`). **Next — remaining Phase 4:** front-end surfacing of the six gated forward
+reads + the dossiers (unchanged by this cleanup).
+
+> earlier build
 **Manager Dossiers Phase B — the API-key-gated Haiku dossier writer (§7 COMPLETE).**
 The project's **first AI-layer code**: a new `application/ai/` module turns the Phase-A
 `manager_features` (deterministic, pre-filtered — never raw transaction logs) into one qualitative
@@ -110,37 +141,6 @@ writer (Batch API + prompt caching + pre-filtered features, fixed dossier schema
 for the primary user, hardcoded zero-signal message, run-once-per-season guard); design in
 `DECISION_READS.md` §7.
 
-> earlier build
-**ROS Outcome Shape — the §2 bull/bear/situation quantitative skeleton (completes the player-read backend, §1–§4).**
-The forward player read that frames "what's the realistic rest-of-season range for this player, and how solid
-is the ground under the bet?" — built as the **ROS-horizon analog of the already-calibrated §3 weekly spread.**
-`compute_ros_outcome_shape.py` → `derived/ros_outcome_shape_{season}.parquet`, tall over (as_of_week, roster_id,
-player). **Bull/bear = the borrowed ROS centre ± BULL_Z·ros_sigma, floored at 0:** `ros_center` is Production
-VOR's `ros_value` **reused directly** (Σ weekly consensus centres over the remaining schedule — borrowed, can't
-drift from §4, law 3); `ros_sigma = √(Σ band_ppr² over the same remaining weeks)` — the §3 shrunk weekly
-residual std combined under **weekly independence** (the same assumption `compute_bracket_sim`'s team σ
-documents). New pure `_ros_sigma` (mirrors `_ros_values` but aggregates band²) + `_outcome_band`; `ros_cv =
-sigma/centre` as a fragility proxy; a per-position league-relative `spectrum_pos` on the bull ceiling. **Time
-decay is emergent, not a mechanism:** as N advances the remaining schedule shrinks → Σband² shrinks → the band
-compresses toward the realised path (verified: 0 of 142 players' σ grew wk1→wk4; mean σ 23.0→20.8), exactly
-§2's dynamic. **Situation/security borrows the player_signal trust axis** — the Sleeper `security` tier +
-`direction`/`reliability`, carried as structured evidence (not fused into a grade; the AI narrative + 1-10
-roll-up is Phase 6). New `data_layer.write/read_ros_outcome_shape` (mirrors the Production VOR tall block).
-**Gate** (`backtest_ros_outcome_shape.py`, exit 0, imports the shipped `_ros_sigma`/`_outcome_band`):
-(1) **calibration** — freeze-wk actual ROS lands in [bear, bull] at **0.835** (target 0.80 ± 0.05; answer key =
-Σ realised PPR over remaining weeks); `--sweep` tuned **BULL_Z → 1.645**, a real finding — it sits *above* the
-normal-theory 1.28 for 80% because a player's weekly residuals are **positively autocorrelated** over a season
-(a bust persists), so realised ROS is more dispersed than the independent sum and the band must widen to stay
-honest. (2) **decision-relevant** — actual ROS rises monotonically by `ros_bull` tercile (dead 58 < mid 126 <
-stud 206). **Bonus:** the situation axis carries signal — non-stable players broke their bear floor **15.9%** vs
-stable **9.8%**. Symmetric-by-design (no ROS-level skew term — a documented deferral; the §3 per-week band
-already carries the skew this sums over). No-regression: reads-only of production_vor/consensus/player_signal
-(untouched). No UI (data + gate). **Next — remaining Phase 4:** manager dossiers (§7 — **reshaped 2026-07-10
-into a cross-league, Claude-API-key-gated AI read; design + locked params + buildable facts recorded in
-`DECISION_READS.md` §7** for the next build session, phased A = cross-league acquisition + behavioral
-features, B = the gated Haiku dossier writer) and the **front-end surfacing** of the now-six gated forward
-reads (Spread/VOR/True Rank/Positional Depth/Bracket Odds/ROS Outcome Shape).
-
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
@@ -180,6 +180,7 @@ reads (Spread/VOR/True Rank/Positional Depth/Bracket Odds/ROS Outcome Shape).
     - ROS Outcome Shape (§2 quantitative skeleton — completes the player-read backend §1–§4) — compute_ros_outcome_shape.py → derived/ros_outcome_shape_{season}.parquet, tall over (as_of_week, roster_id, player). Bull/bear = the borrowed ROS centre (Production VOR ros_value, reused directly) ± BULL_Z·ros_sigma, floored at 0, where ros_sigma = √(Σ band_ppr² over the remaining schedule) — the §3 weekly band summed under weekly independence (compute_bracket_sim's documented assumption). New pure `_ros_sigma` (mirrors `_ros_values`, aggregates band²) + `_outcome_band`; ros_cv = sigma/centre (fragility), per-position spectrum_pos on the bull ceiling. Time decay emergent (shrinking horizon → tighter band; 0/142 σ grew wk1→wk4). Situation/security borrows the player_signal trust axis (security tier + direction/reliability) as structured evidence — the AI narrative + 1-10 roll-up is Phase 6. New data_layer write/read_ros_outcome_shape (mirrors the Production VOR tall block). Gate (backtest_ros_outcome_shape.py, exit 0): calibration — freeze-wk actual ROS in [bear, bull] = 0.835 (target 0.80±0.05), BULL_Z swept to 1.645 (above the normal 1.28 because weekly residuals are positively autocorrelated → realised ROS more dispersed than the independent sum); decision-relevant — actual ROS monotonic by ros_bull tercile (dead 58 < mid 126 < stud 206); bonus — non-stable players broke their bear floor 15.9% vs stable 9.8%. Symmetric-by-design (ROS-level skew deferred). No-regression (reads-only of the three source parquets). No UI (data + gate).
     - Manager Dossiers Phase A (§7 — cross-league acquisition + deterministic behavioral features; the credit-free substrate the Phase-B AI writer consumes) — 3 commits. (1) sleeper.py: fetch_teams persists owner_id (the user_id identity key it dropped; teams_2025 regenerated, additive); new _get_json (timeout + backoff-retry on transient/5xx, 4xx raise, optional throttle), all bare requests.get routed through it. (2) transforms/_manager.py (pure comparability + attribution helpers, reuses _scoring.scoring_profile; shared by fetch mode + transform + gate) + sleeper.py fetch-manager-activity <season> [--me] [--limit N] [--throttle S]: per manager, fan out to their comparable other leagues (same scoring/size/QB-structure/format — redraft-only V1, format tagged), ≤5 across current+2-prior biased to prior; classifies off the /user/.../leagues payload (carries scoring_settings+roster_positions+settings, verified) so no per-candidate fetch; persists incrementally per manager (replace-by-owner_id, recoverable/idempotent). New manager_activity_{season} — the FIRST cross-league/user-keyed entity (owner_id key; source_league_id/source_season as columns; league-marker + txn row kinds). (3) compute_manager_features.py → manager_features_{season} (per manager: FAAB aggression/budget-spent [completed waivers only], waiver/FA mix, success rate, churn, trade freq, positional lean of adds, signal-depth counts + depth_tier + is_primary); pure manager_features (injected constants); rate/lean features null when undefined (law 2, never fabricated 0). Gate (backtest_manager_features.py, exit 0 — internal consistency, behaviour has no answer key): comparability invariant (0 leaked, grounded on persisted target facts) + accounting round-trip (independent re-aggregation; fractions ∈[0,1]; shares sum 1) + signal-depth honesty (all profiled; zero-signal → null). Verified live 2025: 10 managers, 431 activity rows, real differentiation; depth honestly thin (recurring-league friend group). No AI/credits/UI. Phase B (Haiku dossier writer) next.
     - Manager Dossiers Phase B (§7 — the API-key-gated Haiku dossier writer; §7 COMPLETE) — the project's FIRST AI-layer code. New application/ai/ module (distinct from the polars transforms; parquet I/O still via data_layer, the Anthropic call is external like a fetcher's HTTP). (1) ai/client.py — the isolation seam: api_available() gates on a real config.ANTHROPIC_API_KEY (absent/placeholder/non-sk-ant → locked, no anthropic import to check); generate_dossier() is the ONE place that knows how a request reaches the model (synchronous messages.create, Haiku 4.5, no thinking/effort, tolerant json.loads NOT messages.parse — SDK-version-safe; returns (dossier, usage)) — a Batch path swaps here only. ai/dossier_prompt.py — pure: stable system prefix (fixed 7-key JSON schema + tendencies-not-verdicts guardrails) + per-manager user prompt (blindspot framing for is_primary / exploitable-edge for opponents) + hardcoded zero-signal "no intel" dossier. (2) ai/write_manager_dossiers.py (compute/run/--season/--force) → manager_dossiers_{season} (first AI-written entity; one row per owner_id: structured fields + is_primary + signal-depth echo + model/generated_at/is_zero_signal): per manager, zero comparable leagues ⇒ hardcoded (no API); else prompt→generate→validate schema; synchronous sequential (caching off — ~347-token prefix below Haiku's 4096 min); run-once-per-season guard; key-gate clean exit. New data_layer write/read_manager_dossiers. (3) ai/check_manager_dossiers.py — internal-consistency gate (no API, reads persisted only): coverage + schema completeness + depth-echo-matches-features + zero-signal honesty (exit 0). Design decision: synchronous not Batch (≤16 managers once/season → 50% batch discount is noise; concurrent batch can't share a prompt cache; seam lets Batch swap in later). Verified live 2025: 10 dossiers, 10 Haiku calls, ~$0.025, gate exit 0; primary=blindspot, opponents=exploitable-edge, 10/10 confidence notes cite the real txn count. Guards unit-tested credit-free (zero-signal skips API; locked-key refuses even with --force). No UI.
+    - 710 backend-audit fixes (structural #1 + hygiene #5/#6/#7) — `application/` made a proper Python package: `__init__.py` in the 6 dirs + root `pyproject.toml`; every bare sys.path-dependent import rewritten to absolute package form and all 56 `sys.path.insert` lines across 31 files deleted (zero remain); scripts run as `python -m application.<pkg>.<module>` from the repo root (`-m` puts cwd on the path — no editable install); lazy `_import_manager_helpers` → top-level package import; ~30 usage strings + the two doc call-sites + the launchd plist (`-m` module, WorkingDirectory=repo root) + README updated. Hygiene: config.example gains SLEEPER_LEAGUE_ID + drops dead LEAGUE_TYPES/EXCLUDED_LEAGUES; requirements sheds unused pandas/nfl_data_py; bracket figure reconciled to top-4=3/4. Behavior-preserving (all backtest gates pass via -m, identical numbers; byte-compiles clean). Deferred: #2 scaling (no-op migration trigger), #3 §1 quality axis (net-new empirical-weighting transform), #4 §2 preseason anchor (blocked — no ADP source fetched). Post-merge: reinstall the launchd plist.
 
 > not yet built
     >> backend

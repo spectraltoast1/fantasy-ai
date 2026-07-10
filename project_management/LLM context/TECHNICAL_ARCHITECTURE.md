@@ -147,8 +147,18 @@ name, independent values and semantics; fold into shared config when it exists.)
 
 ## Folder Structure
 
+> **`application/` is a Python package** (2026-07-10 710-audit fix): every dir has an
+> `__init__.py`, a root `pyproject.toml` declares it, and modules import each other by absolute
+> package path (`from application.data import data_layer`,
+> `from application.data.transforms._analytics import …`) — **no `sys.path` manipulation anywhere**.
+> Run scripts as **`python -m application.<pkg>.<module>` from the repo root** (`-m` puts the cwd on
+> `sys.path`, so the package resolves without an editable install; `pip install -e .` is available
+> for IDE/tooling). The launchd scheduler invokes the fetcher the same way (`-m` module,
+> `WorkingDirectory` = repo root).
+
 ```
 fantasy-ai/
+├── pyproject.toml                 # package declaration (deps ← application/requirements.txt)
 ├── project_management/
 │   ├── TECHNICAL_ARCHITECTURE.md   (this file)
     ├── STATUS.md
