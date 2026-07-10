@@ -143,6 +143,48 @@ def read_lineup_slots(season: int) -> pl.DataFrame:
     return pl.read_parquet(_lineup_slots_path(season))
 
 
+# --- League Settings (scoring_settings + playoff/league config) ---
+# The league's real scoring and playoff configuration, pulled from the same Sleeper /league
+# object that yields roster_positions. Persisted so transforms drive behavior from the league's
+# actual rules instead of hardcoded/generic assumptions: the scoring dispatcher (transforms/
+# _scoring.py) selects the projection column from scoring_settings, and compute_bracket_sim reads
+# playoff_teams / playoff_week_start. Tall (section, key, value) so any scoring or league key is a
+# lookup, not a schema change. Fixed once a season is frozen → single overwrite file, like
+# roster_positions.
+
+
+def _league_settings_path(season: int) -> Path:
+    return _SNAPSHOT_DIR / "sleeper" / str(season) / f"league_settings_{season}.parquet"
+
+
+def write_league_settings(df: pl.DataFrame, season: int) -> None:
+    """Write the league's settings (scoring + playoff/league config) for a season (overwrite).
+
+    Tall frame: section ∈ {"scoring", "league"}, key (the Sleeper setting name), value (float —
+    scoring values and league settings are all numeric on Sleeper). Output of
+    sleeper.py fetch-league-config.
+    """
+    path = _league_settings_path(season)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
+
+def read_league_settings(season: int) -> pl.DataFrame:
+    return pl.read_parquet(_league_settings_path(season))
+
+
+def read_scoring_settings(season: int) -> dict:
+    """The league's scoring_settings as a {key: float} dict (the `scoring` section)."""
+    df = read_league_settings(season).filter(pl.col("section") == "scoring")
+    return {r["key"]: float(r["value"]) for r in df.iter_rows(named=True)}
+
+
+def read_playoff_settings(season: int) -> dict:
+    """The league's playoff/league config as a {key: value} dict (the `league` section)."""
+    df = read_league_settings(season).filter(pl.col("section") == "league")
+    return {r["key"]: r["value"] for r in df.iter_rows(named=True)}
+
+
 # --- NFL Stats ---
 
 def _nfl_stats_path(season: int) -> Path:
