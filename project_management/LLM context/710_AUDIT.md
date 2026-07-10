@@ -8,10 +8,12 @@ spec-completeness → hygiene). Check them off as they land.
 
 > **Progress (2026-07-10 session):** ✅ **#1 (package structure), #5 (config.example),
 > #6 (requirements), #7 (bracket figure) are DONE.** #2 (scaling) is a **no-op by design**
-> (documented migration trigger — do not hand-optimize the parquet writers). #3 and #4
-> (spec completeness) are **deferred**: #3 is a net-new empirical-weighting transform (not a
-> tweak), and #4 is **blocked on data** — no ADP / draft-capital source is fetched anywhere,
-> so the preseason anchor isn't buildable until one lands. Investigation notes are inline below.
+> (documented migration trigger — do not hand-optimize the parquet writers). ✅ **#4 (§2 preseason
+> anchor) is DONE** — the audit's "blocked on data" verdict was **wrong**: the ADP source
+> (`nflreadpy.load_ff_rankings`) was in a library we already depend on the whole time. #3
+> (§1 quality axis) remains **deferred** — but its scope is now smaller than the audit assumed:
+> `nflreadpy.load_ff_opportunity` already ships the empirical expected-points model, so #3 is a
+> consume-and-re-score transform, not a fit-your-own-weights build. Investigation notes are inline below.
 
 ---
 
@@ -46,29 +48,40 @@ spec-completeness → hygiene). Check them off as they land.
 
 ## Spec completeness (vs. DECISION_READS)
 
-- [ ] **§1 Quality axis is a TD-proxy, not the spec.** ⏸ **DEFERRED (scoped 2026-07-10).** Not a
-  tweak to `quality_rate` — the true spec is a **net-new empirical-weighting transform**: it needs a
-  per-chance-type PBP-tag store (the fetcher currently collapses PBP to `xtd`/`redzone_touches` at
-  fetch time and discards down/distance/yardline/air_yards), a multi-season historical PBP sample to
-  fit the weights, and league-scoring re-derivation (the `_scoring` engine exists). `quality_rate`
-  isn't gated today, so the rebuild should also add a quality backtest. Belongs with the read/modeling
-  work, not this cleanup pass. `quality_rate = xtd_g/opp_g` is built from
-  nflfastR `td_prob` — narrower and TD-centric versus DECISION_READS §1's *empirical EV-weights per
-  chance-type* (target depth / aDOT, field position, down & distance) re-derived under league
-  scoring. It's a reasonable proxy, but not the read as specified. ("Routes run" is correctly
-  deferred — the spec flags it as the hard one.)
-  *Where:* [application/data/transforms/compute_player_signal.py](application/data/transforms/compute_player_signal.py).
+- [ ] **§1 Quality axis is a TD-proxy, not the spec.** ⏸ **DEFERRED (re-scoped 2026-07-10, session 2).**
+  Still a net-new transform, but **smaller than first scoped** — we do **not** need to build a
+  per-chance-type PBP-tag store or fit our own multi-season weights. `nflreadpy.load_ff_opportunity`
+  (already a dependency; `player_id` = gsis_id, joins directly) ships ffverse's **empirical
+  expected-points model** already fit on historical PBP: `total_fantasy_points_exp` plus
+  scoring-agnostic component expectations (`rec_touchdown_exp`, `rec_yards_gained_exp`,
+  `receptions_exp`, `rush_yards_exp`, …) we re-derive under league scoring via the existing `_scoring`
+  engine, and `*_diff` (actual − expected) columns that are exactly the §1 point-correlation/luck
+  companion. So #3 becomes a **consume-and-re-score** transform (+ a quality backtest — `quality_rate`
+  isn't gated today), replacing the hand-rolled `quality_rate = xtd_g/opp_g` (nflfastR `td_prob`,
+  TD-centric) with the full multi-component EV read DECISION_READS §1 specifies. The per-play
+  `pbp_pass`/`pbp_rush` variants (yardline/down/air-yards + per-play `*_exp`) are there if we ever want
+  our own weights — but we don't. ("Routes run" is correctly deferred — the spec flags it as the hard one.)
+  *Where:* [application/data/transforms/compute_player_signal.py](application/data/transforms/compute_player_signal.py);
+  source `nflreadpy.load_ff_opportunity` (fetch alongside [nfl_stats.py](application/data/fetchers/nfl_stats.py)).
 
-- [ ] **§2 bull/bear has no preseason anchor.** ⏸ **DEFERRED — BLOCKED ON DATA (scoped 2026-07-10).**
-  The preseason anchor requires draft-capital / ADP, and **no such source is fetched or derivable at
-  the freeze**: Sleeper's draft endpoints are uncalled, nflreadpy's ADP/rankings loaders are uncalled,
-  and LeagueLogs market value is an in-season "now" snapshot (no 2025-preseason history) and is market
-  value, not draft capital. Buildable only after a preseason ADP source lands; the calibration gate
-  (`BULL_Z`) would then need a re-sweep. DECISION_READS §2 says bull/bear are anchored to
-  realistic **preseason limits** (draft capital / ADP ceiling & floor); the shipped band is purely
-  `centre ± z·σ` off the forward projection — no preseason anchor. (Separately, the §2 **AI narrative
-  + 1–10 roll-up** is deferred to Phase 6 by design.)
-  *Where:* [application/data/transforms/compute_ros_outcome_shape.py](application/data/transforms/compute_ros_outcome_shape.py).
+- [x] **§2 bull/bear has no preseason anchor.** ✅ **DONE (2026-07-10, session 2).** The "blocked on
+  data" verdict was wrong — the ADP source was in `nflreadpy` (already a dependency) all along.
+  `nflreadpy.load_ff_rankings('all')` carries historical FantasyPros consensus rankings back to 2019
+  (redraft-overall, `ecr`/`best`/`worst`, id-bridged FantasyPros→sleeper via `ff_playerids`), so a
+  preseason anchor is both buildable and backtestable against the 2025 freeze. Shipped as
+  **Option 2 (historical ADP→realized curve)**: a per-position `pos_ecr_rank → realized-points
+  floor/center/ceiling` curve (P10/P50/P90, rolling-window + isotonic-smoothed) fit on 2020–2024
+  (2025 held out = leak-free), then blended into bull/bear with a horizon-decaying weight
+  `w_N = ANCHOR_W · (remaining/total)` — §2's prior→evidence dynamic made explicit. `ros_center`
+  stays the borrowed projection (law 3); only the extremes are anchored; undrafted/uncovered players
+  degrade to the pure-projection band. The `BULL_Z` re-sweep (jointly with `ANCHOR_W`) landed at
+  (1.44, 0.25): the anchor lifts freeze coverage 0.744→0.817 and rebalances the projection's lopsided
+  miss tails (0.195/0.061 → 0.091/0.091); gate exit 0. New `fetchers/adp.py` + `compute_adp_points_curve.py`
+  + `adp_preseason` / `adp_points_curve` data-layer entities. (Separately, the §2 **AI narrative +
+  1–10 roll-up** is deferred to Phase 6 by design.)
+  *Where:* [application/data/transforms/compute_ros_outcome_shape.py](application/data/transforms/compute_ros_outcome_shape.py),
+  [application/data/fetchers/adp.py](application/data/fetchers/adp.py),
+  [application/data/transforms/compute_adp_points_curve.py](application/data/transforms/compute_adp_points_curve.py).
 
 ## Config / deps / doc hygiene
 
