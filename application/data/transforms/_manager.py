@@ -17,8 +17,7 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _scoring import scoring_profile
+from application.data.transforms._scoring import scoring_profile
 
 _SKILL = {"QB", "RB", "WR", "TE"}
 

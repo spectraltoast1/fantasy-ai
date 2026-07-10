@@ -13,7 +13,7 @@ Design:
     player_id_map provides gsis_id for players absent from nflreadpy entirely.
 
 Usage:
-    python join_nfl_sleeper_weekly.py --season 2025 --week 4
+    python -m application.data.transforms.join_nfl_sleeper_weekly --season 2025 --week 4
 """
 
 import argparse
@@ -23,8 +23,7 @@ from pathlib import Path
 
 import polars as pl
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import data_layer
+from application.data import data_layer
 
 SKILL_POSITIONS = {"QB", "RB", "WR", "TE"}
 

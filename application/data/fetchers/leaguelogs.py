@@ -23,8 +23,8 @@ Public API:
     list_profiles()   — return the currently published profile keys
 
 Usage:
-    python leaguelogs.py snapshot
-    python leaguelogs.py profiles
+    python -m application.data.fetchers.leaguelogs snapshot
+    python -m application.data.fetchers.leaguelogs profiles
 """
 
 import sys
@@ -37,8 +37,7 @@ import requests
 
 _HERE = Path(__file__).resolve().parent   # .../application/data/fetchers/
 _DATA_DIR = _HERE.parent                   # .../application/data/
-sys.path.insert(0, str(_DATA_DIR))
-import data_layer
+from application.data import data_layer
 
 _BASE = "https://developer.leaguelogs.com/v1"
 _TIMEOUT = 30
@@ -172,5 +171,5 @@ if __name__ == "__main__":
         for p in list_profiles():
             print(p)
     else:
-        print("Usage: leaguelogs.py snapshot | leaguelogs.py profiles")
+        print("Usage: python -m application.data.fetchers.leaguelogs {snapshot | profiles}")
         sys.exit(1)

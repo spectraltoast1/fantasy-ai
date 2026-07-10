@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fantasy-ai"
+version = "0.1.0"
+description = "Fantasy football analytics dashboard (V1) + AI advisor (V2+)"
+requires-python = ">=3.13"
+dynamic = ["dependencies"]
+
+# Deps stay authored in application/requirements.txt (the install list); this just points at it.
+[tool.setuptools.dynamic]
+dependencies = { file = ["application/requirements.txt"] }
+
+# `application` is the importable package tree; every script runs as
+#   python -m application.data.transforms.<name>   (from the repo root)
+# so no editable install is required to run. `pip install -e .` is available for IDE/tooling.
+[tool.setuptools.packages.find]
+include = ["application*"]

@@ -32,8 +32,8 @@ league-wide over/under-projection correlates their misses, so pooling the nested
 (same player at N=1..4) would inflate n without independent signal — reported as evidence only.
 
 Usage:
-    python backtest_ros_outcome_shape.py --season 2025
-    python backtest_ros_outcome_shape.py --season 2025 --sweep
+    python -m application.data.transforms.backtest_ros_outcome_shape --season 2025
+    python -m application.data.transforms.backtest_ros_outcome_shape --season 2025 --sweep
 """
 
 import argparse
@@ -42,12 +42,9 @@ from pathlib import Path
 
 import polars as pl
 
-_TRANSFORMS_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(_TRANSFORMS_DIR.parent))
-sys.path.insert(0, str(_TRANSFORMS_DIR))
-import data_layer
-from _analytics import mean
-from compute_ros_outcome_shape import BULL_Z, SKILL_POSITIONS, _outcome_band, _ros_sigma
+from application.data import data_layer
+from application.data.transforms._analytics import mean
+from application.data.transforms.compute_ros_outcome_shape import BULL_Z, SKILL_POSITIONS, _outcome_band, _ros_sigma
 
 # Target bull/bear coverage — the fraction of players whose actual ROS should land in the band.
 # 0.80 = an ~80% (10th/90th) "good season / bad season" interval, §2's realistic high/low.

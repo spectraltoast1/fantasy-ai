@@ -30,7 +30,7 @@ Monte Carlo (§5 full) is what turns this + the weekly-spread variance into play
 Output: snapshots/derived/true_rank_{season}.parquet, one row per (as_of_week, roster_id).
 
 Usage:
-    python compute_true_rank.py --season 2025
+    python -m application.data.transforms.compute_true_rank --season 2025
 """
 
 import argparse
@@ -39,11 +39,8 @@ from pathlib import Path
 
 import polars as pl
 
-_TRANSFORMS_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(_TRANSFORMS_DIR.parent))  # application/data → data_layer
-sys.path.insert(0, str(_TRANSFORMS_DIR))          # transforms → _analytics
-import data_layer
-from _analytics import round1, spectrum_positions, expand_slots, optimal_lineup
+from application.data import data_layer
+from application.data.transforms._analytics import round1, spectrum_positions, expand_slots, optimal_lineup
 
 
 def _team_strength(players: list, slots: list) -> dict:

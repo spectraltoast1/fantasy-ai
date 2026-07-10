@@ -25,7 +25,7 @@ and a league-relative 0–1 Leaky↔Optimal spectrum marker (min→max efficienc
 Output: snapshots/derived/team_leakage_{season}.parquet, one row per roster_id.
 
 Usage:
-    python compute_team_leakage.py --season 2025
+    python -m application.data.transforms.compute_team_leakage --season 2025
 """
 
 import argparse
@@ -35,11 +35,8 @@ from pathlib import Path
 
 import polars as pl
 
-_TRANSFORMS_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(_TRANSFORMS_DIR.parent))  # application/data → data_layer
-sys.path.insert(0, str(_TRANSFORMS_DIR))          # transforms → _analytics
-import data_layer
-from _analytics import (
+from application.data import data_layer
+from application.data.transforms._analytics import (
     round1,
     spectrum_positions,
     expand_slots as _expand_slots,

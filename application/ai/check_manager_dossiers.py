@@ -16,7 +16,7 @@ Soft evidence (reported, not gated): how many confidence_notes cite the transact
 the primary user's dossier is self-framed (blindspot) rather than opponent-framed.
 
 Usage:
-    python check_manager_dossiers.py --season 2025
+    python -m application.ai.check_manager_dossiers --season 2025
 """
 
 import argparse
@@ -26,10 +26,8 @@ from pathlib import Path
 import polars as pl
 
 _HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(_HERE))                    # -> dossier_prompt
-sys.path.insert(0, str(_HERE.parent / "data"))    # -> data_layer
-import data_layer
-import dossier_prompt as dp
+from application.data import data_layer
+from application.ai import dossier_prompt as dp
 
 
 def _check_coverage(dossiers: pl.DataFrame, feats: pl.DataFrame) -> bool:

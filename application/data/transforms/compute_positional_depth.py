@@ -34,7 +34,7 @@ would otherwise be invisible in a rostered-players-only frame).
 Output: snapshots/derived/positional_depth_{season}.parquet, one row per (as_of_week, roster_id, position).
 
 Usage:
-    python compute_positional_depth.py --season 2025
+    python -m application.data.transforms.compute_positional_depth --season 2025
 """
 
 import argparse
@@ -43,11 +43,8 @@ from pathlib import Path
 
 import polars as pl
 
-_TRANSFORMS_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(_TRANSFORMS_DIR.parent))  # application/data → data_layer
-sys.path.insert(0, str(_TRANSFORMS_DIR))          # transforms → _analytics
-import data_layer
-from _analytics import round1, spectrum_positions
+from application.data import data_layer
+from application.data.transforms._analytics import round1, spectrum_positions
 
 SKILL_POSITIONS = ["QB", "RB", "WR", "TE"]
 

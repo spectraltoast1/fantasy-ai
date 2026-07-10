@@ -11,8 +11,7 @@ from pathlib import Path
 import requests
 
 _HERE = Path(__file__).resolve().parent        # .../application/shared/
-sys.path.insert(0, str(_HERE.parent))          # .../application/ so "import config" resolves
-import config
+from application import config
 
 
 def resolve_league_id(year: int) -> str:

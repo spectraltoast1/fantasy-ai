@@ -8,7 +8,7 @@ manager skips the AI (a hardcoded "no intel" dossier); the whole read is skipped
 is configured; a re-run is a no-op unless `--force` (run once per season).
 
 Usage:
-    python write_manager_dossiers.py --season 2025 [--force] [--model claude-haiku-4-5]
+    python -m application.ai.write_manager_dossiers --season 2025 [--force] [--model claude-haiku-4-5]
 """
 
 import argparse
@@ -19,11 +19,9 @@ from pathlib import Path
 import polars as pl
 
 _HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(_HERE))                    # -> client, dossier_prompt
-sys.path.insert(0, str(_HERE.parent / "data"))    # -> data_layer
-import data_layer
-import client
-import dossier_prompt as dp
+from application.data import data_layer
+from application.ai import client
+from application.ai import dossier_prompt as dp
 
 # Haiku 4.5 pricing ($ per 1M tokens) — for the cost summary line only.
 _IN_RATE, _OUT_RATE = 1.0, 5.0

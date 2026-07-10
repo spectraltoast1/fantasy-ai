@@ -30,7 +30,7 @@ only — the same team at N=1..4 isn't independent, so pooling inflates n withou
 signal.
 
 Usage:
-    python backtest_true_rank.py --season 2025
+    python -m application.data.transforms.backtest_true_rank --season 2025
 """
 
 import argparse
@@ -39,12 +39,9 @@ from pathlib import Path
 
 import polars as pl
 
-_TRANSFORMS_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(_TRANSFORMS_DIR.parent))
-sys.path.insert(0, str(_TRANSFORMS_DIR))
-import data_layer
-from _analytics import mean, pearson, expand_slots, optimal_lineup
-from compute_true_rank import _team_strength
+from application.data import data_layer
+from application.data.transforms._analytics import mean, pearson, expand_slots, optimal_lineup
+from application.data.transforms.compute_true_rank import _team_strength
 
 SKILL_POSITIONS = ["QB", "RB", "WR", "TE"]
 

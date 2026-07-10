@@ -16,7 +16,7 @@ root, `run(season)` writes. Every manager in the league gets a row — including
 zero comparable-league activity (depth 0, null features), so the profile set is complete.
 
 Usage:
-    python compute_manager_features.py --season 2025
+    python -m application.data.transforms.compute_manager_features --season 2025
 """
 
 import argparse
@@ -25,12 +25,8 @@ from pathlib import Path
 
 import polars as pl
 
-_TRANSFORMS_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(_TRANSFORMS_DIR.parent))          # -> data_layer
-sys.path.insert(0, str(_TRANSFORMS_DIR))                 # -> _manager
-sys.path.insert(0, str(_TRANSFORMS_DIR.parent.parent))   # -> config (application/)
-import data_layer
-import _manager
+from application.data import data_layer
+from application.data.transforms import _manager
 
 # Signal-depth tiers (transactions drawn on) — an honest, coarse confidence label; Phase B
 # still reads the raw counts. Injected into the pure feature function.
@@ -42,7 +38,7 @@ def _primary_username() -> str | None:
     """config.SLEEPER_USERNAME resolves 'which manager is me' (mirrors the front-end's
     MY_USERNAME==owner_name idiom). Guarded so the transform still runs without config."""
     try:
-        import config
+        from application import config
         return getattr(config, "SLEEPER_USERNAME", None)
     except Exception:
         return None

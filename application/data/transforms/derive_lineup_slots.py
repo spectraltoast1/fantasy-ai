@@ -1,7 +1,8 @@
 """
 Derive the starting skill-slot requirements from a league's raw roster_positions.
 
-The league object's roster_positions (fetched by sleeper.py fetch-roster-positions)
+The league object's roster_positions
+(fetched by `python -m application.data.fetchers.sleeper fetch-roster-positions`)
 lists every slot including bench, IR, kicker, and defense, e.g.
     ['QB','RB','RB','WR','WR','TE','FLEX','FLEX','K','DEF','BN',...].
 
@@ -21,7 +22,7 @@ V1 is skill-only, so K and DEF starting slots are intentionally dropped — they
 affect optimal selection among QB/RB/WR/TE.
 
 Usage:
-    python derive_lineup_slots.py --season 2025
+    python -m application.data.transforms.derive_lineup_slots --season 2025
 """
 
 import argparse
@@ -30,8 +31,7 @@ from pathlib import Path
 
 import polars as pl
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import data_layer
+from application.data import data_layer
 
 SKILL_POSITIONS = ["QB", "RB", "WR", "TE"]
 

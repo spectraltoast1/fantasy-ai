@@ -1,8 +1,8 @@
 # LeagueLogs daily snapshot scheduler (launchd)
 
-Runs `leaguelogs.py snapshot` once a day at **04:00 America/New_York** (DST-aware,
-since launchd uses the machine's local time). If the Mac is asleep at 04:00, the
-job runs at next wake.
+Runs `python -m application.data.fetchers.leaguelogs snapshot` once a day at
+**04:00 America/New_York** (DST-aware, since launchd uses the machine's local time).
+If the Mac is asleep at 04:00, the job runs at next wake.
 
 `com.fantasyai.leaguelogs-snapshot.plist` is the canonical copy (version-controlled).
 The live copy lives at `~/Library/LaunchAgents/com.fantasyai.leaguelogs-snapshot.plist`.
@@ -37,10 +37,12 @@ rm ~/Library/LaunchAgents/com.fantasyai.leaguelogs-snapshot.plist
 
 ## Notes / gotchas
 
-- **Absolute paths** in the plist are required — launchd runs with no user `PATH`.
+- **Absolute Python path** in the plist is required — launchd runs with no user `PATH`.
   Python is the python.org 3.13 build (has polars + requests). If Python is
   reinstalled/moved, update `ProgramArguments[0]` and reload.
-- Paths are hardcoded to this machine's checkout (`/Users/willdaniel/...`); adjust
-  if the repo moves.
+- The job runs the fetcher as a **package module** (`-m application.data.fetchers.leaguelogs`)
+  with `WorkingDirectory` set to the **repo root** — `python -m` puts the cwd on `sys.path`,
+  so the `application` package resolves without an editable install. If the repo moves, update
+  `WorkingDirectory` (and reload); it is hardcoded to this machine's checkout (`/Users/willdaniel/...`).
 - Logs are under `logs/` (gitignored). Snapshots append to
   `snapshots/leaguelogs/market_values.parquet` (gitignored).

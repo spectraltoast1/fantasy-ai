@@ -26,12 +26,9 @@ from pathlib import Path
 
 import polars as pl
 
-_TRANSFORMS_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(_TRANSFORMS_DIR.parent))  # application/data → data_layer
-sys.path.insert(0, str(_TRANSFORMS_DIR))          # transforms → _scoring
-import data_layer
-import compute_projection_consensus
-from _scoring import recompute_custom_points, scoring_profile
+from application.data import data_layer
+from application.data.transforms import compute_projection_consensus
+from application.data.transforms._scoring import recompute_custom_points, scoring_profile
 
 PROJ_TOL = 0.02    # projections store components at 2 dp → ~0.01 rounding on the reconstruction
 ACTUAL_TOL = 1e-6  # nfl_stats components are exact

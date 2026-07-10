@@ -18,8 +18,7 @@ _DATA_DIR = _HERE.parent                      # .../application/data/
 
 # data_layer.py lives one level up in application/data/ — all snapshot/cache I/O
 # goes through it (the fetcher constructs no paths and calls no polars read/write).
-sys.path.insert(0, str(_DATA_DIR))
-import data_layer
+from application.data import data_layer
 
 
 def _build_player_id_map() -> pl.DataFrame:
@@ -173,7 +172,7 @@ def refresh() -> None:
 
 
 if __name__ == "__main__":
-    usage = "Usage: nfl_stats.py backfill <year> | nfl_stats.py refresh"
+    usage = "Usage: python -m application.data.fetchers.nfl_stats {backfill <year> | refresh}"
     if len(sys.argv) < 2:
         print(usage)
         sys.exit(1)

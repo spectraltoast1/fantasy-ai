@@ -147,8 +147,18 @@ name, independent values and semantics; fold into shared config when it exists.)
 
 ## Folder Structure
 
+> **`application/` is a Python package** (2026-07-10 710-audit fix): every dir has an
+> `__init__.py`, a root `pyproject.toml` declares it, and modules import each other by absolute
+> package path (`from application.data import data_layer`,
+> `from application.data.transforms._analytics import …`) — **no `sys.path` manipulation anywhere**.
+> Run scripts as **`python -m application.<pkg>.<module>` from the repo root** (`-m` puts the cwd on
+> `sys.path`, so the package resolves without an editable install; `pip install -e .` is available
+> for IDE/tooling). The launchd scheduler invokes the fetcher the same way (`-m` module,
+> `WorkingDirectory` = repo root).
+
 ```
 fantasy-ai/
+├── pyproject.toml                 # package declaration (deps ← application/requirements.txt)
 ├── project_management/
 │   ├── TECHNICAL_ARCHITECTURE.md   (this file)
     ├── STATUS.md
@@ -411,7 +421,7 @@ refresh() current-week snapshot writes will silently skip with an explicit log m
 
 players_points in matchup snapshots is stored as a serialized JSON string (map of sleeperPlayerId → points). Parse with json.loads before joining. Same applies to starters (JSON array of starter IDs).
 
-fetch_players() caches the full Sleeper /players/nfl endpoint to cache/sleeper/players.parquet. Skips the network call if the cache is less than 24 hours old; pass force=True to override. Called automatically by refresh() and by audit_join.py when the cache is stale or missing. Can also be triggered standalone: python fetchers/sleeper.py fetch-players. Position values in this endpoint use Sleeper's internal codes: QB/RB/WR/TE for skill, K for kicker, DEF for defense.
+fetch_players() caches the full Sleeper /players/nfl endpoint to cache/sleeper/players.parquet. Skips the network call if the cache is less than 24 hours old; pass force=True to override. Called automatically by refresh() and by audit_join.py when the cache is stale or missing. Can also be triggered standalone: python -m application.data.fetchers.sleeper fetch-players. Position values in this endpoint use Sleeper's internal codes: QB/RB/WR/TE for skill, K for kicker, DEF for defense.
 
 **Injury/depth-chart fields (added 2026-07-08, Phase 1 refinement):** fetch_players() now also carries injury_status, injury_body_part, depth_chart_order, depth_chart_position, and practice_participation through to the cache — the endpoint already returns them, previously discarded. Feeds compute_player_signal.py's `security` read. **Gotcha:** these fields are null for most players in the sampled prefix polars uses for schema inference, which can pin the wrong dtype for a column that's stringy/numeric further down — fetch_players() passes `infer_schema_length=None` to pl.DataFrame() to force a full scan. This is "now" data only (no history), so the same value applies across every as_of_week slice for a given player — a documented simplification, not a bug.
 
@@ -680,7 +690,7 @@ via data_layer.py, performs a single join, and writes via data_layer.py.
   baseline by ≥ 0.02 (2025: **0.224** — single-game FF is near-coin-flip by nature, so the honest edge
   is modest); (2) *standings prediction* — expected wins (analytic base + Σ remaining P(win), the
   backbone the MC approximates) vs actual wins, freeze-week **Spearman ≥ 0.50** (2025: **0.756**). Also
-  reports (not gated) that the top-`PLAYOFF_TEAMS` by `playoff_odds` = **6/6** actual playoff teams —
+  reports (not gated) that the top-`PLAYOFF_TEAMS` by `playoff_odds` = **3/4** actual playoff teams —
   the season aggregate is where the modest per-game edge accumulates. Same answer-key template as the
   other gates.
 

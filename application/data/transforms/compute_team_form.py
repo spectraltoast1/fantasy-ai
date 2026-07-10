@@ -22,7 +22,7 @@ Per team it derives:
 Output: snapshots/derived/team_form_{season}.parquet, one row per roster_id.
 
 Usage:
-    python compute_team_form.py --season 2025
+    python -m application.data.transforms.compute_team_form --season 2025
 """
 
 import argparse
@@ -32,11 +32,8 @@ from pathlib import Path
 
 import polars as pl
 
-_TRANSFORMS_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(_TRANSFORMS_DIR.parent))  # application/data → data_layer
-sys.path.insert(0, str(_TRANSFORMS_DIR))          # transforms → _analytics
-import data_layer
-from _analytics import mean, median, round1, spectrum_positions
+from application.data import data_layer
+from application.data.transforms._analytics import mean, median, round1, spectrum_positions
 
 # Recency weighting: each week's weight halves every HALF_LIFE_WK weeks back from the
 # most recent, so the trend leans on recent form without cutting older games off.
