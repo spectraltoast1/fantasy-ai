@@ -55,23 +55,20 @@ _TRANSFORMS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_TRANSFORMS_DIR.parent))  # application/data → data_layer
 sys.path.insert(0, str(_TRANSFORMS_DIR))          # transforms → _analytics
 import data_layer
-from _analytics import round1
+from _analytics import round1, position_pools
 
 SKILL_POSITIONS = ["QB", "RB", "WR", "TE"]
 
 
 def _pool_of(lineup_slots: pl.DataFrame) -> dict:
-    """position → pool key, derived from the league's declared lineup slots (not hard-coded).
+    """position → pool key (the §4 replacement pool), derived from the league's declared lineup slots.
 
-    Flex-eligible positions (the FLEX slot's `eligible` list) share one pooled key so they're
-    measured against a single replacement line (§4); every other position is its own pool. In
-    a standard 1QB league this yields QB→'QB' and RB/WR/TE→'FLEX'. Reads the config off the
-    parquet so a different league shape re-pools without a code change — except superflex,
-    where QB joins the flex eligibility and this falls out correctly too.
+    Delegates to the shared `_analytics.position_pools`: positions sharing a multi-position slot are
+    pooled against one waiver line; dedicated-only positions are their own pool. Standard 1QB →
+    QB/'FLEX'; **superflex → QB joins the flex pool** (`SUPER_FLEX`), removing the old latent that
+    matched only a slot literally named 'FLEX'. Config-driven, no hard-coding.
     """
-    flex_row = lineup_slots.filter(pl.col("slot") == "FLEX")
-    flex_eligible = set(flex_row["eligible"][0].split(",")) if flex_row.height else set()
-    return {p: ("FLEX" if p in flex_eligible else p) for p in SKILL_POSITIONS}
+    return position_pools(lineup_slots.to_dicts())
 
 
 def _ros_values(consensus: pl.DataFrame, remaining_weeks) -> pl.DataFrame:

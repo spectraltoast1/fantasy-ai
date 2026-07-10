@@ -118,6 +118,51 @@ def optimal_lineup(players, slots):
     return {"total": total, "picks": picks}
 
 
+def position_pools(slot_rows):
+    """position → pool key, derived from the league's declared lineup slots (not hard-coded).
+
+    Positions that can occupy a common **multi-position** starting slot (FLEX, SUPER_FLEX, …) share
+    one pool; a position that only ever fills dedicated single-position slots is its own pool. This is
+    the swap-eligibility / replacement-pool structure, used by Production VOR (one waiver line per
+    pool) and lineup-leakage (legal swap classes) so both generalize to any lineup shape instead of
+    hard-coding QB-vs-FLEX. Examples: standard 1QB → {QB:'QB', RB/WR/TE:'FLEX'}; superflex →
+    {QB/RB/WR/TE:'SUPER_FLEX'}; 2QB (two dedicated QB slots, no superflex) → {QB:'QB', ...}.
+
+    Pool key = the name of the **broadest** multi-position slot inducing the pool (so the label is
+    meaningful, e.g. 'SUPER_FLEX'); a singleton pool is keyed by its position. `slot_rows` are the raw
+    lineup_slots dicts (slot, count, eligible-CSV). Pure. NB: for the standard config this reproduces
+    the old QB/'FLEX' partition **and labels** exactly, so consumers see byte-identical output.
+    """
+    positions = []
+    for s in slot_rows:
+        for p in str(s["eligible"]).split(","):
+            if p and p not in positions:
+                positions.append(p)
+
+    parent = {p: p for p in positions}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    multi = []  # (slot_name, eligible-list) for every multi-position slot
+    for s in slot_rows:
+        elig = [p for p in str(s["eligible"]).split(",") if p]
+        if len(elig) > 1:
+            multi.append((s["slot"], elig))
+            for p in elig[1:]:
+                parent[find(p)] = find(elig[0])
+
+    # Name each merged component after the broadest slot touching it (ascending sort → widest wins).
+    comp_name = {}
+    for slot_name, elig in sorted(multi, key=lambda t: (len(t[1]), str(t[0]))):
+        comp_name[find(elig[0])] = slot_name
+
+    return {p: comp_name.get(find(p), p) for p in positions}
+
+
 def spectrum_positions(values):
     """League-relative 0–1 position for each value, in input order (min→0, max→1).
 
