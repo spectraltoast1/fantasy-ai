@@ -680,7 +680,7 @@ via data_layer.py, performs a single join, and writes via data_layer.py.
   baseline by ≥ 0.02 (2025: **0.224** — single-game FF is near-coin-flip by nature, so the honest edge
   is modest); (2) *standings prediction* — expected wins (analytic base + Σ remaining P(win), the
   backbone the MC approximates) vs actual wins, freeze-week **Spearman ≥ 0.50** (2025: **0.756**). Also
-  reports (not gated) that the top-`PLAYOFF_TEAMS` by `playoff_odds` = **6/6** actual playoff teams —
+  reports (not gated) that the top-`PLAYOFF_TEAMS` by `playoff_odds` = **3/4** actual playoff teams —
   the season aggregate is where the modest per-game edge accumulates. Same answer-key template as the
   other gates.
 
