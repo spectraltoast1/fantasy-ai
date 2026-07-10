@@ -13,11 +13,14 @@ of the project rather than being re-derived here (single source of truth). Featu
 (Phase A commit 3) is appended to this module.
 """
 
+import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _scoring import scoring_profile
+
+_SKILL = {"QB", "RB", "WR", "TE"}
 
 # --- Comparability (which of a manager's other leagues are "like" the target) --------
 
@@ -117,3 +120,89 @@ def manager_in_transaction(txn: dict, roster_id) -> bool:
 def manager_moves(mapping, roster_id) -> list:
     """The player_ids the given roster added (or dropped) in a txn — filters an adds/drops map."""
     return [str(pid) for pid, rid in (mapping or {}).items() if rid == roster_id]
+
+
+# --- Behavioural features (the deterministic AI-input, Phase A commit 3) --------------
+
+# Empty when a manager has no captured transactions — every rate/lean feature is undefined
+# (zero behavioural signal), kept apart from the depth counts so the schema stays stable.
+_RATE_KEYS = (
+    "n_waivers", "n_free_agents", "n_trades", "waiver_share", "waiver_success_rate",
+    "avg_bid_frac", "max_bid_frac", "budget_spent_frac", "trades_per_league",
+    "moves_per_league", "add_qb_share", "add_rb_share", "add_wr_share", "add_te_share",
+)
+
+
+def manager_features(rows, pos_by_id, *, depth_thin=10, depth_moderate=30) -> dict:
+    """Deterministic behavioural profile for ONE manager from their cross-league activity rows.
+
+    `rows` = that manager's manager_activity rows (both "league" markers and "txn" rows, as
+    plain dicts). `pos_by_id` = sleeper_player_id -> position, for the positional lean of adds
+    (skill only; DST/K adds are dropped, V1 scope). Every rate/lean feature returns None when
+    its denominator is 0 — never a fabricated 0 (law 2 / the _analytics None convention) — so
+    Phase B can gate confidence on the signal-depth counts. Pure: no I/O, no polars.
+    """
+    league_rows = [r for r in rows if r.get("kind") == "league"]
+    txns = [r for r in rows if r.get("kind") == "txn"]
+
+    n_leagues = len({(r["source_league_id"], r["source_season"]) for r in league_rows})
+    n_seasons = len({r["source_season"] for r in league_rows})
+    n_transactions = len(txns)
+    depth_tier = ("none" if n_transactions == 0 else
+                  "thin" if n_transactions < depth_thin else
+                  "moderate" if n_transactions < depth_moderate else "deep")
+    depth = {"n_leagues": n_leagues, "n_seasons": n_seasons,
+             "n_transactions": n_transactions, "depth_tier": depth_tier}
+
+    if n_transactions == 0:                         # zero behavioural signal
+        return {**depth, "n_waivers": 0, "n_free_agents": 0, "n_trades": 0,
+                **{k: None for k in _RATE_KEYS if k not in ("n_waivers", "n_free_agents", "n_trades")}}
+
+    waivers = [t for t in txns if t.get("txn_type") == "waiver"]
+    free_agents = [t for t in txns if t.get("txn_type") == "free_agent"]
+    n_waivers, n_fa, n_trades = len(waivers), len(free_agents), sum(
+        1 for t in txns if t.get("txn_type") == "trade")
+
+    add_moves = n_waivers + n_fa
+    waiver_share = (n_waivers / add_moves) if add_moves else None       # waiver vs free-agent mix
+    completed = [t for t in waivers if t.get("status") == "complete"]
+    waiver_success_rate = (len(completed) / n_waivers) if n_waivers else None
+
+    # FAAB aggression — each bid as a fraction of THAT bid's league budget (normalises 200 vs 1000).
+    bid_fracs = [t["faab_bid"] / t["faab_budget"] for t in waivers
+                 if t.get("faab_bid") is not None and t.get("faab_budget")]
+    avg_bid_frac = (sum(bid_fracs) / len(bid_fracs)) if bid_fracs else None
+    max_bid_frac = max(bid_fracs) if bid_fracs else None
+
+    # Budget-spent fraction — per league-season: FAAB spent (completed) / budget, then averaged.
+    spent, budget = {}, {}
+    for t in completed:
+        k = (t["source_league_id"], t["source_season"])
+        if t.get("faab_bid") is not None:
+            spent[k] = spent.get(k, 0.0) + t["faab_bid"]
+        if t.get("faab_budget"):
+            budget[k] = t["faab_budget"]
+    spent_fracs = [spent[k] / budget[k] for k in spent if budget.get(k)]
+    budget_spent_frac = (sum(spent_fracs) / len(spent_fracs)) if spent_fracs else None
+
+    trades_per_league = n_trades / n_leagues if n_leagues else None
+    moves_per_league = n_transactions / n_leagues if n_leagues else None
+
+    # Positional lean of adds (skill only; team-abbrev DST ids + K map outside _SKILL -> dropped).
+    pos_counts = {p: 0 for p in _SKILL}
+    for t in txns:
+        for pid in json.loads(t.get("adds_json") or "[]"):
+            p = pos_by_id.get(str(pid))
+            if p in _SKILL:
+                pos_counts[p] += 1
+    total = sum(pos_counts.values())
+    share = (lambda p: pos_counts[p] / total) if total else (lambda p: None)
+
+    return {**depth,
+            "n_waivers": n_waivers, "n_free_agents": n_fa, "n_trades": n_trades,
+            "waiver_share": waiver_share, "waiver_success_rate": waiver_success_rate,
+            "avg_bid_frac": avg_bid_frac, "max_bid_frac": max_bid_frac,
+            "budget_spent_frac": budget_spent_frac,
+            "trades_per_league": trades_per_league, "moves_per_league": moves_per_league,
+            "add_qb_share": share("QB"), "add_rb_share": share("RB"),
+            "add_wr_share": share("WR"), "add_te_share": share("TE")}

@@ -743,3 +743,41 @@ def read_manager_activity(season: int, owner_id: str | None = None) -> pl.DataFr
 
 def manager_activity_exists(season: int) -> bool:
     return _manager_activity_path(season).exists()
+
+
+# --- Manager Features (cross-league behavioural profile, DECISION_READS.md §7) ---
+# The deterministic feature extraction over manager_activity — one row per manager (owner_id):
+# FAAB aggression, waiver/free-agent mix, waiver success rate, add/drop churn, trade frequency,
+# positional lean of adds, plus the signal-depth counts (n_leagues / n_seasons / n_transactions)
+# Phase B gates AI confidence on. Rate/lean features are null when undefined (thin sample), never
+# a fabricated 0. This is the pre-filtered, credit-free AI input for the Phase-B Haiku dossier
+# writer (never raw transaction logs — credit optimization, principle #5). A computed analytic,
+# so it lives in derived/ alongside the other compute_* outputs; overwrite per run.
+
+
+def _manager_features_path(season: int) -> Path:
+    return _SNAPSHOT_DIR / "derived" / f"manager_features_{season}.parquet"
+
+
+def write_manager_features(df: pl.DataFrame, season: int) -> None:
+    """Write the per-manager behavioural feature profile for a season (overwrite).
+
+    Output of transforms/compute_manager_features.py: one row per league manager (owner_id),
+    carrying the deterministic behavioural features + signal-depth counts + an is_primary flag
+    (the primary user gets a blindspot-scoped dossier in Phase B).
+    """
+    path = _manager_features_path(season)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
+
+def read_manager_features(season: int, owner_id: str | None = None) -> pl.DataFrame:
+    """Read the per-manager feature profile for a season, optionally one manager."""
+    df = pl.read_parquet(_manager_features_path(season))
+    if owner_id is not None:
+        df = df.filter(pl.col("owner_id") == owner_id)
+    return df
+
+
+def manager_features_exists(season: int) -> bool:
+    return _manager_features_path(season).exists()
