@@ -211,6 +211,82 @@ def read_nfl_stats(season: int) -> pl.DataFrame:
     return pl.read_parquet(_nfl_stats_path(season))
 
 
+# --- Preseason ADP (FantasyPros consensus, historical) ---
+# The preseason-limits source for the §2 ROS bull/bear anchor (DECISION_READS.md §2). One tall
+# file, `season` a COLUMN (the projections "source-as-a-column" idiom) so the historical
+# curve-fit spans every season in one read and the current-season anchor is a filter. Fetched by
+# `application/data/fetchers/adp.py backfill` from nflreadpy.load_ff_rankings — the latest August
+# (pre-kickoff) redraft-overall snapshot per season, id-bridged FantasyPros→sleeper. Preseason ADP
+# for a season is fixed once drafted, so a re-fetch replaces that season's slice (dedup-by-season),
+# mirroring write_projections.
+
+
+def _adp_preseason_path() -> Path:
+    return _SNAPSHOT_DIR / "nflreadpy" / "adp_preseason.parquet"
+
+
+def write_adp_preseason(df: pl.DataFrame, season: int) -> None:
+    """Append one season's preseason ADP slice to the single history file (replace-by-season).
+
+    `df` is treated as the COMPLETE set of rows for `season`. If the file exists, that season's
+    rows are dropped first so a re-fetch replaces rather than duplicates; other seasons (which the
+    live scrape can no longer reproduce) are preserved. One row per (season, sleeper_player_id):
+    ecr / best / worst / sd (FantasyPros consensus rank + range) + pos_ecr_rank (rank of ecr within
+    position at that snapshot).
+    """
+    path = _adp_preseason_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        existing = pl.read_parquet(path).filter(pl.col("season") != season)
+        df = pl.concat([existing, df], how="diagonal")
+    df.write_parquet(path)
+
+
+def read_adp_preseason(season: int | None = None) -> pl.DataFrame:
+    """Read the preseason ADP history, optionally filtered to one season (default = all seasons)."""
+    df = pl.read_parquet(_adp_preseason_path())
+    if season is not None:
+        df = df.filter(pl.col("season") == season)
+    return df
+
+
+def adp_preseason_exists() -> bool:
+    return _adp_preseason_path().exists()
+
+
+# --- ADP Points Curve (historical rank -> realized-points floor/center/ceiling) ---
+# The empirical anchor for the §2 ROS bull/bear range (DECISION_READS.md §2): "what does a player
+# drafted at positional ADP rank r ACTUALLY produce in realized season points?" Fit by
+# transforms/compute_adp_points_curve.py over prior seasons (preseason positional ADP rank ↔ realized
+# season-total fantasy_points_ppr), one row per (position, pos_ecr_rank) carrying the P10/P50/P90 =
+# floor/center/ceiling. Season-agnostic (pooled history), so a single overwrite file — the current
+# season's anchor reads it directly. Kept in derived/ alongside the other compute_* outputs.
+
+
+def _adp_points_curve_path() -> Path:
+    return _SNAPSHOT_DIR / "derived" / "adp_points_curve.parquet"
+
+
+def write_adp_points_curve(df: pl.DataFrame) -> None:
+    """Write the pooled ADP rank→realized-points curve (overwrite; season-agnostic).
+
+    Output of transforms/compute_adp_points_curve.py: one row per (position, pos_ecr_rank) with the
+    smoothed floor_ppr / center_ppr / ceiling_ppr (P10/P50/P90 of realized full-season PPR over a
+    rolling rank window across the training seasons) and the bin sample count n.
+    """
+    path = _adp_points_curve_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
+
+def read_adp_points_curve() -> pl.DataFrame:
+    return pl.read_parquet(_adp_points_curve_path())
+
+
+def adp_points_curve_exists() -> bool:
+    return _adp_points_curve_path().exists()
+
+
 # --- Sleeper Matchups ---
 
 def _sleeper_matchups_path(season: int, week: int) -> Path:

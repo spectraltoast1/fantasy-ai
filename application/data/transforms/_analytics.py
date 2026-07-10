@@ -24,6 +24,25 @@ def median(xs) -> float:
     return s[(m - 1) // 2] if m % 2 else (s[m // 2 - 1] + s[m // 2]) / 2
 
 
+def quantile(xs, q: float) -> float | None:
+    """The q-th quantile (q ∈ [0,1]) of a numeric series by linear interpolation between order
+    statistics — the same rule numpy's default uses. Returns None for an empty series (mirroring
+    mean/stdev's "undefined, not 0.0" convention) so a caller can fall back rather than treat an
+    empty bin as a real 0. Used to fit the ADP rank→realized-points floor/center/ceiling (P10/P50/P90).
+    """
+    if not xs:
+        return None
+    s = sorted(xs)
+    if len(s) == 1:
+        return float(s[0])
+    pos = q * (len(s) - 1)
+    lo = int(pos)
+    frac = pos - lo
+    if lo + 1 < len(s):
+        return s[lo] + frac * (s[lo + 1] - s[lo])
+    return float(s[lo])
+
+
 def pearson(xs, ys) -> float | None:
     """Pearson correlation coefficient between two equal-length series.
 
