@@ -254,6 +254,39 @@ def adp_preseason_exists() -> bool:
     return _adp_preseason_path().exists()
 
 
+# --- ADP Points Curve (historical rank -> realized-points floor/center/ceiling) ---
+# The empirical anchor for the §2 ROS bull/bear range (DECISION_READS.md §2): "what does a player
+# drafted at positional ADP rank r ACTUALLY produce in realized season points?" Fit by
+# transforms/compute_adp_points_curve.py over prior seasons (preseason positional ADP rank ↔ realized
+# season-total fantasy_points_ppr), one row per (position, pos_ecr_rank) carrying the P10/P50/P90 =
+# floor/center/ceiling. Season-agnostic (pooled history), so a single overwrite file — the current
+# season's anchor reads it directly. Kept in derived/ alongside the other compute_* outputs.
+
+
+def _adp_points_curve_path() -> Path:
+    return _SNAPSHOT_DIR / "derived" / "adp_points_curve.parquet"
+
+
+def write_adp_points_curve(df: pl.DataFrame) -> None:
+    """Write the pooled ADP rank→realized-points curve (overwrite; season-agnostic).
+
+    Output of transforms/compute_adp_points_curve.py: one row per (position, pos_ecr_rank) with the
+    smoothed floor_ppr / center_ppr / ceiling_ppr (P10/P50/P90 of realized full-season PPR over a
+    rolling rank window across the training seasons) and the bin sample count n.
+    """
+    path = _adp_points_curve_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
+
+def read_adp_points_curve() -> pl.DataFrame:
+    return pl.read_parquet(_adp_points_curve_path())
+
+
+def adp_points_curve_exists() -> bool:
+    return _adp_points_curve_path().exists()
+
+
 # --- Sleeper Matchups ---
 
 def _sleeper_matchups_path(season: int, week: int) -> Path:
