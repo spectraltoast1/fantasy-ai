@@ -36,9 +36,8 @@ import data_layer
 from _analytics import mean, pearson, expand_slots
 from compute_production_vor import _roster_as_of
 from compute_bracket_sim import (
-    PLAYOFF_TEAMS,
-    REG_SEASON_END_WEEK,
     SKILL_POSITIONS,
+    _playoff_config,
     _standings_as_of,
     _team_week_dist,
     _win_prob,
@@ -94,13 +93,14 @@ def _test_points(season: int):
         )
     season_df = data_layer.read_join_season(season).filter(pl.col("position").is_in(SKILL_POSITIONS))
     slots = expand_slots(data_layer.read_lineup_slots(season).to_dicts())
-    matchups = data_layer.read_season_matchups(season, through_week=REG_SEASON_END_WEEK)
+    reg_season_end, _ = _playoff_config(season)
+    matchups = data_layer.read_season_matchups(season, through_week=reg_season_end)
     freeze = int(season_df["week"].max())
 
     calib = []        # (p_win, outcome) per actual matchup
     winrows = []      # (as_of_week, roster_id, expected_wins, actual_wins)
     for n in range(1, freeze + 1):
-        weeks = range(n + 1, REG_SEASON_END_WEEK + 1)
+        weeks = range(n + 1, reg_season_end + 1)
         if not list(weeks):
             continue
         roster = _roster_as_of(season_df, n)
@@ -164,19 +164,20 @@ def run(season: int) -> bool:
     r_pool = _spearman(wins["expected_wins"].to_list(), wins["actual_wins"].to_list())
     print(f"    [evidence] pooled Spearman over all as-of weeks (n={wins.height}) = {r_pool:.3f}")
 
-    # Evidence (not gated): do the shipped high-odds teams actually make the top-PLAYOFF_TEAMS?
+    # Evidence (not gated): do the shipped high-odds teams actually make the top-K playoffs?
     try:
+        reg_end, playoff_teams = _playoff_config(season)
         odds = data_layer.read_bracket_odds(season, as_of_week=freeze)
         actual_final = _standings_as_of(
-            data_layer.read_season_matchups(season, through_week=REG_SEASON_END_WEEK), REG_SEASON_END_WEEK
+            data_layer.read_season_matchups(season, through_week=reg_end), reg_end
         )
         ranked = sorted(actual_final.items(), key=lambda kv: (kv[1]["wins"], kv[1]["points"]), reverse=True)
-        actual_playoff = {rid for rid, _ in ranked[:PLAYOFF_TEAMS]}
-        pred_playoff = set(odds.sort("playoff_odds", descending=True).head(PLAYOFF_TEAMS)["roster_id"].to_list())
+        actual_playoff = {rid for rid, _ in ranked[:playoff_teams]}
+        pred_playoff = set(odds.sort("playoff_odds", descending=True).head(playoff_teams)["roster_id"].to_list())
         hit = len(pred_playoff & actual_playoff)
         print()
-        print(f"  evidence: top-{PLAYOFF_TEAMS} by playoff_odds vs actual playoff teams "
-              f"→ {hit}/{PLAYOFF_TEAMS} correct")
+        print(f"  evidence: top-{playoff_teams} by playoff_odds vs actual playoff teams "
+              f"→ {hit}/{playoff_teams} correct")
     except Exception as e:  # bracket_odds not built yet — evidence only, never gates
         print(f"  evidence: (bracket_odds parquet not available: {e})")
 

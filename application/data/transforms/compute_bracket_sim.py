@@ -24,14 +24,15 @@ The engine, per as-of cutoff N:
     and seeds the top PLAYOFF_TEAMS into the playoffs. Aggregated across runs → playoff_odds, projected
     wins/points/seed, and a magic-number proxy (fewest more wins that clinch ≥ MAGIC_ODDS).
 
-**Playoff config (documented latent).** REG_SEASON_END_WEEK and PLAYOFF_TEAMS are named constants
-inferred from the 2025 schedule (weeks 1–15 pair all ten teams; week 16 splits into a bracket with two
-byes ⇒ 6 playoff teams). The league's *real* settings aren't in the frozen store (the /league fetch
-that built lineup_slots didn't persist them) — persisting them is a follow-up, exactly like the
-scoring_settings recompute latent. The gate (backtest_bracket_sim.py) is deliberately config-light
-(win-prob calibration + expected-wins correlation on actual results) so these defaults can't fake a pass.
+**Playoff config (from the league's real settings).** reg_season_end + playoff_teams come from
+`_playoff_config` reading the persisted `league_settings` (playoff_week_start − 1, playoff_teams) — the
+sim does *not* assume them and raises if they haven't been fetched (`sleeper.py fetch-league-config`).
+For this league that's a **4-team** championship playoff, playoffs starting wk16 (⇒ regular season ends
+wk15) — correcting an earlier schedule-inferred "6-team" guess. The gate (backtest_bracket_sim.py) is
+still deliberately config-light (win-prob calibration + expected-wins correlation on actual results),
+independent of the playoff cut.
 
-Tall over as_of_week N=1..maxweek (roster-as-of-N, frozen wks 1–4), each simulating N+1..REG_SEASON_END.
+Tall over as_of_week N=1..maxweek (roster-as-of-N, frozen wks 1–4), each simulating N+1..reg_season_end.
 
 Output: snapshots/derived/bracket_odds_{season}.parquet, one row per (as_of_week, roster_id).
 
@@ -56,13 +57,25 @@ from compute_production_vor import _roster_as_of
 
 SKILL_POSITIONS = ["QB", "RB", "WR", "TE"]
 
-# --- Playoff config (documented latent — inferred from the 2025 schedule, not the league API) ---
-REG_SEASON_END_WEEK = 15   # last week all teams are paired 1-to-1; playoffs run wks 16–17
-PLAYOFF_TEAMS = 6          # the wk-16 two-bye bracket structure ⇒ six playoff teams
 # --- Simulation config ---
 SIMS = 10_000
 SEED = 20260709
 MAGIC_ODDS = 0.90          # "clinch" threshold for the magic-number proxy
+
+
+def _playoff_config(season: int) -> tuple:
+    """(reg_season_end_week, playoff_teams) from the league's real Sleeper settings — NOT hardcoded.
+    `playoff_week_start` is the first postseason week, so the regular season ends the week before;
+    `playoff_teams` is the championship-bracket size (the top-K that make the playoffs). Raises with a
+    clear message if league_settings hasn't been fetched — never silently fall back to a guess."""
+    s = data_layer.read_playoff_settings(season)
+    if "playoff_week_start" not in s or "playoff_teams" not in s:
+        raise RuntimeError(
+            "league_settings missing playoff config — run `sleeper.py fetch-league-config <year>` "
+            "first. The bracket sim reads the league's real playoff_week_start / playoff_teams; it "
+            "does not assume them."
+        )
+    return int(s["playoff_week_start"]) - 1, int(s["playoff_teams"])
 
 
 def _norm_cdf(z: float) -> float:
@@ -129,9 +142,10 @@ def _schedule(matchups: pl.DataFrame, weeks: range, idx: dict) -> dict:
     return sched
 
 
-def _simulate(team_ids: list, base: dict, dists: dict, sched: dict, weeks: range) -> dict:
+def _simulate(team_ids: list, base: dict, dists: dict, sched: dict, weeks: range, playoff_teams: int) -> dict:
     """Monte Carlo the remaining regular season. `dists[w]` = (mu[T], sig[T]) arrays; `sched[w]` =
-    index pairs; `base` = as-of-N standings. Returns per-team aggregates over SIMS runs."""
+    index pairs; `base` = as-of-N standings; `playoff_teams` = the league's championship-bracket size.
+    Returns per-team aggregates over SIMS runs."""
     T = len(team_ids)
     rng = np.random.default_rng(SEED)
     base_wins = np.array([base.get(r, {}).get("wins", 0.0) for r in team_ids])
@@ -158,7 +172,7 @@ def _simulate(team_ids: list, base: dict, dists: dict, sched: dict, weeks: range
     order = np.argsort(-key, axis=1)
     seed = np.empty_like(key, dtype=int)
     np.put_along_axis(seed, order, np.broadcast_to(np.arange(1, T + 1), key.shape), axis=1)
-    made = seed <= PLAYOFF_TEAMS
+    made = seed <= playoff_teams
 
     playoff_odds = made.mean(axis=0)
     proj_wins = total_wins.mean(axis=0)
@@ -184,9 +198,10 @@ def _simulate(team_ids: list, base: dict, dists: dict, sched: dict, weeks: range
     }
 
 
-def _compute_as_of(n, roster_pids, cons_by_week, slots, matchups, season) -> list:
-    """Bracket-odds rows for one as-of cutoff N."""
-    weeks = range(n + 1, REG_SEASON_END_WEEK + 1)
+def _compute_as_of(n, roster_pids, cons_by_week, slots, matchups, season,
+                   reg_season_end: int, playoff_teams: int) -> list:
+    """Bracket-odds rows for one as-of cutoff N (playoff config injected from league settings)."""
+    weeks = range(n + 1, reg_season_end + 1)
     team_ids = sorted(roster_pids.keys())
     if not list(weeks) or not team_ids:
         return []
@@ -203,7 +218,7 @@ def _compute_as_of(n, roster_pids, cons_by_week, slots, matchups, season) -> lis
 
     base = _standings_as_of(matchups, n)
     sched = _schedule(matchups, weeks, idx)
-    agg = _simulate(team_ids, base, dists, sched, weeks)
+    agg = _simulate(team_ids, base, dists, sched, weeks, playoff_teams)
 
     rows = []
     for rid, i in idx.items():
@@ -225,6 +240,8 @@ def _compute_as_of(n, roster_pids, cons_by_week, slots, matchups, season) -> lis
 
 
 def compute(season: int) -> pl.DataFrame:
+    reg_season_end, playoff_teams = _playoff_config(season)
+
     cons = data_layer.read_projection_consensus(season).filter(
         pl.col("position").is_in(SKILL_POSITIONS)
     ).select("week", "sleeper_player_id", "position", "center_ppr", "band_ppr")
@@ -236,7 +253,7 @@ def compute(season: int) -> pl.DataFrame:
 
     season_df = data_layer.read_join_season(season).filter(pl.col("position").is_in(SKILL_POSITIONS))
     slots = expand_slots(data_layer.read_lineup_slots(season).to_dicts())
-    matchups = data_layer.read_season_matchups(season, through_week=REG_SEASON_END_WEEK)
+    matchups = data_layer.read_season_matchups(season, through_week=reg_season_end)
     max_roster_week = int(season_df["week"].max())
 
     all_rows = []
@@ -245,18 +262,19 @@ def compute(season: int) -> pl.DataFrame:
         roster_pids: dict = {}
         for pid, rid in roster.items():
             roster_pids.setdefault(int(rid), []).append(pid)
-        all_rows.extend(_compute_as_of(n, roster_pids, cons_by_week, slots, matchups, season))
+        all_rows.extend(_compute_as_of(n, roster_pids, cons_by_week, slots, matchups, season,
+                                       reg_season_end, playoff_teams))
 
     df = pl.DataFrame(all_rows, infer_schema_length=None).sort(
         "as_of_week", "playoff_odds", descending=[False, True]
     )
     latest = df.filter(pl.col("as_of_week") == max_roster_week)
     print(f"=== Bracket Odds: season={season}  as_of_week 1..{max_roster_week}  "
-          f"(sim wks N+1..{REG_SEASON_END_WEEK}, {PLAYOFF_TEAMS} playoff teams, {SIMS} sims; rows={df.height}) ===")
+          f"(sim wks N+1..{reg_season_end}, {playoff_teams} playoff teams, {SIMS} sims; rows={df.height}) ===")
     print(f"  week {max_roster_week} playoff odds (favorites first):")
     print(latest.select("roster_id", "current_wins", "current_points", "proj_wins",
                         "playoff_odds", "avg_seed", "magic_wins"))
-    print(f"  Σ playoff_odds = {latest['playoff_odds'].sum():.2f}  (invariant ≈ {PLAYOFF_TEAMS})")
+    print(f"  Σ playoff_odds = {latest['playoff_odds'].sum():.2f}  (invariant ≈ {playoff_teams})")
     return df
 
 
