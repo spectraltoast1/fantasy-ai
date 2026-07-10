@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-07-10 (ROS Outcome Shape — the §2 bull/bear/situation quantitative skeleton: bull/bear = borrowed ROS centre ± BULL_Z·√Σband² over the remaining schedule, floored at 0, with emergent time decay; situation/security borrows the player_signal trust axis. Calibration-gated on the 2025 answer key (coverage 0.835, BULL_Z→1.645 swept). Completes the player-read backend, §1–§4. Phase 4 still UNDERWAY — remaining: §7 dossiers + front-end surfacing)
+**Last updated:** 2026-07-10 (§7 Manager Dossiers reshaped into a **cross-league, Claude-API-key-gated AI read** — the design, locked parameters, and buildable facts are recorded in `DECISION_READS.md` §7 for the next build session (a docs-only planning session; no code). Prior build: the §2 ROS Outcome Shape skeleton shipped — bull/bear = borrowed ROS centre ± BULL_Z·√Σband², calibration-gated (coverage 0.835), completing the player-read backend §1–§4. Phase 4 still UNDERWAY — remaining: §7 dossiers (design recorded) + front-end surfacing)
 **Target ship:** NFL kickoff, mid August 2026
 
 ---
@@ -58,9 +58,11 @@ honest. (2) **decision-relevant** — actual ROS rises monotonically by `ros_bul
 stud 206). **Bonus:** the situation axis carries signal — non-stable players broke their bear floor **15.9%** vs
 stable **9.8%**. Symmetric-by-design (no ROS-level skew term — a documented deferral; the §3 per-week band
 already carries the skew this sums over). No-regression: reads-only of production_vor/consensus/player_signal
-(untouched). No UI (data + gate). **Next — remaining Phase 4:** manager dossiers (§7 — transaction data on hand,
-372 rows over wks 1–17, but its AI-synthesis core is Phase 6) and the **front-end surfacing** of the now-six
-gated forward reads (Spread/VOR/True Rank/Positional Depth/Bracket Odds/ROS Outcome Shape).
+(untouched). No UI (data + gate). **Next — remaining Phase 4:** manager dossiers (§7 — **reshaped 2026-07-10
+into a cross-league, Claude-API-key-gated AI read; design + locked params + buildable facts recorded in
+`DECISION_READS.md` §7** for the next build session, phased A = cross-league acquisition + behavioral
+features, B = the gated Haiku dossier writer) and the **front-end surfacing** of the now-six gated forward
+reads (Spread/VOR/True Rank/Positional Depth/Bracket Odds/ROS Outcome Shape).
 
 > earlier build
 **Any-league pieces 2 & 3 — roster-shape/superflex generalization + division-aware seeding (project complete).**
@@ -221,8 +223,9 @@ Spearman 0.756; top-6 by odds = 6/6 actual playoff teams). **Source scouting set
 half (the Phase-2 substrate's other ingredient) comes **in-season via ffanalytics**; ESPN historical
 is deferred (cookie-gated + `espn_id` join). **The §2 ROS outcome-shape skeleton is now DONE** (bull/bear/
 situation, calibration-gated — see the most recent build), which **completes the player-read backend
-(§1–§4).** **Next — remaining Phase 4:** **manager dossiers** (§7 — transaction data on hand, 372 rows, but
-its AI-synthesis core is Phase 6), and the deliberate **front-end surfacing** of the now-six gated forward
+(§1–§4).** **Next — remaining Phase 4:** **manager dossiers** (§7 — reshaped 2026-07-10 into a cross-league,
+Claude-API-key-gated AI read; design recorded in `DECISION_READS.md` §7), and the deliberate **front-end
+surfacing** of the now-six gated forward
 reads (Spread/VOR/True Rank/Positional Depth/Bracket Odds/ROS Outcome Shape) — including the posture
 *presentation* (True Rank + odds shown adjacent, the risk-appetite lens). **Blocked, not next:** cross-source
 disagreement (Phase 2, needs the live 2nd source). Python/data-layer + front-end work.
@@ -458,8 +461,9 @@ age/injury/scheme).
   ROS centre ± BULL_Z·√Σband², floored, emergent time decay) + situation/security (player_signal trust axis).
   Calibration-gated (coverage 0.835; BULL_Z swept to 1.645; monotonic by bull tercile). **Completes the
   player-read backend (§1–§4).** See "most recent build".
-- **Next — remaining Phase 4:** **manager dossiers** (§7 — transaction data on hand, AI-synthesis core is
-  Phase 6) and the **front-end surfacing** of the six gated forward reads (incl. posture presentation).
+- **Next — remaining Phase 4:** **manager dossiers** (§7 — reshaped into a cross-league, Claude-API-key-gated
+  AI read; design recorded in `DECISION_READS.md` §7) and the **front-end surfacing** of the six gated
+  forward reads (incl. posture presentation).
   **Blocked, not next:** cross-source **disagreement** (in-season, needs the live 2nd source).
 - **Optional cheap add:** Vegas game totals via an `odds.py` fetcher (game environment).
 

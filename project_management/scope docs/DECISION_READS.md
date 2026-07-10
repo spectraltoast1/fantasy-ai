@@ -198,24 +198,94 @@ gaps. It's the Value/VOR read (§4) re-aggregated per position, not a new engine
 
 ---
 
-## 7. Manager Dossiers *(league read — opponent modeling)*
+## 7. Manager Dossiers *(league read — opponent modeling, cross-league)*
 
 **What it is:** a per-opponent **behavioral profile** — waiver/FAAB aggression, trade behavior,
-positional lean, roster-construction habits. The only read about *other people*, and the **second
-home for the AI-interpretation pattern** from ROS situation (§2).
+positional lean, roster-construction habits — built from a manager's activity **across their other
+*comparable* Sleeper leagues**, not just this one. The primary user gets one too, scoped to
+**blindspot / self-awareness** (where opponents could exploit *you*), not competitive scouting. The
+only read about *other people*, and the **second home for the AI-interpretation pattern** (§2). This
+is the project's **first AI-layer code** — opt-in and not vital, **gated behind a user-provided Claude
+API key**. Runs **at most once per season per league**.
+
+**Why cross-league:** one league's transaction record is thin (this league had ~2 trades all year —
+stereotyping territory). Tracing a manager to the *other* leagues they play in — and pooling only the
+*comparable* ones — is what makes the behavioral read robust enough to trust.
 
 **Design notes:**
-- **Built from transaction history** (Sleeper: waivers, FAAB, trades, adds/drops, lineup moves),
-  synthesized by AI into a short profile.
-- **Confidence-gate hard** — thin history stereotypes people (three RB adds = a tendency, or just
-  circumstance?). Frame as **tendencies, not verdicts** (laws 2 + 4).
-- **Updates slowly** — behavior accumulates over a season, unlike the fast player reads.
-- **Doubles as the "model of YOU" infrastructure** — the same engine pointed inward later. Building
-  it well is quietly building the endgame.
+- **Confidence-gate hard, transparently.** Thin history stereotypes people. Every dossier states its
+  **signal depth** (n_leagues / n_seasons / n_transactions it drew on); language stays **tendencies,
+  not verdicts** (laws 2 + 4). A manager with **zero comparable leagues** skips the AI entirely and
+  returns a hardcoded "no intel available" message.
+- **Compare like with like.** Pool a manager's behavior only from leagues that match the target on
+  **scoring profile + league size + QB structure** (see Locked decisions) — mixing half-PPR with
+  full-PPR, 8-team with 14-team, or 1QB with superflex produces a misleading profile.
+- **Updates slowly** — behavior accumulates over seasons, unlike the fast player reads.
+- **Doubles as the "model of YOU" infrastructure** — the same engine pointed inward later (Phase 5).
+- **AI shows its reasoning, never a bare number.** Qualitative, minimally quantitative, with a
+  **consistent structure manager-to-manager** (a fixed output schema) so dossiers are scannable.
+
+**Locked design decisions (recorded 2026-07-10 — the parameters a build session should implement):**
+- **API-key gated:** read `config.ANTHROPIC_API_KEY` (already present); the read is *locked /
+  unavailable* when the key is absent or a placeholder.
+- **Model = Claude Haiku 4.5** (`claude-haiku-4-5`) — cheapest tier, ample for structured qualitative
+  synthesis from pre-computed features. (Model choice is the user's; revisit if quality falls short.)
+- **"Comparable league" filter** = same **scoring profile** (`transforms/_scoring.scoring_profile` →
+  ppr/half/std/custom) **+** same **league size** (team count) **+** same **QB structure** (1QB vs
+  superflex/2QB — the one roster axis that changes behavior enough to matter). **Ignore** fine roster
+  detail (WR/flex/bench counts — noise). **Format family:** redraft↔redraft now; **tag the league
+  format** (`settings.type`) so **dynasty↔dynasty** can be added later without rework. Exclude the
+  target league itself.
+- **Selection:** up to **5** comparable leagues per manager, spread across up to **3 seasons** (current
+  + 2 prior), **biased toward the immediately-prior season**. Degrade gracefully (fewer leagues / fewer
+  seasons / none).
+- **Credit optimization (principle #5):** pre-filter to compact **computed features**, never raw
+  transaction logs; **prompt-cache** the shared league-context/instruction prefix; use the **Batch API**
+  (all managers per run, 50% off); skip-on-zero-signal; small model.
+
+**Buildable facts (from the 2026-07-10 code exploration — so a build session doesn't re-derive them):**
+- **Identity chain already exists** — `application/shared/league_resolver.py:resolve_league_id` does
+  `/user/{username}` → user_id → `/user/{user_id}/leagues/nfl/{season}`. That leagues payload already
+  carries each league's `scoring_settings` + `roster_positions` + `settings` (num_teams, type), so
+  comparables are classified with **no extra API calls**.
+- **Persist the join key:** `teams_{season}.parquet` currently drops `owner_id` (the Sleeper user_id).
+  `sleeper.py:fetch_teams` has it (`u["user_id"]`) but writes only roster_id/team/owner — add an
+  `owner_id` column (rosters also carry `owner_id`).
+- **Similarity primitives:** `_scoring.scoring_profile(dict)`; `derive_lineup_slots._SLOT_ELIGIBILITY`
+  (SUPER_FLEX/SUPERFLEX → [QB,RB,WR,TE]) for the QB-structure axis; team count from `settings.num_teams`
+  / `total_rosters`; format from `settings.type` (0 = redraft, 2 = dynasty).
+- **Transaction fields** (per-week `/transactions/{week}`, no bulk endpoint): FAAB bid =
+  `settings.waiver_bid`; `type ∈ {waiver, free_agent, trade}`; `adds`/`drops` = `{player_id:
+  roster_id}`; `adds`/`drops`/`settings`/`roster_ids`/`consenter_ids`/`waiver_budget`/`draft_picks`/
+  `metadata` are JSON strings (`json.loads`).
+- **Player→position:** `read_sleeper_players()` (`cache/sleeper/players.parquet`), keyed
+  `sleeper_player_id`, has `position`; filter to QB/RB/WR/TE.
+- **New storage shape:** the data layer is single-league / per-season keyed — a cross-league entity is
+  the **first** league_id/user-keyed store; use `source_league_id` / `source_season` as *columns* (the
+  projections "source-as-a-column" idiom), one tall parquet per run.
+- **Add HTTP resilience:** `sleeper.py` has no shared request wrapper (no retry/backoff/timeout/throttle).
+  The fan-out (~10 managers × up to 5 leagues × ~17 weeks ≈ hundreds of calls, once/season) needs a
+  `_get_json` helper with timeout + retry/backoff + throttle.
+- **AI infra is greenfield:** `config.ANTHROPIC_API_KEY` present; `anthropic==0.97.0` in
+  `requirements.txt`; nothing imports it. Verify 0.97.0 supports `claude-haiku-4-5` + the Batch API at
+  build time (bump if needed); design the call to **not** depend on `messages.parse()` (fixed schema +
+  JSON-in-prompt + `json.loads`) for SDK-version safety.
+
+**Behavioral features to extract (deterministic, polars — the pre-filtered AI input):** FAAB aggression
+(bid stats + budget fraction), waiver-vs-free-agent mix, waiver success rate, add/drop churn, trade
+frequency, positional lean of adds, roster-construction tendencies — plus the signal-depth counts.
+
+**Suggested build phasing:** **(A)** cross-league acquisition + feature extraction (deterministic,
+credit-free, testable — persist `owner_id`; `_get_json`; a `sleeper.py fetch-manager-activity` mode +
+comparable-league selection + a tall `manager_activity_{season}` entity; a `compute_manager_features.py`
+transform → `manager_features_{season}` with signal-depth + an internal-consistency check, since
+behavior has no answer key). **(B)** the AI dossier writer (config-key gate, Haiku, Batch + caching +
+pre-filtered features, fixed dossier schema, blindspot framing for the primary user, hardcoded
+zero-signal message, run-once-per-season guard, dossier storage keyed by user_id).
 
 | Component (what I'm building) | Data needed | How to make it |
 |---|---|---|
-| **Manager behavioral profile** | Sleeper transaction history (waivers, FAAB, trades, adds/drops, lineup decisions); time span for confidence. | AI synthesis over the transaction record → short profile of tendencies; gate language on sample size; describe patterns, don't box people in. |
+| **Manager behavioral profile (cross-league)** | Sleeper transaction history from the manager's *comparable* other leagues (waivers, FAAB, trades, adds/drops); comparable-league filter inputs (scoring / size / QB-structure); time span for confidence. | Fan out to comparable leagues → extract deterministic features → AI synthesis into a fixed-schema tendencies profile; gate language on signal depth; describe patterns, don't box people in. |
 
 **Decision homes:** trade targeting & negotiation (what a manager values → what they'll accept/offer)
 and waiver competition (who else is likely bidding on your target).
@@ -233,7 +303,7 @@ and waiver competition (who else is likely bidding on your target).
 **League reads (per team / league):**
 5. **Posture Evidence** — true rank + bracket-math (Monte Carlo) shown adjacent → posture + urgency. *The risk-appetite lens.*
 6. **Positional Depth** — the VOR read re-sliced by position vs. league.
-7. **Manager Dossiers** — AI behavioral profiles of opponents.
+7. **Manager Dossiers** — AI behavioral profiles of opponents, built **cross-league** (comparable leagues only). *Opt-in, Claude-API-key-gated.*
 
 **The spine:** opportunity is the descriptive base you can build with no projections. The **borrowed
 projection substrate** (law 3) is the hinge that unlocks outcome shape, weekly spread, value/VOR, and
