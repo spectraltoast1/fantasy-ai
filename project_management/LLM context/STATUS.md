@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-07-09 (Custom-scoring recompute engine — fills the `recompute_custom_points` stub via a delta-on-canned-baseline engine; the "any league" project's first piece. Custom leagues (non-{0,.5,1} PPR, 6-pt pass TD, TE premium) now run end-to-end through the single consensus scoring seam; standard leagues byte-identical. Phase 4 still UNDERWAY)
+**Last updated:** 2026-07-09 (Any-league pieces 2 & 3 — roster-shape/superflex generalization (VOR + leakage derive swap/replacement pools from lineup_slots via shared `_analytics.position_pools`; standard byte-identical) and division-aware playoff seeding (synthetic-gated latent; also fixed the bracket sim's fixed-SEED non-reproducibility). The "any league" project is complete. Phase 4 still UNDERWAY)
 **Target ship:** NFL kickoff, mid August 2026
 
 ---
@@ -34,6 +34,38 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**Any-league pieces 2 & 3 — roster-shape/superflex generalization + division-aware seeding (project complete).**
+Finishes the "any league" project (piece 1 = the custom-scoring engine, prior build). Both are
+**generalizations** with no real-data answer key (the real league is standard 1QB PPR, no divisions), so
+both are gated like piece 1: **no-regression on the real league + synthetic-config correctness.**
+**Piece 2 (roster-shape/superflex, fully gated).** Two hardcodes assumed "1QB + standard flex" and
+mis-handled superflex/2QB: VOR's `_pool_of` matched only a slot literally named `FLEX` (missed
+`SUPER_FLEX`), and leakage's `_cls` was `QB`-vs-`FLEX`. Both now derive the swap/replacement pools from
+the league's declared `lineup_slots` via one shared helper **`_analytics.position_pools`** (positions
+sharing a multi-position slot are pooled; pool key = the broadest inducing slot name, so the standard
+config reproduces the old QB/'FLEX' partition **and labels** byte-identically, while superflex pools QB
+with the flex). `expand_slots`/`optimal_lineup` were already general — untouched. **Gate**
+(`backtest_roster_shape.py`, exit 0): (A) no-regression — `production_vor`/`team_leakage`/`true_rank`/
+`positional_depth` all **frame-equal** to on-disk for the real league; (B) synthetic superflex — pools
+QB with RB/WR/TE, VOR measures QB against the flex waiver line, and a benched QB is a legal `SUPER_FLEX`
+swap for a started RB. **Piece 3 (division/tiebreaker seeding — synthetic-gated latent).** `_seed_table`
+extracted from the bracket sim's `_simulate` and made division-aware: with a roster→division map (≥2
+divisions) division winners are seeded ahead of wildcards (Sleeper default), else the flat (wins,
+points-for) seed — **proven identical to the old inline formula**, so the no-division real league is
+unchanged. `sleeper.py fetch-league-config` now persists `settings.divisions`; the per-roster division
+map (`_division_map`) reads a `division` column when persisted (None today — the teams entity carries
+none; populating it from the rosters endpoint is the **deferred** follow-up). **Explicitly NOT validated
+on a real division league** — revisit when one is onboarded. **Also fixed a pre-existing latent:** the
+fixed `SEED` didn't reproduce run-to-run (polars `group_by` order is unstable and zero-score bye-week
+ties flipped with row order) — sorting the schedule pairings + each roster's player list restores
+determinism, without touching the shared `optimal_lineup`. **Gate** (`backtest_bracket_sim.py` extended,
+exit 0): Brier 0.224 / Spearman 0.756 unchanged, plus NEW determinism (two runs frame-equal), invariant
+(Σ playoff_odds = playoff_teams every as-of week), and synthetic 2-division correctness (a low-record
+division winner is seeded into the top slots and makes the bracket where flat seeding drops it).
+**Next — the "any league" project is done; remaining Phase 4:** §2 ROS outcome-shape skeleton, manager
+dossiers (§7), and front-end surfacing of the five gated forward reads.
+
+> earlier build
 **Custom-scoring recompute engine — the "any league" project's first piece (fills the stub).**
 The last build left `_scoring.recompute_custom_points()` as a stub that **raised**: standard PPR/half/std
 leagues ran, any custom scoring hard-failed. This builds the engine. **Design — delta on the canned
@@ -100,39 +132,6 @@ supported; scoring + playoff are settings-driven.** **Next — the "any league" 
 custom-scoring recompute engine (fills the stub), tiebreakers/divisions in seeding, and the roster-shape
 generalization; plus the remaining Phase-4 reads (§2 ROS skeleton, §7 dossiers) and front-end surfacing.
 
-> earlier build
-**Phase 4 begins — the §5 bracket-math Monte Carlo ships: playoff odds from the forward reads.**
-The **posture integration point** the whole read spine converges toward (player value → True Rank →
-per-matchup win prob → season sim → playoff odds). `compute_bracket_sim.py` →
-`derived/bracket_odds_2025.parquet`; with **True Rank** (§5 first half) it **completes the §5 Posture
-read**. Per law 3 it borrows the forward prior (the §3 weekly band + the optimal-lineup value) and
-builds only the simulation layer. **Score-distribution model:** per team × remaining week, the
-roster-as-of-N is set into its optimal lineup by that week's borrowed `center_ppr` → weekly **mean**
-μ = Σ starter centres, **std** σ = √(Σ starter `band_ppr`²) (band_ppr = the §3 shrunk residual std;
-starters independent — documented). **Analytic per-matchup win prob** Φ((μA−μB)/√(σA²+σB²)) via
-`math.erf`. **Standings as-of-N** from the *actual* results (wins, then points-for). **Monte Carlo**
-(numpy, fixed seed, 10k sims): draw weekly scores ~N(μ,σ²), pair by the **real remaining schedule**
-(matchup_id from the snapshots), accumulate onto the as-of-N standings, seed top-`PLAYOFF_TEAMS` →
-`playoff_odds`, `proj_wins`/`points`, `avg_seed`, `magic_wins`. **Key enabler:** the raw Sleeper
-matchup snapshots exist for **all 18 weeks** (not just the frozen wks 1–4 of the join), so the real
-schedule + actual results + true final standings are on hand — the sim gates against **actual 2025
-outcomes**. **Playoff config** (`REG_SEASON_END_WEEK=15`, `PLAYOFF_TEAMS=6`) **inferred from the 2025
-schedule** (wks 1–15 pair all ten teams; wk16 splits into a two-bye bracket ⇒ 6) — documented latent,
-real league settings a follow-up; the gate is config-light so a wrong default can't fake a pass.
-**Verified wk4:** Σ playoff_odds = **6.00** (hard invariant — exactly `PLAYOFF_TEAMS` make it every
-sim); favorites on top (3-1 teams ~99%, 0-4 teams ~6–9%); deterministic (fixed seed). **Gate**
-(`backtest_bracket_sim.py`, exit 0, config-light — actual results only): (1) win-prob **Brier 0.224**
-beats the 0.25 coin-flip baseline (single-game FF is near-coin-flip by nature — the honest edge is
-modest); (2) expected wins track actual at **Spearman 0.756** (freeze wk4); evidence — top-6 by
-`playoff_odds` = **6/6** actual playoff teams. `numpy` is the one compute dependency (MC math);
-`data_layer.write/read_bracket_odds` + `read_season_matchups`. **Documented simplifications:**
-independence across starters (no covariance); Normal weekly score (the §3 skew isn't carried into the
-draw — a refinement); frozen-roster bye weeks reduce μ (no streaming — shared with VOR/True Rank);
-playoff config latent. No UI (data + gate). **Next — remaining Phase 4:** the §2 ROS-outcome-shape
-quantitative skeleton, manager dossiers (§7), and the **front-end surfacing** of the now-five gated
-forward reads (Spread/VOR/True Rank/Positional Depth/Bracket Odds) — plus the posture *presentation*
-(True Rank + odds shown adjacent, the risk-appetite lens).
-
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
@@ -168,6 +167,7 @@ forward reads (Spread/VOR/True Rank/Positional Depth/Bracket Odds) — plus the 
     - Phase 4 Bracket Odds (§5 bracket-math) — compute_bracket_sim.py → derived/bracket_odds_{season}.parquet, the bracket-math half of Posture (with True Rank = §5 complete). Per team weekly score dist (μ = optimal-lineup Σ center_ppr, σ = √Σ band_ppr²; starters independent), analytic per-matchup win prob Φ((μA−μB)/√(σA²+σB²)) via math.erf; standings as-of-N from actual results; Monte Carlo (numpy, fixed seed, 10k) over the real remaining schedule → playoff_odds, proj_wins/points, avg_seed, magic_wins. Enabled by raw Sleeper matchups existing for all 18 wks. Playoff config (REG_SEASON_END_WEEK=15, PLAYOFF_TEAMS=6) inferred from schedule — documented latent. New data_layer write/read_bracket_odds + read_season_matchups. Verified wk4: Σ playoff_odds=6.00 (hard invariant); deterministic. Gate (backtest_bracket_sim.py, exit 0, config-light): Brier 0.224 beats coin-flip; expected wins vs actual Spearman 0.756; top-6 by odds = 6/6 actual playoff teams. numpy is the one compute dep. Simplifications: starter independence, Normal draw (no §3 skew), frozen-roster byes reduce μ. **[Superseded: the playoff config REG_SEASON_END_WEEK/PLAYOFF_TEAMS is now read from real league settings — 4 teams, not the wrong inferred 6 — see the league-settings build.]**
     - League settings (scoring + playoff) persisted + consumed — sleeper.py fetch-league-config pulls scoring_settings + playoff config from the /league object → data_layer write/read_league_settings (tall section/key/value) + read_scoring_settings/read_playoff_settings. transforms/_scoring.py dispatcher: scoring_profile ppr/half/std/custom; standard selects the canned projection column + nfl_stats actual expr; custom → recompute_custom_points() stub (raises; engine is the next project). Wired into compute_projection_consensus (scoring, byte-identical for this ppr league) + compute_bracket_sim/backtest (playoff via _playoff_config, injected, no hardcoded fallback). Real league: playoff_teams=4, playoff_week_start=16, profile=ppr. Corrects the sim's playoff cut 6→4 (Σ playoff_odds=4.00); all gates green. Standard PPR/half/std leagues now supported; foundation for the "any league" project.
     - Custom-scoring recompute engine ("any league" piece 1) — fills `_scoring.recompute_custom_points()` (was a stub that raised) with a **delta-on-canned-baseline** engine: `points_league = std_baseline (proj_pts_std/fantasy_points) + Σ(w_custom−w_std)·component`, exact for standard by construction. Same weights on `proj_*` + `nfl_stats` so residuals stay matched. Supports non-{0,.5,1} PPR, 6-pt pass TD, non-standard yardage/TD, position-conditional reception bonuses (TE premium `bonus_rec_te`/`_rb`/`_wr`/`_qb`); rejects (raises, names key) first-down / threshold-yardage bonuses (no projection component); turnovers/2pt carried in baseline (tolerance). `recompute_custom_points(scoring, side)` → `pl.Expr`; `projection_column`→`projection_points_expr`; `actual_points_expr` gains scoring; `compute_projection_consensus.compute(season, scoring=None)` injectable. New `backtest_scoring_recompute.py` (exit 0): equivalence (custom==canned on standard: actuals exact, proj ~0.01 rounding), exact custom deltas, rejection, end-to-end custom consensus (100% QB centers rise under 6-pt pass TD). No-regression: real-ppr recompute == on-disk consensus parquet frame-for-frame (downstream gates unaffected); VOR runs on a custom consensus. Custom leagues now run the whole read spine.
+    - Any-league pieces 2 & 3 (project complete) — **roster-shape/superflex:** new shared `_analytics.position_pools(slot_rows)` derives swap/replacement pools from `lineup_slots` (positions sharing a multi-position slot pooled; key = broadest inducing slot). `compute_production_vor._pool_of` + `compute_team_leakage._cls` now use it (fixes the `SUPER_FLEX` latent + generalizes leakage swap classes); standard config byte-identical, superflex pools QB with flex. `backtest_roster_shape.py` (exit 0): no-regression frame-equal on vor/leakage/true_rank/positional_depth + synthetic superflex. **Division seeding (synthetic-gated latent):** `_seed_table` extracted from `compute_bracket_sim._simulate`, division-aware when a roster→division map is present (winners seeded ahead of wildcards) else flat (proven identical); `sleeper.py fetch-league-config` persists `settings.divisions`; `_division_map` None today (teams entity has no `division` col — rosters-endpoint population deferred). NOT validated on a real division league. **Also fixed:** the fixed-SEED bracket sim wasn't reproducible (polars group_by order + zero-score bye ties) — sorting schedule pairings + roster player lists restores determinism (shared `optimal_lineup` untouched). `backtest_bracket_sim.py` extended (exit 0): Brier 0.224/Spearman 0.756 unchanged + determinism + Σ-invariant + synthetic 2-division correctness.
 
 > not yet built
     >> backend

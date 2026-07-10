@@ -44,6 +44,7 @@ from _analytics import (
     spectrum_positions,
     expand_slots as _expand_slots,
     optimal_lineup as _optimal_lineup,
+    position_pools,
 )
 
 SKILL_POSITIONS = ["QB", "RB", "WR", "TE"]
@@ -59,12 +60,8 @@ COACHABLE_RATE_MARGIN = 1.1
 HABITUAL_STARTER_THRESHOLD = 0.5
 
 
-def _cls(pos):
-    return "QB" if pos == "QB" else "FLEX"
-
-
 def _team_leakage(
-    week_nums, pool_by_week, slots, season_by_name, *, rate_margin, habitual_starter_threshold
+    week_nums, pool_by_week, slots, season_by_name, pools, *, rate_margin, habitual_starter_threshold
 ):
     """Port of queries.js computeLeakage for one team.
 
@@ -100,18 +97,19 @@ def _team_leakage(
             continue
 
         # gems = optimal picks not actually started; duds = starters the optimal lineup
-        # drops. Pair within swap-eligibility classes (QB only displaces QB; RB/WR/TE
-        # interchange via FLEX) so every swap is legal; counts balance within each
-        # class, so zipping best gem ↔ worst dud is sum-exact.
+        # drops. Pair within swap-eligibility classes derived from the lineup shape
+        # (`pools`: QB only displaces QB and RB/WR/TE interchange via FLEX in a standard
+        # league; superflex pools QB with the flex) so every swap is legal; counts balance
+        # within each class, so zipping best gem ↔ worst dud is sum-exact.
         opt_idx = {p["_i"] for p in opt["picks"]}
         gems_by_cls = {}
         duds_by_cls = {}
         for p in opt["picks"]:
             if not p["started"]:
-                gems_by_cls.setdefault(_cls(p["position"]), []).append(p)
+                gems_by_cls.setdefault(pools.get(p["position"], p["position"]), []).append(p)
         for p in started:
             if p["_i"] not in opt_idx:
-                duds_by_cls.setdefault(_cls(p["position"]), []).append(p)
+                duds_by_cls.setdefault(pools.get(p["position"], p["position"]), []).append(p)
 
         for c, gems in gems_by_cls.items():
             gems = sorted(gems, key=lambda p: p["pts"], reverse=True)
@@ -147,7 +145,7 @@ def _team_leakage(
                     f = fix_agg.get(key)
                     if f is None:
                         f = {
-                            "position": g["position"] if g["position"] == d["position"] else "FLEX",
+                            "position": g["position"] if g["position"] == d["position"] else pools.get(g["position"], g["position"]),
                             "benchName": g["name"],
                             "benchRate": round1(gs["rate"]),
                             "starterName": d["name"],
@@ -174,7 +172,7 @@ def _team_leakage(
     }
 
 
-def _compute_as_of(season_df: pl.DataFrame, slots, as_of_week: int) -> list:
+def _compute_as_of(season_df: pl.DataFrame, slots, pools, as_of_week: int) -> list:
     """Per-team leakage rows as of one cutoff week N — `season_df` is the join filtered
     to weeks ≤ N (skill positions). Returns a list of row dicts tagged `as_of_week = N`.
 
@@ -242,6 +240,7 @@ def _compute_as_of(season_df: pl.DataFrame, slots, as_of_week: int) -> list:
             pool_by_week,
             slots,
             season_by_name_by_team.get(rid, {}),
+            pools,
             rate_margin=COACHABLE_RATE_MARGIN,
             habitual_starter_threshold=HABITUAL_STARTER_THRESHOLD,
         )
@@ -276,7 +275,9 @@ def compute(season: int) -> pl.DataFrame:
     season_df = data_layer.read_join_season(season).filter(
         pl.col("position").is_in(SKILL_POSITIONS)
     )
-    slots = _expand_slots(data_layer.read_lineup_slots(season).to_dicts())
+    slot_rows = data_layer.read_lineup_slots(season).to_dicts()
+    slots = _expand_slots(slot_rows)
+    pools = position_pools(slot_rows)  # swap-eligibility classes from the lineup shape
 
     # Materialize one tall snapshot per as-of week N = 1..maxweek: the team's leakage
     # ledger exactly as it stood through week N. Current (latest) behavior is the
@@ -284,7 +285,7 @@ def compute(season: int) -> pl.DataFrame:
     max_week = int(season_df["week"].max())
     all_rows = []
     for n in range(1, max_week + 1):
-        all_rows.extend(_compute_as_of(season_df.filter(pl.col("week") <= n), slots, n))
+        all_rows.extend(_compute_as_of(season_df.filter(pl.col("week") <= n), slots, pools, n))
 
     df = pl.DataFrame(all_rows).sort("as_of_week", "roster_id")
     print(f"=== Team leakage: season={season}  as_of_week 1..{max_week} ===")

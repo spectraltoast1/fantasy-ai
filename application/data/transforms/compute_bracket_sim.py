@@ -78,6 +78,49 @@ def _playoff_config(season: int) -> tuple:
     return int(s["playoff_week_start"]) - 1, int(s["playoff_teams"])
 
 
+def _division_map(season: int):
+    """roster_id → division label, when the league runs divisions AND the per-roster assignment is
+    persisted. Today the teams entity carries no `division` column (Sleeper keeps that assignment on
+    the rosters endpoint; persisting it is a documented follow-up), so this returns None and the
+    seeding falls back to the flat (wins, points-for) table — i.e. the standard league is unchanged.
+    When a division league is onboarded and its map is persisted, division-aware seeding activates
+    with no further code change. Returns None unless ≥ 2 divisions are actually present.
+
+    NB — division seeding is **synthetic-gated only** (no real division league in the answer key); see
+    backtest_bracket_sim.py. Revisit against real division standings when such a league is added."""
+    teams = data_layer.read_sleeper_teams(season)
+    if "division" not in teams.columns:
+        return None
+    m = {int(r["roster_id"]): r["division"] for r in teams.iter_rows(named=True) if r["division"] is not None}
+    return m if len(set(m.values())) >= 2 else None
+
+
+def _seed_table(total_wins, total_pts, playoff_teams: int, divisions=None):
+    """Per-sim playoff seeding from the final table → (seed, made) arrays, shape (SIMS, T). Rank key =
+    wins·1e5 + points-for (points-for stays within the multiplier's headroom). **Division-aware:** when
+    `divisions` (a per-team-index label list with ≥ 2 distinct values) is given, each division's leader
+    is seeded ahead of every non-winner — Sleeper's default: division winners take the top seeds ordered
+    among themselves by record, the rest are wildcards by record — via a large additive bonus on the
+    winners' key that preserves order within winners and within wildcards. No divisions → the flat seed
+    (exactly the prior behavior, so the standard league is byte-identical)."""
+    key = total_wins * 1e5 + total_pts
+    seed_key = key
+    if divisions is not None:
+        div = np.asarray(divisions)
+        if np.unique(div).size >= 2:
+            sims = key.shape[0]
+            is_winner = np.zeros(key.shape, dtype=bool)
+            for d in np.unique(div):
+                cols = np.where(div == d)[0]
+                win_local = np.argmax(key[:, cols], axis=1)  # per sim, first max (ties → lowest index)
+                is_winner[np.arange(sims), cols[win_local]] = True
+            seed_key = key + is_winner * 1e12  # dominates any wins·1e5 + points-for spread
+    order = np.argsort(-seed_key, axis=1)
+    seed = np.empty(key.shape, dtype=int)
+    np.put_along_axis(seed, order, np.broadcast_to(np.arange(1, key.shape[1] + 1), key.shape), axis=1)
+    return seed, seed <= playoff_teams
+
+
 def _norm_cdf(z: float) -> float:
     return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
 
@@ -132,20 +175,26 @@ def _standings_as_of(matchups: pl.DataFrame, n: int) -> dict:
 
 
 def _schedule(matchups: pl.DataFrame, weeks: range, idx: dict) -> dict:
-    """week → list of (i, j) team-index pairs from the real matchup_id pairings."""
+    """week → list of (i, j) team-index pairs from the real matchup_id pairings. `rids` are **sorted**
+    so the pair order is deterministic: polars group_by doesn't guarantee intra-group row order, and on
+    a zero-score tie (e.g. two all-OUT bye rosters, μ=σ=0) the winner otherwise flips with row order,
+    making the fixed-SEED sim non-reproducible run-to-run. Sorting makes the fixed seed actually
+    deterministic (a latent fixed here alongside the division-seeding work)."""
     sched: dict = {}
     sub = matchups.filter(pl.col("week").is_in(list(weeks)) & pl.col("matchup_id").is_not_null())
     for (wk, _mid), g in sub.group_by("week", "matchup_id"):
-        rids = [int(r) for r in g["roster_id"].to_list()]
+        rids = sorted(int(r) for r in g["roster_id"].to_list())
         if len(rids) == 2 and rids[0] in idx and rids[1] in idx:
             sched.setdefault(int(wk), []).append((idx[rids[0]], idx[rids[1]]))
     return sched
 
 
-def _simulate(team_ids: list, base: dict, dists: dict, sched: dict, weeks: range, playoff_teams: int) -> dict:
+def _simulate(team_ids: list, base: dict, dists: dict, sched: dict, weeks: range, playoff_teams: int,
+              divisions=None) -> dict:
     """Monte Carlo the remaining regular season. `dists[w]` = (mu[T], sig[T]) arrays; `sched[w]` =
-    index pairs; `base` = as-of-N standings; `playoff_teams` = the league's championship-bracket size.
-    Returns per-team aggregates over SIMS runs."""
+    index pairs; `base` = as-of-N standings; `playoff_teams` = the league's championship-bracket size;
+    `divisions` = per-team-index division labels (None ⇒ flat seeding). Returns per-team aggregates
+    over SIMS runs."""
     T = len(team_ids)
     rng = np.random.default_rng(SEED)
     base_wins = np.array([base.get(r, {}).get("wins", 0.0) for r in team_ids])
@@ -166,13 +215,8 @@ def _simulate(team_ids: list, base: dict, dists: dict, sched: dict, weeks: range
             rem_wins[:, i] += a
             rem_wins[:, j] += ~a
 
-    # Final seeding per sim: rank by (wins, points-for) descending. Fold into one scalar key
-    # (points-for can't exceed the 1e5 multiplier's headroom) and read off the seed by argsort.
-    key = total_wins * 1e5 + total_pts
-    order = np.argsort(-key, axis=1)
-    seed = np.empty_like(key, dtype=int)
-    np.put_along_axis(seed, order, np.broadcast_to(np.arange(1, T + 1), key.shape), axis=1)
-    made = seed <= playoff_teams
+    # Final seeding per sim (division-aware when a division map is present; flat otherwise).
+    seed, made = _seed_table(total_wins, total_pts, playoff_teams, divisions)
 
     playoff_odds = made.mean(axis=0)
     proj_wins = total_wins.mean(axis=0)
@@ -199,13 +243,14 @@ def _simulate(team_ids: list, base: dict, dists: dict, sched: dict, weeks: range
 
 
 def _compute_as_of(n, roster_pids, cons_by_week, slots, matchups, season,
-                   reg_season_end: int, playoff_teams: int) -> list:
+                   reg_season_end: int, playoff_teams: int, div_map=None) -> list:
     """Bracket-odds rows for one as-of cutoff N (playoff config injected from league settings)."""
     weeks = range(n + 1, reg_season_end + 1)
     team_ids = sorted(roster_pids.keys())
     if not list(weeks) or not team_ids:
         return []
     idx = {rid: i for i, rid in enumerate(team_ids)}
+    divisions = [div_map.get(rid) for rid in team_ids] if div_map else None
 
     dists = {}
     for w in weeks:
@@ -218,7 +263,7 @@ def _compute_as_of(n, roster_pids, cons_by_week, slots, matchups, season,
 
     base = _standings_as_of(matchups, n)
     sched = _schedule(matchups, weeks, idx)
-    agg = _simulate(team_ids, base, dists, sched, weeks, playoff_teams)
+    agg = _simulate(team_ids, base, dists, sched, weeks, playoff_teams, divisions)
 
     rows = []
     for rid, i in idx.items():
@@ -254,6 +299,7 @@ def compute(season: int) -> pl.DataFrame:
     season_df = data_layer.read_join_season(season).filter(pl.col("position").is_in(SKILL_POSITIONS))
     slots = expand_slots(data_layer.read_lineup_slots(season).to_dicts())
     matchups = data_layer.read_season_matchups(season, through_week=reg_season_end)
+    div_map = _division_map(season)  # None for a no-division league → flat seeding (unchanged)
     max_roster_week = int(season_df["week"].max())
 
     all_rows = []
@@ -262,8 +308,13 @@ def compute(season: int) -> pl.DataFrame:
         roster_pids: dict = {}
         for pid, rid in roster.items():
             roster_pids.setdefault(int(rid), []).append(pid)
+        # Sort each roster's player list so the optimal-lineup tie-break (max first-occurrence over
+        # rounded center_ppr, which collides often) sees a stable order → the fixed-SEED sim is
+        # reproducible. `_roster_as_of` returns a dict whose order isn't guaranteed run-to-run.
+        for rid in roster_pids:
+            roster_pids[rid].sort()
         all_rows.extend(_compute_as_of(n, roster_pids, cons_by_week, slots, matchups, season,
-                                       reg_season_end, playoff_teams))
+                                       reg_season_end, playoff_teams, div_map))
 
     df = pl.DataFrame(all_rows, infer_schema_length=None).sort(
         "as_of_week", "playoff_odds", descending=[False, True]
