@@ -20,8 +20,9 @@ assumption. Two verdicts (exit 0 iff both pass):
     realised ROS rises monotonically (dead < mid < stud), the way backtest_production_vor tests VOR
     tiers. Confirms the bull ceiling carries ranking signal, not just width.
 
-It imports the SAME pure functions the transform ships (`_ros_sigma`, `_outcome_band`) — what's
-validated is exactly what serves the read, no re-derivation. Per-player realised ROS is a simple
+It imports the SAME pure functions the transform ships (`_ros_sigma`, `_preseason_anchor`,
+`_blended_band`, `_load_anchor_inputs`) — what's validated is exactly what serves the read, no
+re-derivation. Per-player realised ROS is a simple
 Σ actual PPR over the remaining weeks (a player read, not a team read — no optimal_lineup). The
 band's forward inputs (each week's band_ppr, built from weeks < that week) never see the actuals
 they're tested against — no leakage.
@@ -30,6 +31,14 @@ they're tested against — no leakage.
 player once, longest real ROS). Coverage across ~160 players is a fair calibration sample, but a
 league-wide over/under-projection correlates their misses, so pooling the nested per-week windows
 (same player at N=1..4) would inflate n without independent signal — reported as evidence only.
+
+**Preseason-anchor honesty (documented):** the roster is frozen at weeks 1–4, so every tested cutoff
+(N=1..4) sits in the **early / prior-heavy** regime — the anchor weight w_N = ANCHOR_W · (remaining/
+total) is near its max here (≈0.19 at the freeze). The late-season, evidence-heavy tail of the decay
+(w_N → 0 as the horizon closes) is asserted by construction, not exercised by this answer key; it
+cannot be until an as-of week past the freeze exists. The sweep therefore tunes ANCHOR_W where the
+anchor matters most, which is the honest place to tune it. The gate reports the pre-anchor vs
+anchored freeze-week tails so the anchor's calibration contribution is visible, not assumed.
 
 Usage:
     python -m application.data.transforms.backtest_ros_outcome_shape --season 2025
@@ -44,7 +53,9 @@ import polars as pl
 
 from application.data import data_layer
 from application.data.transforms._analytics import mean
-from application.data.transforms.compute_ros_outcome_shape import BULL_Z, SKILL_POSITIONS, _outcome_band, _ros_sigma
+from application.data.transforms.compute_ros_outcome_shape import (
+    ANCHOR_W, BULL_Z, SKILL_POSITIONS, _blended_band, _load_anchor_inputs, _preseason_anchor, _ros_sigma,
+)
 
 # Target bull/bear coverage — the fraction of players whose actual ROS should land in the band.
 # 0.80 = an ~80% (10th/90th) "good season / bad season" interval, §2's realistic high/low.
@@ -55,6 +66,11 @@ COVERAGE_TOL = 0.05
 # sweep output is legible; residuals summed over the ROS horizon are near-normal by CLT, so the
 # empirical best sits near the 0.80 target's 1.28 unless autocorrelation shifts it.
 BULL_Z_GRID = [0.674, 0.842, 1.036, 1.150, 1.282, 1.440, 1.645, 1.960]
+# Preseason-anchor max weight candidates. 0.0 = pure-projection band (the pre-anchor read), so the
+# sweep is free to conclude the §2 anchor earns nothing at the freeze and drive it to 0 — the shipped
+# weight is whatever the answer key rewards, jointly with BULL_Z (the anchor reshapes the band, so
+# the two must be tuned together, not in sequence).
+ANCHOR_W_GRID = [0.0, 0.25, 0.5, 0.75, 1.0]
 
 
 def _actual_weekly(season: int) -> dict:
@@ -70,12 +86,13 @@ def _actual_weekly(season: int) -> dict:
     return {(r["sleeper_player_id"], r["week"]): float(r["actual"]) for r in df.iter_rows(named=True)}
 
 
-def _test_points(season: int, bull_z: float):
-    """One row per (as_of_week N, player): the shipped bull/bear band (pure path) + the actual ROS
-    over the same remaining weeks. Returns (rows, freeze_week). Security is carried for the
-    situation-axis evidence line."""
+def _test_points(season: int, bull_z: float, anchor_w: float):
+    """One row per (as_of_week N, player): the shipped bull/bear band + the actual ROS over the same
+    remaining weeks. Rebuilds the band through the transform's own `_preseason_anchor` / `_blended_band`
+    (and `_load_anchor_inputs`), so what's validated is exactly what serves the read — no re-derivation.
+    Returns (rows, freeze_week). Security is carried for the situation-axis evidence line."""
     vor = data_layer.read_production_vor(season, as_of_week="all").select(
-        "as_of_week", "roster_id", "sleeper_player_id", "position", "ros_value"
+        "as_of_week", "roster_id", "sleeper_player_id", "position", "ros_value", "n_weeks"
     )
     consensus = data_layer.read_projection_consensus(season).select(
         "week", "sleeper_player_id", "band_ppr"
@@ -84,6 +101,7 @@ def _test_points(season: int, bull_z: float):
         "as_of_week", "sleeper_player_id", "security"
     )
     actual = _actual_weekly(season)
+    adp_map, curve_lookup, curve_max_rank = _load_anchor_inputs(season)
 
     weeks = sorted(vor["as_of_week"].unique().to_list())
     freeze = max(weeks)
@@ -104,7 +122,11 @@ def _test_points(season: int, bull_z: float):
         }
         for r in vor.filter(pl.col("as_of_week") == n).iter_rows(named=True):
             pid = r["sleeper_player_id"]
-            band = _outcome_band(r["ros_value"], sigma_map.get(pid, 0.0), bull_z=bull_z)
+            remaining_frac = r["n_weeks"] / max_proj_week if max_proj_week else 0.0
+            anchor = _preseason_anchor(adp_map.get(pid), curve_lookup, curve_max_rank, remaining_frac)
+            band = _blended_band(
+                r["ros_value"], sigma_map.get(pid, 0.0), anchor, anchor_w * remaining_frac, bull_z=bull_z
+            )
             act = sum(actual.get((pid, wk), 0.0) for wk in remaining)
             rows.append({
                 "as_of_week": n, "roster_id": int(r["roster_id"]), "sleeper_player_id": pid,
@@ -125,29 +147,36 @@ def _coverage(df: pl.DataFrame) -> tuple[float, float, float]:
 
 
 def sweep(season: int) -> None:
-    """Sweep BULL_Z against the answer key: pick the z whose freeze-week coverage is closest to
-    TARGET_COVERAGE (tails reported so an asymmetric miss is visible)."""
-    print(f"=== BULL_Z sweep (freeze week): season={season}  target coverage={TARGET_COVERAGE:.2f} ===")
-    print(f"  {'bull_z':>8}{'coverage':>10}{'below-bear':>12}{'above-bull':>12}{'|cov-tgt|':>11}")
-    best = (None, 9.9)
-    for z in BULL_Z_GRID:
-        rows, freeze = _test_points(season, z)
-        fz = pl.DataFrame(rows).filter(pl.col("as_of_week") == freeze)
-        cov, below, above = _coverage(fz)
-        err = abs(cov - TARGET_COVERAGE)
-        if err < best[1]:
-            best = (z, err)
-        flag = " ←best" if z == best[0] else ""
-        print(f"  {z:>8.3f}{cov:>10.3f}{below:>12.3f}{above:>12.3f}{err:>11.3f}{flag}")
-    print(f"  → best BULL_Z at this answer key: {best[0]} — bake into compute_ros_outcome_shape.py")
+    """Sweep (BULL_Z × ANCHOR_W) jointly against the answer key: pick the pair whose freeze-week
+    coverage is closest to TARGET_COVERAGE (tails reported so an asymmetric miss is visible). Joint
+    because the preseason anchor reshapes the band, so the calibrated width depends on the anchor
+    weight — tuning them in sequence would miss the interaction."""
+    print(f"=== BULL_Z × ANCHOR_W sweep (freeze week): season={season}  target coverage={TARGET_COVERAGE:.2f} ===")
+    print(f"  {'bull_z':>8}{'anchor_w':>10}{'coverage':>10}{'below-bear':>12}{'above-bull':>12}{'score':>9}")
+    # Selection objective = |coverage − target| + |below-bear − above-bull|: calibrated AND centered.
+    # The band is symmetric-by-design (no ROS skew term), so among equally-calibrated pairs the honest
+    # choice is the one whose miss tails are balanced, not one skewed low or high — this is why a
+    # coverage-only pick can mislead (it will chase target coverage into a lopsided band).
+    best = (None, None, 9.9)
+    for w in ANCHOR_W_GRID:
+        for z in BULL_Z_GRID:
+            rows, freeze = _test_points(season, z, w)
+            fz = pl.DataFrame(rows).filter(pl.col("as_of_week") == freeze)
+            cov, below, above = _coverage(fz)
+            score = abs(cov - TARGET_COVERAGE) + abs(below - above)
+            if score < best[2]:
+                best = (z, w, score)
+            print(f"  {z:>8.3f}{w:>10.2f}{cov:>10.3f}{below:>12.3f}{above:>12.3f}{score:>9.3f}")
+    print(f"  → best (BULL_Z, ANCHOR_W) at this answer key: ({best[0]}, {best[1]}) "
+          f"score={best[2]:.3f} (|cov-tgt|+|tail imbalance|) — bake into compute_ros_outcome_shape.py")
 
 
-def run(season: int, bull_z: float = BULL_Z) -> bool:
-    rows, freeze = _test_points(season, bull_z)
+def run(season: int, bull_z: float = BULL_Z, anchor_w: float = ANCHOR_W) -> bool:
+    rows, freeze = _test_points(season, bull_z, anchor_w)
     tp = pl.DataFrame(rows)
     fz = tp.filter(pl.col("as_of_week") == freeze)
     print(f"=== ROS Outcome Shape backtest: season={season}  test points={tp.height} "
-          f"(player × as-of week; freeze week={freeze}, n={fz.height})  BULL_Z={bull_z} ===")
+          f"(player × as-of week; freeze week={freeze}, n={fz.height})  BULL_Z={bull_z}  ANCHOR_W={anchor_w} ===")
 
     # 1. Calibration — freeze-week coverage near TARGET, tails reported (symmetric band, no ROS skew term).
     cov, below, above = _coverage(fz)
@@ -158,6 +187,16 @@ def run(season: int, bull_z: float = BULL_Z) -> bool:
     print(f"    actual ROS in [bear, bull] = {cov:.3f}  {'PASS' if calibrated else 'FAIL'}")
     print(f"    tails: below-bear {below:.3f} / above-bull {above:.3f}  (symmetric band — evidence, not gated)")
     print(f"    [evidence] pooled coverage over weeks 1..{freeze} (n={tp.height}, nested/non-indep) = {cov_pool:.3f}")
+
+    # Anchor effect (evidence): the §2 preseason anchor's mark on the freeze-week band vs the
+    # pre-anchor pure-projection band at the SAME bull_z (isolates what the anchor changed, not the width).
+    pre_rows, _ = _test_points(season, bull_z, 0.0)
+    pre = pl.DataFrame(pre_rows).filter(pl.col("as_of_week") == freeze)
+    pcov, pbelow, pabove = _coverage(pre)
+    print()
+    print(f"  [evidence] preseason-anchor effect at freeze (bull_z={bull_z}):")
+    print(f"    pre-anchor  (ANCHOR_W=0.00): coverage {pcov:.3f}  below-bear {pbelow:.3f}  above-bull {pabove:.3f}")
+    print(f"    anchored    (ANCHOR_W={anchor_w:.2f}): coverage {cov:.3f}  below-bear {below:.3f}  above-bull {above:.3f}")
 
     # 2. Decision-relevant — terciles by ros_bull, actual ROS rises monotonically (dead < mid < stud).
     g = fz.sort("bull", descending=False)

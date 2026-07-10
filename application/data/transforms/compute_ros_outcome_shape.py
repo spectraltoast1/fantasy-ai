@@ -71,19 +71,22 @@ SKILL_POSITIONS = ["QB", "RB", "WR", "TE"]
 
 # Bull/bear half-width in σ units. Targets an ~80% (10th/90th) "good season / bad season" range,
 # wider than §3's interquartile band, per §2's "realistic high / low" framing. **Backtest-tuned
-# against the 2025 answer key** — jointly with ANCHOR_W (see backtest_ros_outcome_shape.py --sweep),
-# since the preseason anchor reshapes the band and shifts the calibrated width. Sits *above* the
-# normal-theory 1.28 for 80% because ros_sigma sums the weekly bands under independence, but a
-# player's weekly residuals are positively autocorrelated over a season (a bust tends to persist),
-# so realised ROS is more dispersed than the independent sum predicts and the band must widen to
-# stay honest. A league-agnostic tuning constant (config seed).
-BULL_Z = 1.645
+# jointly with ANCHOR_W against the 2025 answer key** (backtest_ros_outcome_shape.py --sweep) to
+# (1.44, 0.25): freeze-week coverage 0.817 with balanced miss tails (below-bear 0.091 / above-bull
+# 0.091) — the objective is |coverage−target| + |tail imbalance|, so the pair is both calibrated and
+# centred, not coverage-chased into a lopsided band. Sits above the normal-theory 1.28 for 80%
+# because ros_sigma sums the weekly bands under independence, but a player's weekly residuals are
+# positively autocorrelated over a season (a bust persists), so realised ROS is more dispersed than
+# the independent sum predicts and the band must widen to stay honest. (Was 1.645 pre-anchor: the
+# anchor corrects the projection's low-miss bias, so the same coverage needs less raw width.)
+BULL_Z = 1.44
 # Max preseason-anchor weight, at a full remaining season (the blend weight is ANCHOR_W scaled by the
 # remaining-season fraction, so it decays to ~0 as the horizon closes — §2's prior→evidence dynamic).
 # ANCHOR_W = 0 recovers the pure-projection band (the pre-anchor behaviour). **Backtest-tuned jointly
-# with BULL_Z** against the 2025 answer key; the sweep drives it toward 0 if the anchor doesn't earn
-# its calibration, so the shipped value is empirical, not assumed.
-ANCHOR_W = 0.5
+# with BULL_Z** (above): the sweep is free to drive it to 0 if the anchor earns nothing, and it lands
+# at 0.25 — the anchor rebalances the freeze-week miss tails from a lopsided 0.128/0.037 (pre-anchor,
+# projection overprojects floors) to a centred 0.091/0.091. Empirical, not assumed.
+ANCHOR_W = 0.25
 
 
 def _ros_sigma(consensus: pl.DataFrame, remaining_weeks) -> pl.DataFrame:
