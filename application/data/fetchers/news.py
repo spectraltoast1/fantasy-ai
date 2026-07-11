@@ -154,13 +154,42 @@ def build_index() -> dict:
     return index
 
 
+# NFL team → lowercase alias substrings (city + nickname), for disambiguating the rare same-name
+# collision. The current active universe has 0 collisions, but the registry mutates daily and two
+# simultaneously-active skill players have shared a name before (the Michael Carter RB/WR pair), so
+# this is defensive, not premature. Matched against RAW-lowercase text (keeps digits like "49ers"),
+# separate from the digit-stripping name normalization. Shared-market teams (NY, LA) carry nickname
+# only — the shared city can't disambiguate them, so a city-only mention stays ambiguous (skipped).
+_TEAM_ALIASES = {
+    "ARI": ("arizona", "cardinals"), "ATL": ("atlanta", "falcons"), "BAL": ("baltimore", "ravens"),
+    "BUF": ("buffalo", "bills"), "CAR": ("carolina", "panthers"), "CHI": ("chicago", "bears"),
+    "CIN": ("cincinnati", "bengals"), "CLE": ("cleveland", "browns"), "DAL": ("dallas", "cowboys"),
+    "DEN": ("denver", "broncos"), "DET": ("detroit", "lions"), "GB": ("green bay", "packers"),
+    "HOU": ("houston", "texans"), "IND": ("indianapolis", "colts"), "JAX": ("jacksonville", "jaguars"),
+    "KC": ("kansas city", "chiefs"), "LV": ("las vegas", "raiders"), "LAC": ("chargers",),
+    "LAR": ("rams",), "MIA": ("miami", "dolphins"), "MIN": ("minnesota", "vikings"),
+    "NE": ("new england", "patriots"), "NO": ("new orleans", "saints"), "NYG": ("giants",),
+    "NYJ": ("jets",), "PHI": ("philadelphia", "eagles"), "PIT": ("pittsburgh", "steelers"),
+    "SF": ("san francisco", "49ers", "niners"), "SEA": ("seattle", "seahawks"),
+    "TB": ("tampa bay", "buccaneers"), "TEN": ("tennessee", "titans"), "WAS": ("washington", "commanders"),
+}
+
+
+def _disambiguate(cands: list, text: str) -> dict | None:
+    """Pick the colliding candidate whose NFL team is named in `text`; None if 0 or >1 teams
+    match (never guess — law 2). Only reached when a name maps to >1 active player."""
+    low = text.lower()
+    matched = [c for c in cands if any(a in low for a in _TEAM_ALIASES.get(c["team"], ()))]
+    return matched[0] if len(matched) == 1 else None
+
+
 def resolve_players(text: str, index: dict) -> list[dict]:
     """Every current skill player named (full name, whole-token) in `text` = headline + summary.
 
-    A name mapping to exactly one active player → exact_full (the case in the 0-collision current
-    universe). A name mapping to >1 candidate is left for the Commit-2 disambiguation pass and
-    skipped here (never guessed — law 2). Returns [{sleeper_player_id, player_name,
-    match_confidence, match_method}].
+    A name mapping to exactly one active player → `exact_full` (the case in the 0-collision current
+    universe). A name mapping to >1 active player is resolved by a team mention → `disambiguated`,
+    or skipped when no single team is named (never guessed — law 2). Returns
+    [{sleeper_player_id, player_name, match_confidence, match_method}].
     """
     norm = f" {_normalize(text)} "
     hits = []
@@ -168,14 +197,18 @@ def resolve_players(text: str, index: dict) -> list[dict]:
         if f" {key} " not in norm:
             continue
         if len(cands) == 1:
-            c = cands[0]
-            hits.append({
-                "sleeper_player_id": c["sleeper_player_id"],
-                "player_name": c["full_name"],
-                "match_confidence": "exact_full",
-                "match_method": "full_name",
-            })
-        # >1 candidate (does not occur in the current active universe): skip until Commit-2 hardening.
+            picked, conf, method = cands[0], "exact_full", "full_name"
+        else:
+            picked = _disambiguate(cands, text)
+            if picked is None:                        # ambiguous → skip, never guess
+                continue
+            conf, method = "disambiguated", "full_name+team"
+        hits.append({
+            "sleeper_player_id": picked["sleeper_player_id"],
+            "player_name": picked["full_name"],
+            "match_confidence": conf,
+            "match_method": method,
+        })
     return hits
 
 
@@ -238,7 +271,8 @@ def snapshot(*, dry_run: bool = False) -> None:
     print(f"News {mode} {ctx['collected_at']} (season={season}, week={week}) — "
           f"{len(_FEEDS)} feed(s); index = {sum(len(v) for v in index.values())} active skill players")
 
-    total_rows, total_items, total_entries, failed = 0, 0, 0, 0
+    total_entries, failed = 0, 0
+    collected: list[dict] = []
     for feed in _FEEDS:
         try:
             parsed = _get_feed(feed["url"])
@@ -249,52 +283,67 @@ def snapshot(*, dry_run: bool = False) -> None:
         feed_rows = []
         for entry in parsed.entries:
             feed_rows.extend(_entry_rows(entry, feed, index, ctx))
-        n_entries = len(parsed.entries)
+        total_entries += len(parsed.entries)
+        collected.extend(feed_rows)
         n_items = len({r["url"] for r in feed_rows})
-        total_entries += n_entries
-        total_items += n_items
-        total_rows += len(feed_rows)
-        print(f"  [{feed['key']:<9}] {n_entries:>3} entries → {n_items:>3} player-relevant "
-              f"items, {len(feed_rows):>3} rows")
+        print(f"  [{feed['key']:<9}] {len(parsed.entries):>3} entries → {n_items:>3} "
+              f"player-relevant items, {len(feed_rows):>3} rows")
         if not dry_run and feed_rows:
             data_layer.write_player_news(pl.DataFrame(feed_rows, schema_overrides=_SCHEMA))
         time.sleep(0.3)                                # be polite between feeds
 
     ok = len(_FEEDS) - failed
+    total_items = len({r["url"] for r in collected})   # union — an article in 2 feeds counts once
     print(f"  {ok}/{len(_FEEDS)} feeds ok; {total_entries} entries → {total_items} items, "
-          f"{total_rows} (item×player) rows"
+          f"{len(collected)} (item×player) rows"
           + ("" if dry_run else " persisted (new-only, idempotent)"))
     if dry_run:
-        _print_resolution_sample(index)
+        _report_resolution(collected)
 
 
-def _print_resolution_sample(index: dict, k: int = 12) -> None:
-    """Dry-run QA: re-fetch and print a sample of resolved (headline → player) matches to eyeball."""
-    print("\n  sample resolved matches (eyeball for false positives):")
-    shown = 0
-    for feed in _FEEDS:
-        if shown >= k:
-            break
-        try:
-            parsed = _get_feed(feed["url"])
-        except Exception:                              # noqa: BLE001
-            continue
-        for entry in parsed.entries:
-            headline = _clean(entry.get("title") or "")
-            summary = _clean(entry.get("summary") or entry.get("description") or "", _SUMMARY_LIMIT)
-            for hit in resolve_players(f"{headline}. {summary}", index):
-                print(f"    [{feed['key']}] {hit['player_name']:<22} ⟵ {headline[:72]}")
-                shown += 1
-                if shown >= k:
-                    break
-            if shown >= k:
-                break
+def _report_resolution(rows: list[dict]) -> None:
+    """Dry-run QA: confidence breakdown + the full resolved (player ⟵ headline) list to eyeball."""
+    from collections import Counter
+    conf = Counter(r["match_confidence"] for r in rows)
+    print("  match_confidence: " + (", ".join(f"{k}={v}" for k, v in conf.items()) or "none"))
+    print("  resolved matches (eyeball for false positives):")
+    for r in sorted(rows, key=lambda r: (r["source"], r["player_name"])):
+        print(f"    [{r['source']:<9}] {r['player_name']:<22} ⟵ {r['headline'][:70]}")
+
+
+def check() -> bool:
+    """Credit-free synthetic self-check of the resolver (registry-independent): exact match,
+    non-match, same-name collision resolved by team, and collision-without-cue skipped."""
+    idx = {
+        _normalize("Josh Allen"): [
+            {"sleeper_player_id": "1", "full_name": "Josh Allen", "position": "QB", "team": "BUF"}],
+        _normalize("Michael Carter"): [
+            {"sleeper_player_id": "2", "full_name": "Michael Carter", "position": "RB", "team": "NYJ"},
+            {"sleeper_player_id": "3", "full_name": "Michael Carter", "position": "WR", "team": "ARI"}],
+    }
+    r_exact = resolve_players("Bills QB Josh Allen throws 3 TDs", idx)
+    r_none = resolve_players("The Chiefs beat the Raiders", idx)
+    r_disamb = resolve_players("Cardinals WR Michael Carter impresses in camp", idx)
+    r_ambig = resolve_players("Michael Carter had a strong week", idx)
+    checks = [
+        ("exact_full", len(r_exact) == 1 and r_exact[0]["sleeper_player_id"] == "1"
+            and r_exact[0]["match_confidence"] == "exact_full"),
+        ("non_match", r_none == []),
+        ("disambiguated", len(r_disamb) == 1 and r_disamb[0]["sleeper_player_id"] == "3"
+            and r_disamb[0]["match_confidence"] == "disambiguated"),
+        ("ambiguous_skip", r_ambig == []),
+    ]
+    for name, passed in checks:
+        print(f"  {name:<16} {'PASS' if passed else 'FAIL'}")
+    ok = all(p for _, p in checks)
+    print(f"  VERDICT: {'PASS' if ok else 'FAIL'}")
+    return ok
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Player-news RSS collector (§2 aggregation half).")
     parser.add_argument("command", nargs="?", default="snapshot",
-                        choices=["snapshot", "feeds", "resolve-test"])
+                        choices=["snapshot", "feeds", "resolve-test", "check"])
     args = parser.parse_args()
 
     if args.command == "feeds":
@@ -302,6 +351,8 @@ def main() -> None:
             print(f"  {f['key']:<9} [{f['source_type']}]  {f['url']}")
     elif args.command == "resolve-test":
         snapshot(dry_run=True)
+    elif args.command == "check":
+        sys.exit(0 if check() else 1)
     else:
         snapshot()
 
