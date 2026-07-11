@@ -482,6 +482,52 @@ def player_news_exists() -> bool:
     return _player_news_path().exists()
 
 
+# --- Team News Raw (per-team article collection, §2 news pipeline Stage A) ---
+# The team-centric successor to player_news: the collector (fetchers/news.py) now pulls
+# per-NFL-team RSS from three native sources per team (SB Nation + FanSided + the official
+# team site) and banks the RAW ARTICLES (feed-provided content — not just headlines, because
+# the weekly AI extraction step needs the text; feed-provided only, no scraping). Grain is one
+# row per ARTICLE (team-tagged); player resolution has moved downstream to extraction/slice.
+# One growing file. Immutable-once-collected, so the writer is APPEND-ONLY-OF-NEW by article_id
+# (idempotent re-runs; cross-poll duplicates collapse). Superseded player_news is left in place
+# as legacy. Consumed by the weekly team-dossier extraction (Stage B).
+
+
+def _team_news_raw_path() -> Path:
+    return _SNAPSHOT_DIR / "news" / "team_news_raw.parquet"
+
+
+def write_team_news_raw(df: pl.DataFrame) -> None:
+    """Append only the genuinely-new articles to the growing store (idempotent by article_id).
+
+    `df` is a batch of collected article rows. De-duplicated on `article_id`, then any article_id
+    already on disk is dropped, so re-polling a feed never duplicates — the store grows only by new
+    articles. Concat is diagonal so a later schema tweak doesn't break the append.
+    """
+    path = _team_news_raw_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df = df.unique(subset="article_id", keep="first")
+    if path.exists():
+        existing = pl.read_parquet(path)
+        df = df.filter(~pl.col("article_id").is_in(existing["article_id"]))
+        df = pl.concat([existing, df], how="diagonal")
+    df.write_parquet(path)
+
+
+def read_team_news_raw(team: str | None = None, season: int | None = None) -> pl.DataFrame:
+    """Read the collected raw team articles, optionally filtered to one team and/or season."""
+    df = pl.read_parquet(_team_news_raw_path())
+    if team is not None:
+        df = df.filter(pl.col("team") == team)
+    if season is not None:
+        df = df.filter(pl.col("season") == season)
+    return df
+
+
+def team_news_raw_exists() -> bool:
+    return _team_news_raw_path().exists()
+
+
 # --- Projections (multi-source: Sleeper now, FantasyPros in-season) ---
 # The borrowed forward prior every Phase-2 read rests on (Product Roadmap Phase 2).
 # Normalized, source-agnostic entity: one growing file per season, with `source` as a

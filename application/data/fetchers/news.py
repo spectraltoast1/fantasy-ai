@@ -1,31 +1,34 @@
 """
-Player-news collector — the aggregation half of the §2 ROS AI-interpretation layer.
+Team-news collector — Stage A of the §2 ROS AI-interpretation news pipeline.
 
-DECISION_READS.md §2's AI layer needs a news feed, and none was fetched anywhere. This is
-the collector: a live, scheduled RSS snapshot fetcher that banks current NFL player news as a
-de-duplicated, player-resolved, source-attributed time-series. The on-demand AI synthesis that
-turns this into consolidated headlines + a bull/bear blurb is a LATER build; this module only
-collects (design record: project_management/LLM context/STATUS.md).
+The §2 layer needs a news feed. This collector banks per-NFL-team article coverage from three
+NATIVE RSS sources per team — SB Nation (grounded analysis), FanSided (player/fantasy-flavored,
+noisier), and the official team site (authoritative team-intent, PR-heavy) — into a raw article
+store the weekly AI extraction step (Stage B) distills into tagged claims, which a per-player
+slice (Stage C) then inherits. This module only COLLECTS.
 
-Mirrors the leaguelogs collector: incremental per-feed persistence (a mid-run feed failure
-leaves a recoverable partial), a dedup guard in the data_layer writer (idempotent re-runs), and
-a launchd plist for the daily rhythm. Live-acquired like manager_activity — the FORWARD pipeline,
-NOT tied to the frozen-2025 league; it resolves against whatever skill players are on an NFL
-roster right now (team-not-null: 0 full-name collisions → a high-precision exact-match key).
+Why per-team (not national): source investigation settled that the national desks (ESPN/CBS/Yahoo)
+publish league-level feeds, not team-level, so they don't serve a per-team design; SI/FanNation
+has no usable native RSS (ruled out, tested). SB Nation + FanSided are the two viable independent-
+blog networks (team-by-team, native RSS); the official site is the authoritative-but-PR third.
+`source_type` is stored per article so the downstream synthesis can weight the sources and treat
+their agreement as corroboration. 3 feeds/team → one source going quiet degrades, not breaks.
 
-Only the compact item is stored — headline, summary, url, provenance — never the article body:
-url + collected_at are the recall path (Wayback) if a source must be re-read, and it sidesteps
-copyright/ToS on article text.
+Why store the article CONTENT (unlike the v1 player-news collector, which kept headlines only):
+the weekly extraction needs the text. Feed-provided content only — no scraping; the product
+surfaces derived claims + a link, and raw content is prunable after the extraction window.
 
-Scope: QB/RB/WR/TE only (the V1 skill-position non-negotiable). Nationals-only source list for
-now; team beats drop in later as source_type="beat" entries (no schema change). Type-1
-aggregators are deliberately excluded — aggregating aggregators destroys the source independence
-the corroboration design rests on.
+Mirrors the leaguelogs collector: `_get_feed` timeout + backoff, per-feed isolation (one dead feed
+never kills the run), incremental per-feed persistence, dedup guard in the data_layer writer
+(append-only-of-new by article_id → idempotent re-runs). Live-acquired forward pipeline.
+
+Player resolution has moved OUT of collection (into Stage B extraction + Stage C slice); the
+resolver here (`build_index` / `resolve_players`) is RETAINED for those stages to import.
 
 Usage:
-    python -m application.data.fetchers.news snapshot       # fetch every feed + persist
-    python -m application.data.fetchers.news feeds          # list the configured registry
-    python -m application.data.fetchers.news resolve-test   # dry-run: parse + resolve, no write
+    python -m application.data.fetchers.news snapshot [--team KC]   # fetch team feeds + persist
+    python -m application.data.fetchers.news feeds                  # list the team registry
+    python -m application.data.fetchers.news check                  # resolver self-check
 """
 
 import argparse
@@ -46,39 +49,79 @@ from application.data.fetchers import sleeper
 
 SKILL_POSITIONS = ("QB", "RB", "WR", "TE")
 
-# National, team-neutral NFL feeds (source_type="national"). Team beats (source_type="beat")
-# drop in later. Validated for parse + resolution during the build; dead/thin feeds are pruned.
-_FEEDS = (
-    {"key": "espn_nfl",  "source_type": "national", "url": "https://www.espn.com/espn/rss/nfl/news"},
-    {"key": "cbs_nfl",   "source_type": "national", "url": "https://www.cbssports.com/rss/headlines/nfl/"},
-    {"key": "yahoo_nfl", "source_type": "national", "url": "https://sports.yahoo.com/nfl/rss/"},
-    {"key": "pft_nbc",   "source_type": "national", "url": "https://profootballtalk.nbcsports.com/feed/"},
-    {"key": "pfrumors",  "source_type": "national", "url": "https://www.profootballrumors.com/feed/"},
+# --- Team feed registry: 3 native RSS sources per team, all 96 validated live ---
+# (abbr, official_domain, sbnation_domain, fansided_domain). Feed URLs are built by _build_registry:
+#   official → https://www.<domain>/rss/news   (NFL.com network, consistent)
+#   SB Nation → https://www.<domain>/rss/index.xml
+#   FanSided → https://<domain>/feed/
+# National desks dropped (league-level). SI/FanNation ruled out (no native per-team RSS).
+_TEAM_SITES = (
+    ("ARI", "azcardinals.com",       "revengeofthebirds.com",    "raisingzona.com"),
+    ("ATL", "atlantafalcons.com",    "thefalcoholic.com",        "bloggingdirty.com"),
+    ("BAL", "baltimoreravens.com",   "baltimorebeatdown.com",    "ebonybird.com"),
+    ("BUF", "buffalobills.com",      "buffalorumblings.com",     "buffalowdown.com"),
+    ("CAR", "panthers.com",          "catscratchreader.com",     "catcrave.com"),
+    ("CHI", "chicagobears.com",      "windycitygridiron.com",    "beargoggleson.com"),
+    ("CIN", "bengals.com",           "cincyjungle.com",          "stripehype.com"),
+    ("CLE", "clevelandbrowns.com",   "dawgsbynature.com",        "dawgpounddaily.com"),
+    ("DAL", "dallascowboys.com",     "bloggingtheboys.com",      "thelandryhat.com"),
+    ("DEN", "denverbroncos.com",     "milehighreport.com",       "predominantlyorange.com"),
+    ("DET", "detroitlions.com",      "prideofdetroit.com",       "sidelionreport.com"),
+    ("GB",  "packers.com",           "acmepackingcompany.com",   "lombardiave.com"),
+    ("HOU", "houstontexans.com",     "battleredblog.com",        "torotimes.com"),
+    ("IND", "colts.com",             "stampedeblue.com",         "horseshoeheroes.com"),
+    ("JAX", "jaguars.com",           "bigcatcountry.com",        "blackandteal.com"),
+    ("KC",  "chiefs.com",            "arrowheadpride.com",       "arrowheadaddict.com"),
+    ("LV",  "raiders.com",           "silverandblackpride.com",  "justblogbaby.com"),
+    ("LAC", "chargers.com",          "boltsfromtheblue.com",     "boltbeat.com"),
+    ("LAR", "therams.com",           "turfshowtimes.com",        "ramblinfan.com"),
+    ("MIA", "miamidolphins.com",     "thephinsider.com",         "phinphanatic.com"),
+    ("MIN", "vikings.com",           "dailynorseman.com",        "thevikingage.com"),
+    ("NE",  "patriots.com",          "patspulpit.com",           "musketfire.com"),
+    ("NO",  "neworleanssaints.com",  "canalstreetchronicles.com","whodatdish.com"),
+    ("NYG", "giants.com",            "bigblueview.com",          "gmenhq.com"),
+    ("NYJ", "newyorkjets.com",       "ganggreennation.com",      "thejetpress.com"),
+    ("PHI", "philadelphiaeagles.com","bleedinggreennation.com",  "insidetheiggles.com"),
+    ("PIT", "steelers.com",          "behindthesteelcurtain.com","stillcurtain.com"),
+    ("SF",  "49ers.com",             "ninersnation.com",         "ninernoise.com"),
+    ("SEA", "seahawks.com",          "fieldgulls.com",           "12thmanrising.com"),
+    ("TB",  "buccaneers.com",        "bucsnation.com",           "thepewterplank.com"),
+    ("TEN", "tennesseetitans.com",   "musiccitymiracles.com",    "titansized.com"),
+    ("WAS", "commanders.com",        "hogshaven.com",            "riggosrag.com"),
 )
+
+
+def _build_registry() -> tuple:
+    """Flatten the team-site table into the feed list: {team, source_type, url} per feed."""
+    feeds = []
+    for abbr, off, sbn, fan in _TEAM_SITES:
+        feeds.append({"team": abbr, "source_type": "team_official",      "url": f"https://www.{off}/rss/news"})
+        feeds.append({"team": abbr, "source_type": "team_blog_sbn",      "url": f"https://www.{sbn}/rss/index.xml"})
+        feeds.append({"team": abbr, "source_type": "team_blog_fansided", "url": f"https://{fan}/feed/"})
+    return tuple(feeds)
+
+
+_TEAM_FEEDS = _build_registry()
 
 _TIMEOUT = 20
 _RETRIES = 3
 _BACKOFF = 2.0
 # A descriptive UA — several feeds 403 the default python-requests UA.
 _UA = "fantasy-ai-news/1.0 (+https://github.com/fantasy-ai)"
-_SUMMARY_LIMIT = 600           # store a compact summary, never the article body
+_CONTENT_LIMIT = 12000         # store the feed-provided article text, bounded (never scraped)
 
-# Pinned schema so the growing history file stays stable across runs.
+# Pinned schema so the growing store stays stable across runs.
 _SCHEMA = {
-    "item_id": pl.Utf8,             # sha1(url | player_id)[:16] — dedup / idempotency key
-    "sleeper_player_id": pl.Utf8,
-    "player_name": pl.Utf8,
-    "source": pl.Utf8,              # feed key
-    "source_type": pl.Utf8,         # national | beat
-    "headline": pl.Utf8,
-    "summary": pl.Utf8,
-    "url": pl.Utf8,                 # provenance + Wayback recall anchor
-    "published_at": pl.Utf8,        # from the feed (may be null / unreliable)
-    "collected_at": pl.Utf8,        # our fetch timestamp (the Wayback anchor)
+    "article_id": pl.Utf8,          # sha1(url)[:16] — dedup / idempotency key
+    "team": pl.Utf8,                # NFL team abbr (the feed's team)
+    "source_type": pl.Utf8,         # team_official | team_blog_sbn | team_blog_fansided
+    "title": pl.Utf8,
+    "content": pl.Utf8,             # feed-provided article text (tag-stripped, bounded)
+    "url": pl.Utf8,                 # provenance + recall link
+    "published_at": pl.Utf8,        # from the feed (may be null)
+    "collected_at": pl.Utf8,        # our fetch timestamp
     "season": pl.Int64,             # nfl-state context at collection
     "week": pl.Int64,
-    "match_confidence": pl.Utf8,    # exact_full | disambiguated
-    "match_method": pl.Utf8,
 }
 
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -121,13 +164,23 @@ def _entry_published(entry) -> str | None:
     return entry.get("published") or entry.get("updated") or None
 
 
-# --- Player resolution (the accuracy core) ---
+def _entry_content(entry) -> str:
+    """The article text the feed provides — full `content:encoded` when present, else the summary.
+    Tag-stripped and bounded. Feed-provided only; we never fetch the article page (no scraping)."""
+    if entry.get("content"):
+        raw = entry["content"][0].get("value", "")
+    else:
+        raw = entry.get("summary") or entry.get("description") or ""
+    return _clean(raw, _CONTENT_LIMIT)
+
+
+# --- Player resolution (RETAINED for Stage B extraction + Stage C slice; not used in collection) ---
 
 def _normalize(name: str) -> str:
     """Lowercase, drop punctuation and Jr/Sr/II-V suffixes, collapse whitespace.
 
-    Both the registry names and the article text pass through this, so 'A.J. Brown',
-    'Amon-Ra St. Brown', and "De'Von Achane" match their headline mentions.
+    Both the registry names and article text pass through this, so 'A.J. Brown',
+    'Amon-Ra St. Brown', and "De'Von Achane" match their mentions.
     """
     s = name.lower()
     s = re.sub(r"[.'`\-]", "", s)          # O'Dell -> odell, A.J. -> aj, Amon-Ra -> amonra
@@ -139,9 +192,8 @@ def _normalize(name: str) -> str:
 def build_index() -> dict:
     """name(normalized) -> [player rows] for CURRENT active skill players (on an NFL roster now).
 
-    team-not-null gives 967 skill players with ZERO full-name collisions — the right universe for
-    a live news feed and a high-precision exact-match key. A multi-word full name only matches when
-    it appears whole, so last-name collisions never fire.
+    team-not-null gives ~967 skill players with ZERO full-name collisions — a high-precision
+    exact-match key. Reused by the extraction step to resolve player-scoped claim subjects.
     """
     players = data_layer.read_sleeper_players().filter(
         pl.col("position").is_in(SKILL_POSITIONS) & pl.col("team").is_not_null()
@@ -155,11 +207,8 @@ def build_index() -> dict:
 
 
 # NFL team → lowercase alias substrings (city + nickname), for disambiguating the rare same-name
-# collision. The current active universe has 0 collisions, but the registry mutates daily and two
-# simultaneously-active skill players have shared a name before (the Michael Carter RB/WR pair), so
-# this is defensive, not premature. Matched against RAW-lowercase text (keeps digits like "49ers"),
-# separate from the digit-stripping name normalization. Shared-market teams (NY, LA) carry nickname
-# only — the shared city can't disambiguate them, so a city-only mention stays ambiguous (skipped).
+# collision. Matched against RAW-lowercase text (keeps digits like "49ers"), separate from the
+# digit-stripping name normalization. Shared-market teams (NY, LA) carry nickname only.
 _TEAM_ALIASES = {
     "ARI": ("arizona", "cardinals"), "ATL": ("atlanta", "falcons"), "BAL": ("baltimore", "ravens"),
     "BUF": ("buffalo", "bills"), "CAR": ("carolina", "panthers"), "CHI": ("chicago", "bears"),
@@ -184,11 +233,10 @@ def _disambiguate(cands: list, text: str) -> dict | None:
 
 
 def resolve_players(text: str, index: dict) -> list[dict]:
-    """Every current skill player named (full name, whole-token) in `text` = headline + summary.
+    """Every current skill player named (full name, whole-token) in `text`.
 
-    A name mapping to exactly one active player → `exact_full` (the case in the 0-collision current
-    universe). A name mapping to >1 active player is resolved by a team mention → `disambiguated`,
-    or skipped when no single team is named (never guessed — law 2). Returns
+    A name mapping to exactly one active player → `exact_full`; a name mapping to >1 is resolved by
+    a team mention → `disambiguated`, else skipped (never guessed — law 2). Returns
     [{sleeper_player_id, player_name, match_confidence, match_method}].
     """
     norm = f" {_normalize(text)} "
@@ -212,36 +260,26 @@ def resolve_players(text: str, index: dict) -> list[dict]:
     return hits
 
 
-# --- Row assembly ---
+# --- Article assembly ---
 
-def _entry_rows(entry, feed: dict, index: dict, ctx: dict) -> list[dict]:
-    """Zero or more (item × player) rows for one feed entry — one per resolved skill player."""
+def _article_row(entry, feed: dict, ctx: dict) -> dict | None:
+    """One raw-article row for a feed entry (team-tagged); None if it has no url/title."""
     url = (entry.get("link") or "").strip()
-    headline = _clean(entry.get("title") or "")
-    if not url or not headline:
-        return []
-    summary = _clean(entry.get("summary") or entry.get("description") or "", _SUMMARY_LIMIT)
-    published = _entry_published(entry)
-    rows = []
-    for hit in resolve_players(f"{headline}. {summary}", index):
-        item_id = hashlib.sha1(f"{url}|{hit['sleeper_player_id']}".encode()).hexdigest()[:16]
-        rows.append({
-            "item_id": item_id,
-            "sleeper_player_id": hit["sleeper_player_id"],
-            "player_name": hit["player_name"],
-            "source": feed["key"],
-            "source_type": feed["source_type"],
-            "headline": headline,
-            "summary": summary,
-            "url": url,
-            "published_at": published,
-            "collected_at": ctx["collected_at"],
-            "season": ctx["season"],
-            "week": ctx["week"],
-            "match_confidence": hit["match_confidence"],
-            "match_method": hit["match_method"],
-        })
-    return rows
+    title = _clean(entry.get("title") or "")
+    if not url or not title:
+        return None
+    return {
+        "article_id": hashlib.sha1(url.encode()).hexdigest()[:16],
+        "team": feed["team"],
+        "source_type": feed["source_type"],
+        "title": title,
+        "content": _entry_content(entry),
+        "url": url,
+        "published_at": _entry_published(entry),
+        "collected_at": ctx["collected_at"],
+        "season": ctx["season"],
+        "week": ctx["week"],
+    }
 
 
 def _nfl_state() -> tuple[int, int]:
@@ -252,63 +290,51 @@ def _nfl_state() -> tuple[int, int]:
 
 # --- The run ---
 
-def snapshot(*, dry_run: bool = False) -> None:
-    """Fetch every feed, resolve players, and (unless dry_run) persist incrementally per feed.
+def snapshot(*, team_filter: str | None = None) -> None:
+    """Fetch every team's feeds, persist raw articles incrementally per feed (idempotent).
 
-    Per-feed isolation: a dead / blocked feed is logged and skipped — it never aborts the run.
-    Incremental write: each feed's new rows are persisted right after it's processed, so a later
-    feed's failure can't discard feeds already collected. The data_layer writer dedups by item_id,
-    so cross-feed reprints of the same article collapse and a re-run adds nothing.
+    Per-feed isolation: a dead / blocked feed is logged and skipped — never aborts the run. Each
+    feed's articles are persisted right after fetch (a later failure can't discard earlier feeds);
+    the data_layer writer dedups by article_id, so re-polls add nothing. Reports per-team volume
+    (feeds ok / articles / kchars) — the thinness-tripwire input (Stage C) — and flags teams that
+    fell below the 2-of-3 resilience floor.
     """
-    index = build_index()
     season, week = _nfl_state()
-    ctx = {
-        "collected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "season": season,
-        "week": week,
-    }
-    mode = "resolve-test (dry-run, no write)" if dry_run else "snapshot"
-    print(f"News {mode} {ctx['collected_at']} (season={season}, week={week}) — "
-          f"{len(_FEEDS)} feed(s); index = {sum(len(v) for v in index.values())} active skill players")
+    ctx = {"collected_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+           "season": season, "week": week}
+    feeds = [f for f in _TEAM_FEEDS if team_filter in (None, f["team"])]
+    teams = sorted({f["team"] for f in feeds})
+    print(f"News team-collection {ctx['collected_at']} (season={season}, week={week}) — "
+          f"{len(feeds)} feeds across {len(teams)} team(s)")
 
-    total_entries, failed = 0, 0
-    collected: list[dict] = []
-    for feed in _FEEDS:
+    stat = {t: {"ok": 0, "articles": 0, "chars": 0} for t in teams}
+    for feed in feeds:
+        t = feed["team"]
+        net = feed["source_type"].split("_")[-1]       # official / sbn / fansided
         try:
             parsed = _get_feed(feed["url"])
-        except Exception as exc:                       # noqa: BLE001 — isolate any feed failure
-            failed += 1
-            print(f"  [{feed['key']:<9}] FAILED: {type(exc).__name__}: {exc} — skipped")
+        except Exception as exc:                        # noqa: BLE001 — isolate any feed failure
+            print(f"  [{t:<3} {net:<8}] FAILED: {type(exc).__name__} — {feed['url']}")
             continue
-        feed_rows = []
-        for entry in parsed.entries:
-            feed_rows.extend(_entry_rows(entry, feed, index, ctx))
-        total_entries += len(parsed.entries)
-        collected.extend(feed_rows)
-        n_items = len({r["url"] for r in feed_rows})
-        print(f"  [{feed['key']:<9}] {len(parsed.entries):>3} entries → {n_items:>3} "
-              f"player-relevant items, {len(feed_rows):>3} rows")
-        if not dry_run and feed_rows:
-            data_layer.write_player_news(pl.DataFrame(feed_rows, schema_overrides=_SCHEMA))
-        time.sleep(0.3)                                # be polite between feeds
+        rows = [r for r in (_article_row(e, feed, ctx) for e in parsed.entries) if r]
+        stat[t]["ok"] += 1
+        stat[t]["articles"] += len(rows)
+        stat[t]["chars"] += sum(len(r["content"]) for r in rows)
+        if rows:
+            data_layer.write_team_news_raw(pl.DataFrame(rows, schema_overrides=_SCHEMA))
+        time.sleep(0.2)                                 # be polite between feeds
 
-    ok = len(_FEEDS) - failed
-    total_items = len({r["url"] for r in collected})   # union — an article in 2 feeds counts once
-    print(f"  {ok}/{len(_FEEDS)} feeds ok; {total_entries} entries → {total_items} items, "
-          f"{len(collected)} (item×player) rows"
-          + ("" if dry_run else " persisted (new-only, idempotent)"))
-    if dry_run:
-        _report_resolution(collected)
-
-
-def _report_resolution(rows: list[dict]) -> None:
-    """Dry-run QA: confidence breakdown + the full resolved (player ⟵ headline) list to eyeball."""
-    from collections import Counter
-    conf = Counter(r["match_confidence"] for r in rows)
-    print("  match_confidence: " + (", ".join(f"{k}={v}" for k, v in conf.items()) or "none"))
-    print("  resolved matches (eyeball for false positives):")
-    for r in sorted(rows, key=lambda r: (r["source"], r["player_name"])):
-        print(f"    [{r['source']:<9}] {r['player_name']:<22} ⟵ {r['headline'][:70]}")
+    below = [t for t in teams if stat[t]["ok"] < 2]
+    tot_ok = sum(stat[t]["ok"] for t in teams)
+    tot_art = sum(stat[t]["articles"] for t in teams)
+    for t in teams:
+        s = stat[t]
+        print(f"  {t:<4} {s['ok']}/3 feeds  {s['articles']:>4} articles  {s['chars'] // 1000:>4} kchars")
+    store = data_layer.read_team_news_raw().height if data_layer.team_news_raw_exists() else 0
+    print(f"  {tot_ok}/{len(feeds)} feeds ok; {len(teams)} teams; {tot_art} articles this run; "
+          f"store now {store} rows")
+    if below:
+        print(f"  ⚠ BELOW RESILIENCE FLOOR (<2/3 feeds): {', '.join(below)}")
 
 
 def check() -> bool:
@@ -341,20 +367,21 @@ def check() -> bool:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Player-news RSS collector (§2 aggregation half).")
+    parser = argparse.ArgumentParser(description="Team-news RSS collector (§2 pipeline Stage A).")
     parser.add_argument("command", nargs="?", default="snapshot",
-                        choices=["snapshot", "feeds", "resolve-test", "check"])
+                        choices=["snapshot", "feeds", "check"])
+    parser.add_argument("--team", default=None, help="limit snapshot to one team abbr (e.g. KC)")
     args = parser.parse_args()
 
     if args.command == "feeds":
-        for f in _FEEDS:
-            print(f"  {f['key']:<9} [{f['source_type']}]  {f['url']}")
-    elif args.command == "resolve-test":
-        snapshot(dry_run=True)
+        for abbr, off, sbn, fan in _TEAM_SITES:
+            print(f"  {abbr:<4} official=www.{off}/rss/news  sbn=www.{sbn}/rss/index.xml  "
+                  f"fansided={fan}/feed/")
+        print(f"  {len(_TEAM_FEEDS)} feeds across {len(_TEAM_SITES)} teams")
     elif args.command == "check":
         sys.exit(0 if check() else 1)
     else:
-        snapshot()
+        snapshot(team_filter=args.team)
 
 
 if __name__ == "__main__":
