@@ -6,14 +6,13 @@ Seven cleanup items surfaced by the 2026-07-10 backend audit. Each is a standalo
 blocks the frontend work. Ordered by the audit's own severity framing (structural → scaling →
 spec-completeness → hygiene). Check them off as they land.
 
-> **Progress (2026-07-10 session):** ✅ **#1 (package structure), #5 (config.example),
-> #6 (requirements), #7 (bracket figure) are DONE.** #2 (scaling) is a **no-op by design**
-> (documented migration trigger — do not hand-optimize the parquet writers). ✅ **#4 (§2 preseason
-> anchor) is DONE** — the audit's "blocked on data" verdict was **wrong**: the ADP source
-> (`nflreadpy.load_ff_rankings`) was in a library we already depend on the whole time. #3
-> (§1 quality axis) remains **deferred** — but its scope is now smaller than the audit assumed:
-> `nflreadpy.load_ff_opportunity` already ships the empirical expected-points model, so #3 is a
-> consume-and-re-score transform, not a fit-your-own-weights build. Investigation notes are inline below.
+> **Progress (2026-07-10):** ✅ **ALL seven items resolved.** #1 (package structure), #5
+> (config.example), #6 (requirements), #7 (bracket figure) DONE; #2 (scaling) a **no-op by design**
+> (documented migration trigger). ✅ **#4 (§2 preseason anchor) DONE** — the "blocked on data" verdict
+> was wrong (ADP was in `nflreadpy.load_ff_rankings` all along). ✅ **#3 (§1 quality axis) DONE** —
+> rebuilt on `nflreadpy.load_ff_opportunity`'s empirical expected-points model (consume-and-re-score,
+> as re-scoped), gated; the optional core-engine upgrade was tested and rejected by the answer key
+> (kept the validated positional-mean prior). Per-item as-built below.
 
 ---
 
@@ -48,21 +47,26 @@ spec-completeness → hygiene). Check them off as they land.
 
 ## Spec completeness (vs. DECISION_READS)
 
-- [ ] **§1 Quality axis is a TD-proxy, not the spec.** ⏸ **DEFERRED (re-scoped 2026-07-10, session 2).**
-  Still a net-new transform, but **smaller than first scoped** — we do **not** need to build a
-  per-chance-type PBP-tag store or fit our own multi-season weights. `nflreadpy.load_ff_opportunity`
-  (already a dependency; `player_id` = gsis_id, joins directly) ships ffverse's **empirical
-  expected-points model** already fit on historical PBP: `total_fantasy_points_exp` plus
-  scoring-agnostic component expectations (`rec_touchdown_exp`, `rec_yards_gained_exp`,
-  `receptions_exp`, `rush_yards_exp`, …) we re-derive under league scoring via the existing `_scoring`
-  engine, and `*_diff` (actual − expected) columns that are exactly the §1 point-correlation/luck
-  companion. So #3 becomes a **consume-and-re-score** transform (+ a quality backtest — `quality_rate`
-  isn't gated today), replacing the hand-rolled `quality_rate = xtd_g/opp_g` (nflfastR `td_prob`,
-  TD-centric) with the full multi-component EV read DECISION_READS §1 specifies. The per-play
-  `pbp_pass`/`pbp_rush` variants (yardline/down/air-yards + per-play `*_exp`) are there if we ever want
-  our own weights — but we don't. ("Routes run" is correctly deferred — the spec flags it as the hard one.)
-  *Where:* [application/data/transforms/compute_player_signal.py](application/data/transforms/compute_player_signal.py);
-  source `nflreadpy.load_ff_opportunity` (fetch alongside [nfl_stats.py](application/data/fetchers/nfl_stats.py)).
+- [x] **§1 Quality axis is a TD-proxy, not the spec.** ✅ **DONE (2026-07-10, session 3).** `quality_rate`
+  is no longer the TD-only `xtd_g/opp_g` proxy — it is now **expected fantasy points per opportunity**,
+  from `nflreadpy.load_ff_opportunity`'s empirical component-expectation model (fit by ffverse on
+  historical PBP), re-scored under the league's settings via new `_scoring.expected_points_expr` — the
+  full multi-component EV read §1 specifies. Shipped consume-and-re-score, as re-scoped: `nfl_stats`
+  gains the `*_exp` components (gsis-keyed, retiring `xtd`; `redzone_touches` kept as companion), the
+  transform derives `exp_pts` at the consumption layer, `point_correlation` now correlates weekly
+  actual vs expected full points, and a new `luck` residual (recent − expected ppg) is carried.
+  `expected_points_expr` reproduces ffverse's `total_fantasy_points_exp` under PPR to ±0.02, and even
+  scores first-down leagues (the component exists). **Gated** (backtest_player_signal.py, exit 0): a
+  new third verdict — `quality_rate` (exp_ppo) forecasts rest-of-season realized efficiency at MAE
+  0.311 vs 0.506 for recent-realized (decisively better). **Bonus finding:** the optional core-engine
+  upgrade (shrink the spike forecast toward exp_ppo instead of the positional mean) was implemented and
+  **rejected by the answer key** — it lost at every SHRINK_K (points-forecasting is regression toward
+  the *population*; exp_ppo is too correlated with realized ppo to pull that way), so the core keeps its
+  validated positional-mean prior. ("Routes run" is still correctly deferred — the hard one.)
+  *Where:* [compute_player_signal.py](application/data/transforms/compute_player_signal.py),
+  [_scoring.py](application/data/transforms/_scoring.py) (`expected_points_expr`),
+  [nfl_stats.py](application/data/fetchers/nfl_stats.py) (`_load_ff_opportunity`),
+  [backtest_player_signal.py](application/data/transforms/backtest_player_signal.py) (quality verdict).
 
 - [x] **§2 bull/bear has no preseason anchor.** ✅ **DONE (2026-07-10, session 2).** The "blocked on
   data" verdict was wrong — the ADP source was in `nflreadpy` (already a dependency) all along.

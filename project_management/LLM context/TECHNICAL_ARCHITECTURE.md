@@ -206,7 +206,7 @@ fantasy-ai/
                 └── 2025/
                     └── remainders_2025_w{week}.parquet      # unresolved players; empty = clean join
     │       └── nflreadpy/
-    │           ├── nfl_stats_2025.parquet  # 18,539 rows × 123 cols, weeks 1-18 (+xtd, redzone_touches — PBP quality signal, Phase 1 refinement). 2020–2024 also backfilled (realized-points source for the §2 ADP curve)
+    │           ├── nfl_stats_2025.parquet  # per player-week, weeks 1-18. Carries the ff_opportunity `*_exp` expected-points components (the §1 Quality basis, re-scored at the consumption layer) + redzone_touches (PBP companion). `xtd` (the old TD-proxy) retired. 2020–2024 also backfilled (realized-points source for the §2 ADP curve)
     │           └── adp_preseason.parquet   # historical preseason ADP (FantasyPros via load_ff_rankings): one tall file, season a column; per (season, player) ecr/best/worst/sd + pos_ecr_rank, latest full-board pre-kickoff redraft-overall snapshot/season, id-bridged fantasypros_id→sleeper. The §2 preseason-anchor source (fetchers/adp.py)
             └── sleeper/
                 └── 2025/
@@ -219,7 +219,7 @@ fantasy-ai/
     ├── shared/                     # league detection, config loaders
     ├── transforms/ # one Python script per join/transform
         ├── _analytics.py              # shared pure helpers (round1, mean, median, quantile, stdev, skewness, pearson, spectrum_positions, expand_slots/optimal_lineup — the slot-aware greedy lineup engine; position_pools — swap/replacement pools from lineup_slots, shared by VOR + leakage for superflex/any-shape generalization)
-        ├── _scoring.py                # scoring dispatcher + custom-scoring recompute engine — scoring_profile (ppr/half/std/custom); standard selects canned columns, custom recomputes via recompute_custom_points(scoring, side) as a delta on the std canned baseline (built; supports PPR variants / non-std TD-yardage / TE-premium reception bonuses; raises on first-down/threshold bonuses)
+        ├── _scoring.py                # scoring dispatcher + custom-scoring recompute engine — scoring_profile (ppr/half/std/custom); standard selects canned columns, custom recomputes via recompute_custom_points(scoring, side) as a delta on the std canned baseline (built; supports PPR variants / non-std TD-yardage / TE-premium reception bonuses; raises on first-down/threshold bonuses). Also **expected_points_expr(scoring)** — the §1 Quality engine: a from-scratch weighted sum of the ff_opportunity `*_exp` component expectations under league scoring (exact — every component exposed; reproduces ffverse's total under PPR to ±0.02; scores first-down leagues too)
         ├── _manager.py                # §7 shared pure helpers (no I/O, no polars) — comparability: classify_league (reuses _scoring.scoring_profile), is_comparable (scoring/size/QB-structure/format), select_comparables (≤5, prior-season biased); attribution: manager_in_transaction, manager_moves; feature math: manager_features (FAAB/waiver/trade/churn/positional-lean + signal-depth, null when undefined). Shared by the sleeper.py fetch mode + the transform + the backtest (one source of truth)
         ├── join_nfl_sleeper_weekly.py # ✅ built
         ├── audit_join.py              # ✅ built — resolves unknown-position remainders
@@ -306,7 +306,7 @@ now. Everything in **parquet** goes through data_layer.
 |---|---|---|
 - external
 | Sleeper | cache/ + snapshots/ | Matchup/roster/transaction state **and weekly projections** (the forward prior — `source="sleeper"` in the shared `projections` entity, from the `api.sleeper.com` stats host) to snapshots/; player registry to cache/ (current state only, refreshed ≤ once/day) |
-| nflreadpy | snapshots/ only | Weekly player stats - trend visualization requires history. Also the **preseason ADP** source (`load_ff_rankings` → `adp_preseason` entity, historical FantasyPros consensus ranks) feeding the §2 ROS anchor, and the realized-points basis for its curve (`load_player_stats`, 2020–2024 backfilled) |
+| nflreadpy | snapshots/ only | Weekly player stats - trend visualization requires history. Also: the **§1 Quality basis** (`load_ff_opportunity` → the `*_exp` expected-points components joined onto nfl_stats); the **preseason ADP** source (`load_ff_rankings` → `adp_preseason` entity) feeding the §2 ROS anchor; and the realized-points basis for its curve (`load_player_stats`, 2020–2024 backfilled) |
 | LeagueLogs | snapshots/ only | Daily market-value snapshot of all profiles (redraft + dynasty). API serves only "now" (no history endpoint), so the value time-series exists only if we snapshot it. Keyed on sleeperPlayerId. |
 | Odds API | cache/ only | Current week lines only needed for v1 |
 | FantasyPros | snapshots/ (`projections` entity) | Weekly projected points (PPR/half/std). Routes through the shared **multi-source `projections` entity** (`source="fantasypros"`), snapshotted like Sleeper — **supersedes the earlier "cache/ only" note.** Added in-season; key in config. |
@@ -316,7 +316,7 @@ now. Everything in **parquet** goes through data_layer.
 | derive_lineup_slots transform | snapshots/sleeper/{season}/ | lineup_slots_{season}.parquet — starting skill-slot requirements (slot, count, eligible) derived from the league's raw roster_positions; declares the QB/RB/WR/TE + FLEX config so the front-end "perfect lineup" / efficiency calc is exact, not inferred |
 | compute_team_form transform | snapshots/derived/ | team_form_{season}.parquet — **tall, grain (as_of_week, roster_id)** (Season-replay): per as-of week N=1..maxweek, one row per roster_id with the EWMA scoring slope, direction, recent record, league-relative spectrum pos, per-week series — all recomputed on weeks ≤ N. Pre-computed so the front-end seam just reads it (no JS trajectory math) |
 | compute_team_leakage transform | snapshots/derived/ | team_leakage_{season}.parquet — **tall, grain (as_of_week, roster_id)**: per as-of week N, lineup efficiency %, season points-left, coachable/variance split, named fixes, per-week leak, spectrum pos — cumulative ledger over weeks ≤ N. Roster-as-of-N: a player's "current team" resolves to his latest week ≤ N. Feeds both the Team Overview leakage lens and the League drawer's efficiency read |
-| compute_player_signal transform | snapshots/derived/ | player_signal_{season}.parquet — **tall, grain (as_of_week, roster_id, player)**: per as-of week N, one row per rostered skill player with the spike signal-quality read (Phase 1), recomputed on weeks ≤ N (roster-as-of-N applies). Decomposes recent production into sticky opportunity (opp_g, EWMA-windowed via injected half-life — ships cumulative, backtest-tuned) vs fragile efficiency (ppo, shrunk toward the league positional mean); headline regression_risk + a sample-gated read (too_early/spike/mixed/sticky), td_share as evidence, per-week series. The first decision-critique engine slice; not a forward projection. **Phase 1 refinement (2026-07-08):** four added fields close the DECISION_READS.md §1 gap — quality_rate (xtd_g/opp_g, the Quality axis from PBP td_prob), direction/reliability (Trust axis, from the player's own opportunity series), security (Trust's context flag, from Sleeper injury/depth-chart data), point_correlation (pearson(xtd, td_pts)). Kept separate from the validated core read, not fused in |
+| compute_player_signal transform | snapshots/derived/ | player_signal_{season}.parquet — **tall, grain (as_of_week, roster_id, player)**: per as-of week N, one row per rostered skill player with the spike signal-quality read (Phase 1), recomputed on weeks ≤ N (roster-as-of-N applies). Decomposes recent production into sticky opportunity (opp_g, EWMA-windowed via injected half-life — ships cumulative, backtest-tuned) vs fragile efficiency (ppo, shrunk toward the league positional mean); headline regression_risk + a sample-gated read (too_early/spike/mixed/sticky), td_share as evidence, per-week series. The first decision-critique engine slice; not a forward projection. **Phase 1 refinement + §1 Quality axis (710 #3, 2026-07-10):** added fields close the DECISION_READS.md §1 gap, kept separate from the validated core read (not fused) — **quality_rate = expected fantasy points per opportunity** (`exp_pts_g/opp_g`) from ffverse's ff_opportunity component model re-scored under league settings (`_scoring.expected_points_expr`), the full multi-component EV read §1 specifies (was the TD-only `xtd` proxy); **point_correlation** = pearson(weekly actual, weekly expected full points); **luck** = recent − expected ppg (over/under-performance residual); plus direction/reliability (Trust axis) + security (Sleeper injury/depth-chart). The core forecast (regression_risk) still shrinks efficiency toward the positional mean — the exp_ppo shrink target was tested and rejected by the answer key (see backtest) |
 | compute_projection_consensus transform | snapshots/derived/ | projection_consensus_{season}.parquet — **per (season, week, player)** over the whole skill pool. **NOT tall over as_of_week** (unlike the three above): a projection for week W is a fixed forward statement whose band uses only weeks < W, so it's keyed on `week` like the projections entity it reads — read via `read_projection_consensus(season, week=None)`. Borrowed consensus center (median `proj_pts_ppr` across sources) + a p25/p50/p75 spread band — **all three §3 components**: center (borrowed), **width** = the player's residual std (actual − proj) shrunk toward a full-pool positional prior (`SHRINK_K`), and **archetype skew** = a Cornish-Fisher quantile shift `SKEW_GAIN·(g/6)·(BAND_Z²−1)` on p25/p75 from the player's residual *skewness* `g` shrunk to a positional prior (`SKEW_SHRINK_K`); p50 stays the borrowed center, floored at 0. **Skew driver resolved by the answer key, not §3's literal wording:** the projection's TD-dependence archetype does *not* track residual skew (measured 2026-07-09); the player's own residual 3rd moment does — the exact parallel to the width's 2nd moment. Because `BAND_Z<1`, a right-skewed residual shifts both breakpoints *down* (the borrowed center sits above the realized median), giving a slightly longer *lower* gap — reversing §3's right-skew illustration (pre-data intuition about raw scores). `disagreement_ppr` (cross-source std) is null under a single source. The Phase-2 forward prior / law-2 confidence band (DECISION_READS §3), calibration-gated by backtest_projection_consensus.py — **per-tail** (25–75 coverage ~0.50 AND below-p25/above-p75 ~0.25 each); `BAND_Z × SKEW_GAIN` swept jointly → (0.55, 1.5) on the 2025 answer key. **Coverage nuance:** a null `proj_pts_ppr` (Sleeper doesn't project a player who's OUT/inactive — components are null too) means no band and no residual for that player-week, by design — so the pool is projected-and-playing players, not every roster spot. Consumed by Production VOR (below) and later ROS reads; the front end reads the current week's slice and filters to rostered players |
 | compute_true_rank transform | snapshots/derived/ | true_rank_{season}.parquet — **tall, grain (as_of_week, roster_id)**: per as-of week N, one row per team with the DECISION_READS §5 (first half) True Rank read. **roster_strength** = the sum of each team's **optimal-lineup** ros_value — fill the declared starting slots (QB/RB/WR/TE + FLEX) from the roster by ros_value, most-constrained slot first, sum the optimal starters. **Record-independent** (reads no wins/standings): it measures how good the roster *is*. **No new engine** — it re-aggregates `production_vor` over the lineup rules (`read_production_vor(season, as_of_week="all")`), reusing the shared `_analytics.expand_slots`/`optimal_lineup` (the slot-aware greedy lifted out of compute_team_leakage). Also carries **bench_value** (rostered ros_value not in the optimal lineup — a §6 depth/trade-capital hint, evidence not folded into the rank), a within-cohort dense **rank** (1 = strongest), and a league-relative 0–1 **spectrum_pos**. Roster-as-of-N is inherited free from the VOR slice (already resolved there). **Slot-aware, not a roster-sum:** a roster hoarding two elite QBs ranks by its one *startable* QB (the 2nd rides the bench), so True Rank rewards a balanced startable lineup over capped-position hoarding. Calibration-gated by backtest_true_rank.py (projected strength tracks the actual ROS ceiling — management-independent optimal lineup on realized points — at Pearson 0.802 / Spearman 0.842, freeze wk4, n=10 teams; exit 0). The **integration precursor** the Phase-4 bracket-math Monte Carlo (§5 full) sits on; **value, not WAR** — roster_strength is in ROS-projected-points units, the rank is ordinal roster quality, no wins conversion here |
 | compute_positional_depth transform | snapshots/derived/ | positional_depth_{season}.parquet — **tall, grain (as_of_week, roster_id, position)** (position = **fine** QB/RB/WR/TE, not VOR's QB/FLEX pool): per as-of week N, one row per team per position with the DECISION_READS §6 read. **No new engine** — it re-slices `production_vor` (`read_production_vor(season, as_of_week="all")`) per position, **net of the position's dedicated starting requirement**. `starter_need` from `lineup_slots` (`_starter_needs`: QB1/RB2/WR2/TE1; the shared FLEX×2 is *excluded*, so flex-worthy depth surfaces as **surplus** — which is what makes it trade capital). Fields: **starter_value** (top-`starter_need` ros_value), **surplus_value** + **surplus_startable** (beyond-need players clearing the waiver line, vor>0 = real depth), **marginal_vor** (the last dedicated starter's VOR — the **gap indicator**, ≤0 = starting replacement level; null when the roster can't fill the slots), **spectrum_pos** (league-relative 0–1 of starter_value **within that position's cohort** — the spec's "vs league" benchmark), and an **advisory** `shape` ∈ {surplus, adequate, gap} off marginal_vor + spectrum_pos (evidence-first: numbers lead, the manager adjudicates — per the advisory-framing principle). **One row per (team, position) even at zero roster count**, so a body-count gap isn't invisible in a rostered-only frame. Roster-as-of-N inherited from the VOR slice. The re-slice is **lossless** (per-position rostered_value sums to the team's total VOR ros_value). Calibration-gated by backtest_positional_depth.py (per position, projected starter_value tracks the actual ROS ceiling — top-need by realized points — mean corr 0.861 across QB/RB/WR/TE, freeze wk4 n=10/pos; exit 0). Decision homes: trade shape + waiver/FAAB. Closes the Phase-3 read set |
@@ -398,7 +398,7 @@ Current fetcher state:
 - `odds.py` - does not exist
 - `fantasypros.py` - does not exist (Phase 2 next source; writes the same `projections` entity, `source="fantasypros"`, in-season)
 - `weather.py` - does not exist
-- `nfl_stats.py` - backfill + refresh modes, polars, player ID map
+- `nfl_stats.py` - backfill + refresh modes, polars, player ID map. Joins the ff_opportunity `*_exp` expected-points components (`_load_ff_opportunity`, the §1 Quality basis) + `redzone_touches` (`_load_redzone_touches`) onto each player-week; the old `xtd` td_prob proxy is retired
 - `adp.py` - built; **preseason ADP** (`backfill [season]`) — FantasyPros historical consensus ranks via `nflreadpy.load_ff_rankings('all')`, latest full-skill-board pre-kickoff redraft-overall snapshot/season, id-bridged `fantasypros_id`→sleeper (the `id` column; cbs/yahoo are all-null) → `adp_preseason` entity. The §2 ROS preseason-anchor source
 - `leaguelogs.py` - built; daily market-value snapshots (all profiles), scheduled by launchd at 4am ET
 
@@ -413,7 +413,7 @@ Snap count join path: load_snap_counts().pfr_player_id →
 load_ff_playerids().pfr_id → gsis_id
 Join coverage on nfl_sleeper_weekly_joined targets 100% of rostered skill-position players per week. The join is left-joined from Sleeper (authoritative), so players without nflreadpy stats that week (injured, inactive) appear with 0-stat rows rather than being dropped. The audit step resolves any remaining unknowns via the Sleeper player registry.
 
-**PBP quality signal (added 2026-07-08, Phase 1 refinement):** `nfl_stats.py._load_pbp_quality(year)` calls `nflreadpy.load_pbp(year)` (a new function on the same package — not a new dependency) and aggregates nflfastR's per-play `td_prob` (expected-TD probability given down/distance/yardline/score/time) into per-(gsis_id, week) `xtd` (sum of td_prob over the player's rush attempts, targets, and pass attempts) and `redzone_touches` (yardline_100 ≤ 20). PBP player-id columns (`rusher_player_id`/`receiver_player_id`/`passer_player_id`) are already gsis_id format, matching every other join in this fetcher — no new id mapping needed. Filtered to `season_type == "REG"` (playoffs excluded), consistent with `_load_player_stats`. This is the Quality axis (DECISION_READS.md §1) feeding `compute_player_signal.py`'s `quality_rate`.
+**§1 Quality axis — expected-points components (710 #3, 2026-07-10; supersedes the 2026-07-08 PBP td_prob proxy):** `nfl_stats.py._load_ff_opportunity(year)` calls `nflreadpy.load_ff_opportunity(year, stat_type="weekly")` (ffverse's expected-points model, same package) and joins its per-(gsis_id, week) `*_exp` component expectations (`receptions_exp`, `rec/rush/pass yards/TD/2pt/first-down _exp`, `pass_interception_exp`) onto nfl_stats — gsis-keyed like every other source (non-null ids, REG weeks ≤ 18, 1 row/gsis×week after filtering the null-id rows). The read re-scores these under the league's settings at the **consumption layer** (`_scoring.expected_points_expr` in `compute_player_signal`), so the fetcher stores raw scoring-agnostic components. This retired the old hand-rolled `xtd = Σ td_prob` TD-proxy; `_load_redzone_touches(year)` still derives `redzone_touches` (yardline_100 ≤ 20) from `load_pbp` as the legible companion. The empirical Quality axis (DECISION_READS.md §1): expected value per chance, not just TD probability.
 
 ## sleeper.py Notes
 
@@ -514,35 +514,39 @@ via data_layer.py, performs a single join, and writes via data_layer.py.
   `_weighted_rates(weeks, half_life)` (EWMA window), so the windowing choice is a single
   injected parameter and the backtest validates the exact shipped path.
 
-  **Phase 1 refinement (2026-07-08):** closes the DECISION_READS.md §1 delta between the
-  shipped engine and the full Opportunity spec — four fields added, kept separate from
-  the validated core read ("don't collapse the axes"). `quality_rate` (`xtd_g/opp_g`,
-  the Quality axis — expected TDs per touch, independent of Volume) is computed inside
-  `_player_signal` from the new `xtd` PBP aggregation (see nflreadpy Notes), so the
-  backtest exercises it too. `direction`/`reliability` (the Trust axis) and
-  `point_correlation` are computed in `_compute_as_of` from the raw per-week series —
-  `direction` mirrors `compute_team_form.py`'s weighted-least-squares-slope +
-  `DIRECTION_BAND` pattern (own constant `DIRECTION_HALF_LIFE_WK`, independent of
-  `OPP_HALF_LIFE_WK`); `reliability` is `1/(1+cv)` on the weekly opportunity series;
-  `point_correlation` is `pearson(xtd, td_pts)` (new shared helper in `_analytics.py`),
-  read against `quality_rate` per the spec (low correlation + high quality = unlucky;
-  low + low = correctly cheap). `security` is a categorical context flag (not a
-  numeric trend) from a new `_security_map()` built once per `compute(season)` call
-  from `data_layer.read_sleeper_players()` — "now" data, so it's constant across every
-  as_of_week slice for a given player. None of this touches `expected_ppg`/
-  `regression_risk` — the 2025 backtest gate is unchanged (PASS/PASS, 13.2% MAE cut).
+  **§1 Quality axis (710 #3, 2026-07-10; refines the 2026-07-08 slice):** the §1 fields, kept
+  separate from the validated core read ("don't collapse the axes"). **`quality_rate` is now
+  expected fantasy points per opportunity** (`exp_pts_g/opp_g`) — `compute()` derives `exp_pts`
+  once at the consumption layer via `_scoring.expected_points_expr(scoring)` over the joined
+  ff_opportunity `*_exp` components, and the weekly series carries `exp_pts` alongside actual pts
+  (replacing the old TD-only `xtd`), so `_weighted_rates` yields `exp_pts_g` and the backtest
+  exercises the exact path. `point_correlation` is now `pearson(weekly actual, weekly expected
+  full points)` — do the valuable chances convert? — and a new **`luck`** = recent − expected ppg
+  (over/under-performance residual). `direction`/`reliability` (Trust axis, from the raw per-week
+  series) and `security` (Sleeper injury/depth-chart "now" flag) are unchanged. **The core forecast
+  (`expected_ppg`/`regression_risk`) still shrinks efficiency toward the positional mean** — the
+  710 #3 upgrade to shrink toward the model-expected efficiency (`exp_ppo`) was implemented and
+  **rejected by the answer key** (lost to the positional mean at every `SHRINK_K`; points-forecasting
+  is regression toward the *population*, and `exp_ppo` on the same recent weeks is too correlated
+  with realized `ppo` to pull that way). So the 2025 core gate is unchanged (13.2% MAE cut); the
+  model serves the Quality axis, not the forecast.
 
 - `backtest_player_signal.py` — **the validation gate Phase 1 must clear before any
   engine ships live.** Imports the *same* pure `_player_signal` the transform ships
   (no parallel re-derivation that could drift) and tests it against the full-2025
   answer key: input = a recent window (default wks 1–4), truth = rest-of-season
-  per-game PPR. Two verdicts — *predictive* (does the signal beat a naive
-  "recent-points-carry-forward" baseline on MAE/RMSE/corr?) and *decision-relevant*
+  per-game PPR. **Three verdicts** — *predictive* (does the signal beat a naive
+  "recent-points-carry-forward" baseline on MAE/RMSE/corr?), *decision-relevant*
   (among hot players, which the naive read can't tell apart, does the `spike` group
-  regress more than the `sticky` group?). Exits 0 only if both pass. Current 2025
-  result: signal cuts rest-of-season MAE ~13% at the W4 freeze (PASS at every freeze
-  W3–W8); hot `spike` group regressed ~3.9 pts/g while `sticky` held flat. This
-  backtest-against-the-answer-key pattern is the template for every future engine slice.
+  regress more than the `sticky` group?), and **§1 Quality axis (710 #3)** (does
+  `quality_rate` = `exp_ppo` forecast a player's rest-of-season realized efficiency
+  pts/opp better than his recent realized `ppo`?). Exits 0 only if all pass. Current 2025
+  result: signal cuts rest-of-season MAE 13.2% at the W4 freeze; hot `spike` group
+  regressed ~3.7 pts/g while `sticky` held flat; quality_rate forecasts ROS efficiency at
+  MAE 0.311 vs 0.506 recent-realized (decisively better). This backtest-against-the-answer-key
+  pattern is the template for every engine slice — it's also what **rejected the 710 #3
+  core-prior upgrade** (shrink toward `exp_ppo`): it lost to the positional mean at every
+  `SHRINK_K`, so the core forecast kept its validated prior.
   **`--sweep`** tunes the opportunity EWMA half-life against the answer key at any freeze
   (and `--opp-half-life` overrides the verdict run); the 2025 sweep across W4/W6/W8 chose
   **cumulative** (short half-lives hurt rest-of-season MAE — opportunity is sticky enough
