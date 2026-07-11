@@ -1,6 +1,6 @@
 # READ BUILD ORDER
 
-**Last reviewed:** 2026-07-10
+**Last reviewed:** 2026-07-11
 **Companion to:** `PRODUCT_ROADMAP.md` (the *why* — phases, four design laws, scope filter) and the
 **Decision Reads spec** (`DECISION_READS.md` — the *what*, full definition of each read).
 This doc is now the ***state of build*** — what's Built (Backend / Frontend) and what's
@@ -74,7 +74,7 @@ with a paired `backtest_*.py` / `check_*.py`. **No UI yet on any of these** — 
   gated by `check_manager_dossiers.py`).
 
 **Supporting substrate (built, underpins the reads):** `data_layer.py` (the single I/O seam); fetchers
-`nfl_stats.py` / `sleeper.py` / `leaguelogs.py`; joins `join_nfl_sleeper_weekly.py` + `audit_join.py`;
+`nfl_stats.py` / `sleeper.py` / `leaguelogs.py` / `news.py`; joins `join_nfl_sleeper_weekly.py` + `audit_join.py`;
 `derive_lineup_slots.py`; the `_scoring.py` dispatcher + custom-scoring recompute engine; shared pure
 helpers `_analytics.py` / `_manager.py`; the `league_settings` entity; the multi-source `projections`
 entity; the season-replay `as_of_week` tall dimension; and the `position_pools` / any-league
@@ -136,13 +136,33 @@ Each with the reason it isn't built. Ordered roughly by how soon it matters.
   UNBUILT; the shipped `quality_rate` is a TD-probability proxy. See `710_AUDIT.md` item 3.
 - **Fetchers** — `fantasypros.py` (the §3 2nd source, in-season), `odds.py` (Vegas game totals —
   optional environment add), `weather.py` — none built.
+- **Daily-collector reliability — shared resilience layer + off-laptop host** — UNBUILT (maintenance;
+  wanted *before* either banked series is leaned on). Two fetchers **bank a now-only, un-backfillable**
+  series — `leaguelogs.py` (market values → §4) and `news.py` (player news → §2) — so a missed run is
+  **permanent** (no historical endpoint). A leaguelogs audit (2026-05-31→07-10, 41 days) found only
+  **26/41 complete · 29/41 any-data (63% / 71%)**: ~8 days the laptop was off at the 04:00 fire (launchd
+  skips a powered-off run, no catch-up) + ~7 days a transient network error aborted the run
+  (`leaguelogs._get` is a bare `requests.get` with **no retry**; dynasty profiles, fetched last, drop
+  first). Three parts: **(1)** a single shared `fetchers/_http.py` (timeout / backoff / retry / throttle)
+  every fetcher calls — folds in `sleeper._get_json` + `news._get_feed` (both already retry), fixes
+  `leaguelogs._get`, + per-item isolation so one dead profile/feed can't abort a run (news has it,
+  leaguelogs doesn't); **(2)** a `check_*` coverage/health gate (gate style — span / coverage % /
+  missing / partial days, non-zero on a gap) that **certifies a series as an official source**;
+  **(3)** the **off-laptop host** — the ~8 powered-off days can't be fixed locally, so this merges with
+  the **Deployment** decision below (GitHub Actions is the lead: one scheduled workflow both collects
+  *and* publishes parquet to the static site). Interim: multi-fire the plists + install the
+  written-but-unloaded `com.fantasyai.news-snapshot` job. Promotes STATUS.md's leaguelogs follow-up +
+  `TECHNICAL_ARCHITECTURE.md`'s "resilience + host migration" note into one tracked, generalized item.
 - **Multi-user / multi-league plumbing** — UNBUILT. Storage keys, config, and front-end addressing are
   single-league / single-user (`{season}`-keyed paths, one `SLEEPER_LEAGUE_ID`, hardcoded
   `MY_USERNAME` / single-season parquet names in `db.js`). The *any-league engine* (scoring / roster /
   playoff config) is built; the *plumbing* to hold more than one league at once is not. Seams are
   documented in `TECHNICAL_ARCHITECTURE.md`.
 - **Deployment / hosting** — UNBUILT (static client-side today). Going server-side is expected, not
-  hypothetical; the `queries.js` seam is the swap point.
+  hypothetical; the `queries.js` seam is the swap point. **It also subsumes the collectors' off-laptop
+  host:** a static deploy has no compute, so a scheduled runner (GitHub Actions the lead) both collects
+  the daily snapshots *and* publishes their parquet to the site — decide the two together (see
+  Daily-collector reliability above).
 
 ---
 
