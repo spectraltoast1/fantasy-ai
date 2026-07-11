@@ -528,6 +528,58 @@ def team_news_raw_exists() -> bool:
     return _team_news_raw_path().exists()
 
 
+# --- Team News Dossier (weekly per-team synthesis, §2 news pipeline Stage B) ---
+# Stage B distills team_news_raw (Stage A) into a compact, situation/security-focused
+# "news sheet" per team-week: a set of scope-tagged claims (player / position_group / unit),
+# each clustered across the 3 sources with a synthesized note + provenance. The scope tags are
+# what let Stage C slice a team sheet down to a single player by inheritance. Written by the AI
+# layer (application/ai/write_team_news_dossier.py) via Claude Haiku — NOT the raw articles;
+# the deterministic resolver (fetchers/news.py) attaches sleeper_player_id to player-scope claims.
+# Grain = one claim row per (season, week, team, claim); one growing file, tall over the team-weeks.
+# The writer is REPLACE-BY (season, week, team): re-running a team-week overwrites just its rows
+# (idempotent; a single-team verify run touches only that team), like manager_activity's
+# replace-by-owner_id. A team-week with no fantasy-relevant news gets one explicit is_empty row.
+
+
+def _team_news_dossier_path() -> Path:
+    return _SNAPSHOT_DIR / "news" / "team_news_dossier.parquet"
+
+
+def write_team_news_dossier(df: pl.DataFrame) -> None:
+    """Replace the (season, week, team) slices present in `df`, leaving other team-weeks intact.
+
+    `df` is the freshly-synthesized claim rows for one or more team-weeks. Every (season, week,
+    team) tuple appearing in `df` is dropped from the store first, then the new rows appended — so
+    a re-run of a team-week overwrites it (idempotent) and a single-team run replaces only that
+    team. Concat is diagonal so a later schema tweak doesn't break the append.
+    """
+    path = _team_news_dossier_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    keys = df.select("season", "week", "team").unique()
+    if path.exists():
+        existing = pl.read_parquet(path)
+        existing = existing.join(keys, on=["season", "week", "team"], how="anti")
+        df = pl.concat([existing, df], how="diagonal")
+    df.write_parquet(path)
+
+
+def read_team_news_dossier(team: str | None = None, season: int | None = None,
+                           week: int | None = None) -> pl.DataFrame:
+    """Read the synthesized team news-sheet claims, optionally filtered by team / season / week."""
+    df = pl.read_parquet(_team_news_dossier_path())
+    if team is not None:
+        df = df.filter(pl.col("team") == team)
+    if season is not None:
+        df = df.filter(pl.col("season") == season)
+    if week is not None:
+        df = df.filter(pl.col("week") == week)
+    return df
+
+
+def team_news_dossier_exists() -> bool:
+    return _team_news_dossier_path().exists()
+
+
 # --- Projections (multi-source: Sleeper now, FantasyPros in-season) ---
 # The borrowed forward prior every Phase-2 read rests on (Product Roadmap Phase 2).
 # Normalized, source-agnostic entity: one growing file per season, with `source` as a
