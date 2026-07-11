@@ -435,6 +435,53 @@ def write_leaguelogs_market_snapshot(df: pl.DataFrame, snapshot_date) -> None:
     df.write_parquet(path)
 
 
+# --- Player News (news collector, DECISION_READS.md §2 aggregation half) ---
+# The aggregation half of the §2 ROS AI-interpretation layer: a live, scheduled RSS
+# collector (fetchers/news.py) banks current NFL player news as a de-duplicated,
+# player-resolved, source-attributed time-series that the future on-demand AI synthesis
+# call reads. Live-acquired like manager_activity — the forward pipeline, NOT tied to the
+# frozen-2025 league; it resolves against whatever skill players are on an NFL roster now.
+# One growing file (like leaguelogs market_values). Grain: one row per (news item ×
+# resolved player) — a multi-player item is one row per player. Items are immutable once
+# collected, so the writer is APPEND-ONLY-OF-NEW (anti-join on item_id): re-polling a feed
+# (the same articles reappear every run) adds nothing, and a re-run is idempotent. Only the
+# compact item is stored (headline / summary / url + provenance), never the article body —
+# url + collected_at are the recall path (Wayback) and it sidesteps copyright/ToS on text.
+
+def _player_news_path() -> Path:
+    return _SNAPSHOT_DIR / "news" / "player_news.parquet"
+
+
+def write_player_news(df: pl.DataFrame) -> None:
+    """Append only the genuinely-new items to the growing history file (idempotent by item_id).
+
+    `df` is a batch of collected (item × player) rows. It is de-duplicated on `item_id`, then
+    any item_id already on disk is dropped, so re-polling a feed never duplicates — the file
+    grows only by new items. Existing history is never rewritten (news can't be re-fetched once
+    gone). Concat is diagonal so a later schema tweak doesn't break the append.
+    """
+    path = _player_news_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df = df.unique(subset="item_id", keep="first")
+    if path.exists():
+        existing = pl.read_parquet(path)
+        df = df.filter(~pl.col("item_id").is_in(existing["item_id"]))
+        df = pl.concat([existing, df], how="diagonal")
+    df.write_parquet(path)
+
+
+def read_player_news(season: int | None = None) -> pl.DataFrame:
+    """Read the collected player-news history, optionally filtered to one season."""
+    df = pl.read_parquet(_player_news_path())
+    if season is not None:
+        df = df.filter(pl.col("season") == season)
+    return df
+
+
+def player_news_exists() -> bool:
+    return _player_news_path().exists()
+
+
 # --- Projections (multi-source: Sleeper now, FantasyPros in-season) ---
 # The borrowed forward prior every Phase-2 read rests on (Product Roadmap Phase 2).
 # Normalized, source-agnostic entity: one growing file per season, with `source` as a

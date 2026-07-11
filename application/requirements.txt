@@ -2,10 +2,12 @@ anthropic==0.97.0
 appdirs==1.4.4
 certifi==2026.4.22
 charset-normalizer==3.4.7
+feedparser==6.0.12
 idna==3.13
 nflreadpy==0.1.5
 polars
 pyarrow==20.0.0
 requests==2.33.1
 schedule==1.2.2
+sgmllib3k==1.0.0
 urllib3==2.6.3
