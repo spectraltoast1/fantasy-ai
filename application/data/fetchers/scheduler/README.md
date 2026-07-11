@@ -4,6 +4,13 @@ Two version-controlled launchd jobs run the daily snapshot fetchers on the machi
 time (DST-aware). If the Mac is asleep at the scheduled time, the job runs at next wake. Each
 `.plist` here is the canonical copy; the live copy lives at `~/Library/LaunchAgents/<label>.plist`.
 
+> **Caveat — powered-off ≠ asleep (2026-07-11 audit).** "Runs at next wake" only covers *sleep*.
+> If the Mac is **powered off** across the scheduled time, launchd skips the run entirely (no
+> catch-up), and both APIs serve only "now" (no historical endpoint) — so that day is lost for good.
+> Over a 41-day leaguelogs window this cost ~8 days (coverage 63% complete / 71% any-data). An
+> off-laptop host is the real fix (see `READ_BUILD_ORDER.md` → *Daily-collector reliability*); the
+> interim mitigation is multiple fire times/day so the laptop only needs to be awake once.
+
 | Job | Label | Runs | Time (America/New_York) |
 |---|---|---|---|
 | Market values | `com.fantasyai.leaguelogs-snapshot` | `-m application.data.fetchers.leaguelogs snapshot` | 04:00 |

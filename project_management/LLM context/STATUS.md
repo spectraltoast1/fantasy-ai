@@ -15,7 +15,7 @@ copyright/ToS). **Live-acquired like `manager_activity`** — the FORWARD pipeli
 to the frozen-2025 league. Verified live: 5/5 national feeds, 151 entries → 48 items → 66 (item×player)
 rows, idempotent (66 after two runs), dead-feed isolation, synthetic resolver `check` PASS, zero
 false positives on eyeball. **Design record (sparred with the PM):** aggregation is separated from
-interpretation; the synthesis step — **next session** — is a single **lazy, cached, per-player** Claude
+interpretation; the synthesis step (now **on deck — deferred one slot** behind the daily-collector reliability build; see Current build target) is a single **lazy, cached, per-player** Claude
 call returning consolidated headlines **and** the ROS bull/bear blurb **and** confidence in one pass
 (the headlines are the receipts for the blurb — one pass = guaranteed consistent). Prior build: **710
 audit CLOSED (7/7)** — §1 Quality axis on the empirical expected-points model + §2 ROS preseason ADP
@@ -158,7 +158,7 @@ surfacing of the six §1–§6 reads + dossiers (unchanged by this build).
     - Phase 1 spike signal-quality engine — compute_player_signal.py → derived/player_signal_{season}.parquet (opportunity-vs-efficiency decomposition, regression_risk, sample-gated read); backtest_player_signal.py validates the shipped function against the full-2025 answer key (beats naive recent-points 13% on MAE; spike group regresses ~3.9 pts/g while sticky holds). First decision-critique slice; data + backtest only, no UI yet.
     - Phase 1 Players sub-view — sortable table surfacing the signal read per player (recent /g, directional verdict, volume rank, TD share); loadTeamPlayers(rosterId) seam reads player_signal.parquet (no JS math); direction-not-projection, question-framed (laws 2+4), sample-gated. The front end's first decision-coach surface.
     - Phase 1 per-panel readiness gate — readiness.jsx (assessReadiness + Gate): per-panel regime (structural/point-in-time/trend) → ready/building/tooEarly, with a "too early" fallback slot (accepts preseason content later) and an early-read note when building; wired into the Team tab (?weeksOverride=N for QA). Closes Phase 1.
-    - leaguelogs snapshot reliability — snapshot() rewritten to write incrementally (cumulative today's-rows persisted after each profile) so a mid-run API failure leaves a recoverable partial day instead of discarding the whole run; idempotent re-run replaces a partial day (dedup on snapshot_date). 2026-06-18 captured (5 profiles, 3,409 rows; history → 14 dates). Follow-up still open: retry/backoff + off-laptop host.
+    - leaguelogs snapshot reliability — snapshot() rewritten to write incrementally (cumulative today's-rows persisted after each profile) so a mid-run API failure leaves a recoverable partial day instead of discarding the whole run; idempotent re-run replaces a partial day (dedup on snapshot_date). 2026-06-18 captured (5 profiles, 3,409 rows; history → 14 dates). Follow-up still open: retry/backoff + off-laptop host. **(2026-07-11 audit: over the full 41-day series 05-31→07-10 coverage is 63% complete / 71% any-data — ~8 laptop-off + ~7 no-retry days, all permanent. This follow-up is now specced as the generalized "Daily-collector reliability" item in `READ_BUILD_ORDER.md`, covering both `leaguelogs.py` and `news.py` via one shared `fetchers/_http.py` + a `check_*` coverage gate + an off-laptop host merged with Deployment.)**
     - Season-replay backend (Session A; parts 1–3) — `as_of_week` first-class column on the three derived analytics; tall grain `(season, as_of_week, entity)` materialized N=1..maxweek (each transform loops, filtering input to `week ≤ N`). Roster-as-of-N correctness fix falls out of that filter (`arg_max(week)` → "latest week ≤ N"). Per-analytic windowing framework: injected EWMA half-life via shared `_weighted_rates`; `backtest_player_signal.py --sweep` tunes the opportunity half-life on the 2025 answer key → ships cumulative (tested, not guessed). `data_layer` reads take optional `as_of_week` (default latest); `queries.js` default-latest guard keeps the front end on week 4. **Front-end week selector is Session B.**
     - Season-replay front-end (Session B; part 4 — grouping COMPLETE) — global "As of" week dropdown in the App shell (`App.jsx`); one selection drives League + Team and persists across tabs. `queries.js` threads `asOfWeek` via `asOfSlice(table, n)` (pick the week-N slice of the tall derived parquets) + `weekCutoff(n)` (bound inline `season.parquet` reads to `week ≤ N`, including `SQL_CURRENT_TEAM`'s `arg_max(roster_id, week)` → front-end roster-as-of-N); `n == null` ⇒ latest, so defaults are unchanged. New `loadWeeks()` feeds the dropdown (weeks 1..latest, default = latest = current week; travels back only). Readiness gate now runs off the selected week (`weeksElapsed = asOfWeek`); the temporary `?weeksOverride` QA param is retired. Verified live across weeks 1–4 (cutoff reshuffles rankings; trend panels degrade to too-early; roster-as-of-N departed flags; no console errors).
     - Phase 1 refinement — Opportunity to spec (`quality_rate`, `direction`/`reliability`, `security`, `point_correlation`) — see "most recent build" above for the full breakdown. `nfl_stats.py` gains a PBP-derived quality signal (`xtd`/`redzone_touches`); `sleeper.py`'s `fetch_players()` carries injury/depth-chart fields through. 2025 backtest gate unchanged (PASS/PASS, 13.2% MAE cut).
@@ -193,10 +193,36 @@ surfacing of the six §1–§6 reads + dossiers (unchanged by this build).
 
 ## Current build target
 
-> **⭐ NEXT BUILD (chosen 2026-07-11 for the next session): §2 ROS Outcome Shape — the AI SYNTHESIS
+> **⭐ NEXT BUILD (chosen 2026-07-11 for the next session): Daily-collector reliability — the shared
+> resilience layer + coverage gate (Phase 4 maintenance; harden the banked series *before* it's leaned
+> on).** An audit of the LeagueLogs snapshot series (2026-05-31→07-10, 41 days) found it collecting at
+> only **63% complete / 71% any-data**: ~8 days the laptop was powered off at the 04:00 launchd fire
+> (skipped, no catch-up) + ~7 days a transient network error aborted the run (`leaguelogs._get` is a bare
+> `requests.get` with **no retry**; dynasty profiles, fetched last, drop first). The API serves only
+> "now" (no historical endpoint) → every missed day is **permanent**. Two fetchers now bank such an
+> un-backfillable series — `leaguelogs.py` (§4 market values) + `news.py` (§2 player news) — so this is
+> built **collector-agnostic**, not leaguelogs-only.
+>
+> **Build (portable / host-agnostic — nothing here is wasted by the later hosting call):** **(1)** one
+> shared **`fetchers/_http.py`** (timeout / backoff / retry / throttle) every fetcher calls — fold in
+> `sleeper._get_json` + `news._get_feed` (both already retry) and **fix `leaguelogs._get`**, + **per-item
+> isolation** so one dead profile/feed can't abort a run (news isolates feeds; leaguelogs doesn't isolate
+> profiles). **(2)** a **`check_*` coverage/health gate** (gate style — span / coverage % / missing /
+> partial days, non-zero on a gap) that **certifies a series as an official source**. **(3)** a
+> stale-or-partial-today **monitoring** warning. Full spec: `READ_BUILD_ORDER.md` → *Daily-collector
+> reliability*.
+>
+> **Deferred — decide WITH web hosting (not this build):** the **off-laptop host** that closes the ~8
+> powered-off days (retry alone can't) + where the canonical parquet lives. A static web deploy has no
+> compute, so a scheduled runner — **GitHub Actions the lead** — both collects *and* publishes the
+> parquet: the collector host is the same decision as Deployment. **Interim (cheap, now):** install the
+> written-but-unloaded `com.fantasyai.news-snapshot` plist + multi-fire both launchd jobs so the laptop
+> only needs to be awake once.
+>
+> **On deck (deferred one slot by the reliability build): §2 ROS Outcome Shape — the AI SYNTHESIS
 > call (Phase 6, the interpretation half).** The §2 AI layer was decomposed (sparred with the PM) into
 > **aggregation** (the news collector — **now BUILT**, see the most-recent build: `fetchers/news.py` +
-> the `player_news` entity) and **interpretation** (this next build). The quantitative skeleton
+> the `player_news` entity) and **interpretation** (the build after this one). The quantitative skeleton
 > (`compute_ros_outcome_shape.py`: bull/bear band + preseason ADP anchor + situation/security evidence)
 > and the news feed both now exist; what's left is the synthesis that reads them.
 >
