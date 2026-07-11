@@ -31,16 +31,24 @@ backtest_player_signal.py. It beats a naive "recent points carry forward" baseli
 rest-of-season error AND, among hot players (which the naive read cannot tell apart),
 correctly separates the group that held from the group that regressed ~3 pts/g.
 
-**Phase 1 refinement (DECISION_READS.md §1):** four fields close the gap between this
+**Phase 1 refinement (DECISION_READS.md §1):** these fields close the gap between this
 shipped engine and the full Opportunity spec — kept separate, not fused into the
 core read above, per "don't collapse the axes; divergence is the signal":
-  - `quality_rate` — the Quality axis: expected TDs per touch (play-by-play `td_prob`),
-    independent of Volume (`opp_g`). A 3rd-down back can be high-quality/low-volume.
+  - `quality_rate` — the Quality axis: **expected fantasy points per opportunity**, from
+    ffverse's empirical expected-points model (`ff_opportunity`), re-scored under the
+    league's settings (`_scoring.expected_points_expr`). It weights each chance by the
+    value its context (target depth, field position, down & distance) empirically
+    produces — the full multi-component EV read §1 specifies, not the old TD-only
+    `td_prob` proxy. Independent of Volume (`opp_g`): a 3rd-down back can be
+    high-quality/low-volume, and that divergence is the signal.
   - `direction` / `reliability` — the Trust axis's trend + consistency, from the
     player's own weekly opportunity series (mirrors compute_team_form.py's slope math).
   - `security` — the Trust axis's context flag, from Sleeper injury/depth-chart status.
-  - `point_correlation` — the companion: does his valuable (high-xtd) production
-    actually convert to TD points, or is he due a bounce either way?
+  - `point_correlation` — the companion: how tightly a player's weekly **actual** points
+    track his weekly **expected** points. Read against `quality_rate`: low correlation +
+    high quality = unlucky (bounce-back); low correlation + low quality = correctly cheap.
+  - `luck` — the legible residual: recent PPG minus expected PPG (points/game above or
+    below what the chances were worth). Positive = running hot; negative = bounce-back.
 
 Output: snapshots/derived/player_signal_{season}.parquet, one row per rostered skill
 player.
@@ -58,6 +66,7 @@ import polars as pl
 
 from application.data import data_layer
 from application.data.transforms._analytics import mean, pearson, round1, spectrum_positions
+from application.data.transforms._scoring import EXP_COMPONENT_COLS, expected_points_expr
 
 SKILL_POSITIONS = ["QB", "RB", "WR", "TE"]
 
@@ -129,15 +138,15 @@ def opportunity_expr() -> pl.Expr:
 def _weighted_rates(weeks, *, half_life):
     """EWMA-weighted per-game rates from a player's per-week series.
 
-    `weeks`: list of {week, pts, opp, td_pts, xtd} (any order; `xtd` optional, defaults
-    to 0.0 — keeps this function callable on older-shaped week dicts). Each week's
+    `weeks`: list of {week, pts, opp, td_pts, exp_pts} (any order; `exp_pts` optional,
+    defaults to 0.0 — keeps this function callable on older-shaped week dicts). Each week's
     weight halves every `half_life` weeks back from the player's most recent game, so a
     drifting role is read off recent usage without discarding older games — a
     half-life, not a hard window. `half_life=None` → equal weight (cumulative). The
     half-life is injected (not a module global) so the analytic is parameterisable and
     testable in isolation: the backtest sweeps it through this same function.
 
-    Returns {games, ppg, opp_g, td_ppg, xtd_g}. `games` is the raw count — sample size
+    Returns {games, ppg, opp_g, td_ppg, exp_pts_g}. `games` is the raw count — sample size
     for the low-sample gate, which is about confidence, not recency, so it is never
     weighted. The weights are normalised, so only their *relative* size within the
     player's own games matters (a player whose games are all old is not down-levelled —
@@ -158,33 +167,36 @@ def _weighted_rates(weeks, *, half_life):
         "ppg": sum(wt * w["pts"] for wt, w in zip(wts, ws)) / tw,
         "opp_g": sum(wt * w["opp"] for wt, w in zip(wts, ws)) / tw,
         "td_ppg": sum(wt * w["td_pts"] for wt, w in zip(wts, ws)) / tw,
-        "xtd_g": sum(wt * w.get("xtd", 0.0) for wt, w in zip(wts, ws)) / tw,
+        "exp_pts_g": sum(wt * w.get("exp_pts", 0.0) for wt, w in zip(wts, ws)) / tw,
     }
 
 
 def _player_signal(agg, pos_mean_ppo, *, shrink_k, min_games, spike_band, sticky_band):
     """The pure signal read for one player from his recent-window aggregate.
 
-    `agg`: {position, games, ppg, opp_g, td_ppg, xtd_g}. `pos_mean_ppo`: the league-wide
+    `agg`: {position, games, ppg, opp_g, td_ppg, exp_pts_g}. `pos_mean_ppo`: the league-wide
     mean points-per-opportunity for this player's position. The tuning constants are
     injected (not read from module globals) so the analytic is parameterisable and
     testable in isolation — the backtest sweeps `shrink_k` through this same function.
 
     Returns the decomposition: expected (efficiency-regressed) ppg, regression_risk, the
-    TD share of scoring, a sample-gated categorical read, and `quality_rate` — the
-    Quality axis (DECISION_READS.md §1): expected TDs per touch (from play-by-play
-    `td_prob`), independent of how many touches he gets. Kept separate from `opp_g`
-    (Volume), never fused — a 3rd-down back can be high-quality_rate, low-opp_g, and
-    that divergence is the signal, not something to average away.
+    TD share of scoring, a sample-gated categorical read, `quality_rate` — the Quality axis
+    (DECISION_READS.md §1): **expected fantasy points per opportunity** from ffverse's
+    empirical model, re-scored under league settings (`exp_pts_g` is the per-game expected
+    points; dividing by `opp_g` gives the value per chance), independent of how many touches
+    he gets — a 3rd-down back can be high-quality_rate, low-opp_g, and that divergence is the
+    signal — and `luck` = recent ppg minus expected ppg (the legible over/under-performance
+    residual).
     """
     games = agg["games"]
     ppg = agg["ppg"]
     opp_g = agg["opp_g"]
     td_ppg = agg["td_ppg"]
-    xtd_g = agg.get("xtd_g", 0.0)
+    exp_pts_g = agg.get("exp_pts_g", 0.0)
 
     low_sample = games < min_games or opp_g <= 0.0
-    quality_rate = xtd_g / opp_g if opp_g > 0 else 0.0
+    quality_rate = exp_pts_g / opp_g if opp_g > 0 else 0.0
+    luck = ppg - exp_pts_g  # observed minus expected points per game (variance/luck residual)
     ppo = ppg / opp_g if opp_g > 0 else 0.0
     # Shrink efficiency toward the positional norm by sample size; opportunity is the
     # anchor and is carried forward as-is (the sticky half).
@@ -216,6 +228,7 @@ def _player_signal(agg, pos_mean_ppo, *, shrink_k, min_games, spike_band, sticky
         "regression_risk": round(regression_risk, 3),
         "read": read,
         "quality_rate": round(quality_rate, 3),
+        "luck": round1(luck),
     }
 
 
@@ -270,19 +283,20 @@ def _reliability(series, *, min_games):
 
 
 def _point_correlation(series, *, min_games):
-    """Correlation between a player's weekly touchdown points and his weekly expected
-    touchdowns (`xtd`, the Quality signal) — the point-correlation companion
-    (DECISION_READS.md §1): do his valuable chances actually convert? Read against
-    `quality_rate`: low correlation + high quality_rate = unlucky, a bounce-back
-    candidate (the valuable chances are there, they just haven't hit yet); low
-    correlation + low quality_rate = correctly cheap (no hidden upside either way).
-    None below `min_games`, or when either series has no variance to correlate against.
+    """Correlation between a player's weekly **actual** fantasy points and his weekly
+    **expected** points (`exp_pts`, the Quality signal re-scored under league settings) —
+    the point-correlation companion (DECISION_READS.md §1): do his valuable chances
+    actually convert? Read against `quality_rate`: low correlation + high quality_rate =
+    unlucky, a bounce-back candidate (the valuable chances are there, they just haven't
+    hit yet); low correlation + low quality_rate = correctly cheap (no hidden upside
+    either way). None below `min_games`, or when either series has no variance to
+    correlate against.
     """
     if len(series) < min_games:
         return None
-    td_pts = [w["td_pts"] for w in series]
-    xtd = [w["xtd"] for w in series]
-    r = pearson(xtd, td_pts)
+    pts = [w["pts"] for w in series]
+    exp = [w["exp_pts"] for w in series]
+    r = pearson(exp, pts)
     return round(r, 3) if r is not None else None
 
 
@@ -308,18 +322,19 @@ def _security(injury_status, depth_chart_order) -> str:
 
 def _recent_aggregate(df: pl.DataFrame) -> pl.DataFrame:
     """Collapse per-week skill rows to one per-player record: the raw game count and the
-    per-week (pts, opp, td_pts, xtd) series. The per-game rates (ppg, opp_g, td_ppg,
-    xtd_g) are derived from this series by `_weighted_rates` (EWMA half-life), so the
+    per-week (pts, opp, td_pts, exp_pts) series. The per-game rates (ppg, opp_g, td_ppg,
+    exp_pts_g) are derived from this series by `_weighted_rates` (EWMA half-life), so the
     windowing choice lives in one injected-parameter place rather than baked into the
-    aggregation — and the same series drives the evidence sparkline and the Trust/
-    point-correlation reads."""
+    aggregation — and the same series drives the evidence sparkline and the Quality/Trust/
+    point-correlation reads. `exp_pts` is the league-scored expected points (computed on the
+    frame before this call), so the series carries expected alongside actual per week."""
     return (
         df.with_columns(opportunity_expr().alias("opp"), td_points_expr().alias("td_pts"))
         .group_by("sleeper_player_id", "player_display_name", "position")
         .agg(
             pl.len().alias("games"),
             pl.struct(
-                "week", pl.col("fantasy_points_ppr").alias("pts"), "opp", "td_pts", "xtd"
+                "week", pl.col("fantasy_points_ppr").alias("pts"), "opp", "td_pts", "exp_pts"
             )
             .sort_by("week")
             .alias("weeks"),
@@ -388,7 +403,7 @@ def _compute_as_of(
         series = [
             {
                 "week": int(w["week"]), "pts": float(w["pts"]), "opp": float(w["opp"]),
-                "td_pts": float(w["td_pts"]), "xtd": float(w["xtd"]),
+                "td_pts": float(w["td_pts"]), "exp_pts": float(w["exp_pts"]),
             }
             for w in row["weeks"]
         ]
@@ -467,7 +482,8 @@ def _security_map() -> dict:
 
 def compute(season: int) -> pl.DataFrame:
     # Full (frozen) join; usage/score columns can be null for a player who didn't record
-    # that stat type, so treat as zero so opportunity and TD points are well-defined.
+    # that stat type, so treat as zero so opportunity and points are well-defined.
+    scoring = data_layer.read_scoring_settings(season)
     full = data_layer.read_join_season(season).filter(
         pl.col("position").is_in(SKILL_POSITIONS)
     ).with_columns(
@@ -475,10 +491,12 @@ def compute(season: int) -> pl.DataFrame:
             pl.col(c).fill_null(0.0)
             for c in [
                 "carries", "targets", "attempts", "fantasy_points_ppr",
-                "rushing_tds", "receiving_tds", "passing_tds", "xtd",
+                "rushing_tds", "receiving_tds", "passing_tds", *EXP_COMPONENT_COLS,
             ]
         ]
-    )
+    # exp_pts = the league-scored expected points from the ff_opportunity components (the Quality
+    # basis) — derived once here at the consumption layer, then carried per-week like actual points.
+    ).with_columns(expected_points_expr(scoring).alias("exp_pts"))
 
     security_map = _security_map()
 
