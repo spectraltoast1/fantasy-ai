@@ -35,8 +35,8 @@ def api_available() -> bool:
     return bool(key) and key != _PLACEHOLDER and key.startswith("sk-ant")
 
 
-def _extract_json(text: str) -> dict:
-    """Parse a model reply into a dict, tolerating ```json fences or surrounding prose."""
+def _strip_fences(text: str) -> str:
+    """Drop a leading ```json fence and surrounding whitespace from a model reply."""
     s = text.strip()
     if s.startswith("```"):
         parts = s.split("```")
@@ -44,6 +44,12 @@ def _extract_json(text: str) -> dict:
         if s.lstrip().startswith("json"):
             s = s.lstrip()[4:]
         s = s.strip()
+    return s
+
+
+def _extract_json(text: str) -> dict:
+    """Parse a model reply into a dict, tolerating ```json fences or surrounding prose."""
+    s = _strip_fences(text)
     if not s.startswith("{"):                  # fall back to the outermost {...} span
         i, j = s.find("{"), s.rfind("}")
         if i != -1 and j > i:
@@ -51,13 +57,29 @@ def _extract_json(text: str) -> dict:
     return json.loads(s)
 
 
-def generate_dossier(system: str, user: str, *, model: str = DEFAULT_MODEL,
-                     max_tokens: int = 1500, cache_system: bool = False):
-    """One synchronous Haiku call → (parsed dossier dict, usage dict). THE swap point for Batch later.
+def _extract_json_array(text: str) -> list:
+    """Parse a model reply into a list, tolerating ```json fences or surrounding prose.
 
-    `system` / `user` are the pre-built prompts (dossier_prompt.py). No `thinking` / `effort` params
-    (Haiku 4.5 rejects `effort` and doesn't need thinking). `cache_system` prompt-caches the shared
-    prefix (only effective above Haiku's ~4096-token minimum). Raises ValueError on an unparseable reply.
+    The array analog of `_extract_json` — Stage B (team news sheets) returns a JSON ARRAY of claims,
+    which `_extract_json` would mis-handle (it grabs the first inner object).
+    """
+    s = _strip_fences(text)
+    if not s.startswith("["):                  # fall back to the outermost [...] span
+        i, j = s.find("["), s.rfind("]")
+        if i != -1 and j > i:
+            s = s[i:j + 1]
+    data = json.loads(s)
+    if not isinstance(data, list):
+        raise ValueError("expected a JSON array")
+    return data
+
+
+def _raw_call(system: str, user: str, *, model: str, max_tokens: int, cache_system: bool):
+    """The single synchronous Haiku call → (reply text, usage dict). THE swap point for Batch later.
+
+    No `thinking` / `effort` params (Haiku 4.5 rejects `effort` and doesn't need thinking).
+    `cache_system` prompt-caches the shared prefix (only effective above Haiku's ~4096-token minimum).
+    Shared by every AI read so a future Batch path is a single localized change.
     """
     import anthropic                            # lazy — only imported when a call is actually made
     client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
@@ -73,11 +95,6 @@ def generate_dossier(system: str, user: str, *, model: str = DEFAULT_MODEL,
         messages=[{"role": "user", "content": user}],
     )
     text = next((b.text for b in resp.content if b.type == "text"), "")
-    try:
-        dossier = _extract_json(text)
-    except (ValueError, json.JSONDecodeError) as exc:
-        raise ValueError(f"dossier reply was not valid JSON: {exc}\n---\n{text[:500]}") from exc
-
     u = resp.usage
     usage = {
         "input_tokens": u.input_tokens,
@@ -85,4 +102,36 @@ def generate_dossier(system: str, user: str, *, model: str = DEFAULT_MODEL,
         "cache_read_input_tokens": getattr(u, "cache_read_input_tokens", 0) or 0,
         "cache_creation_input_tokens": getattr(u, "cache_creation_input_tokens", 0) or 0,
     }
+    return text, usage
+
+
+def generate_dossier(system: str, user: str, *, model: str = DEFAULT_MODEL,
+                     max_tokens: int = 1500, cache_system: bool = False):
+    """One synchronous Haiku call → (parsed dossier dict, usage dict).
+
+    `system` / `user` are the pre-built prompts (dossier_prompt.py). Raises ValueError on an
+    unparseable reply.
+    """
+    text, usage = _raw_call(system, user, model=model, max_tokens=max_tokens,
+                            cache_system=cache_system)
+    try:
+        dossier = _extract_json(text)
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f"dossier reply was not valid JSON: {exc}\n---\n{text[:500]}") from exc
     return dossier, usage
+
+
+def generate_claims(system: str, user: str, *, model: str = DEFAULT_MODEL,
+                    max_tokens: int = 2000, cache_system: bool = False):
+    """One synchronous Haiku call → (list of claim dicts, usage dict).
+
+    The JSON-ARRAY analog of `generate_dossier` for the Stage B team news sheets (news_prompt.py).
+    Raises ValueError on a reply that isn't a parseable array.
+    """
+    text, usage = _raw_call(system, user, model=model, max_tokens=max_tokens,
+                            cache_system=cache_system)
+    try:
+        claims = _extract_json_array(text)
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f"claims reply was not a valid JSON array: {exc}\n---\n{text[:500]}") from exc
+    return claims, usage
