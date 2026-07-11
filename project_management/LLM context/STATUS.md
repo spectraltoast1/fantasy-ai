@@ -1,9 +1,22 @@
 # STATUS
 
-**Last updated:** 2026-07-11 (**§2 News pipeline REWORKED — team-centric collection (Stage A) shipped,
-superseding the v1 national player-news collector.** After further research this session, the §2 news
-layer was redesigned as a **3-stage per-team pipeline**: **(A) collection** *(now built)* → **(B) weekly
-AI extraction** of scope-tagged claims → **(C) per-player slice** by inheritance. `fetchers/news.py` now
+**Last updated:** 2026-07-11 (**§2 News pipeline Stage B SHIPPED — weekly per-team AI news synthesis →
+`team_news_dossier`.** The 3-stage pipeline is **(A) collection** *(shipped)* → **(B) weekly AI synthesis**
+*(now built)* → **(C) per-player slice** by inheritance *(next)*. Stage B (`application/ai/news_prompt.py`
++ `write_team_news_dossier.py` + `check_team_news_dossier.py`, reusing the `ai/client.py` seam + the
+retained resolver) distills each team's recent `team_news_raw` window into a compact, **situation/security-
+focused, attributed** set of **scope-tagged claims** (player / position_group / unit) a downstream AI reads
+next to the numeric analytics. Per claim: `scope` / `subject` / `claim_type` / **`basis`** (official /
+reported / opinion — so an opinion is never mistaken for fact) / `note` (one attributed cliffs-note) /
+`direction` (positive / negative / neutral / **mixed** = cross-pressured) / `salience` / cited
+`source_article_ids` + `source_types` (clustered across the 3 sources; diversity = trust). **Skill-only
+(V1):** player claims are QB/RB/WR/TE and resolve to a Sleeper id via a **team-restricted** index (never a
+cross-team id); all defensive news is condensed into ONE `defense` unit note (game-script context now,
+pre-banked for later). Verified live: **32/32 teams, 317 claims, 1 Haiku call/team (~$0.46 total)**;
+internal-consistency gate PASS (coverage / schema / grounding / on-team resolution / zero-signal honesty);
+168/186 player claims resolved. Off-season window is thin by nature; richness ramps into camp. **Next =
+Stage C** (per-player slice by inheritance + thinness tripwire + raw-content retention). **Design record —
+Stage A (still current):** `fetchers/news.py`
 collects per-NFL-team from **3 native RSS sources per team** — SB Nation (grounded analysis), FanSided
 (player-flavored, noisier), and the official team site (authoritative/PR) — into the new **`team_news_raw`**
 entity (one row per article, **stores feed-provided content** so the extraction has text; feed-provided
@@ -57,6 +70,28 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**§2 News pipeline Stage B — weekly per-team AI news synthesis → `team_news_dossier` (the interpretation
+half of the news layer).** Distills each team's recent `team_news_raw` window into a compact,
+situation/security-focused, **attributed** set of **scope-tagged claims** a downstream AI reads next to the
+numeric analytics. **New `application/ai/` code, reusing the §7 pattern:** `client.py` refactored (`_raw_call`
+shared seam + new `generate_claims` array path; `generate_dossier` untouched); pure `news_prompt.py`
+(situation/security schema + cluster-across-sources + attribution guardrails); `write_team_news_dossier.py`
+(windows the raw store — `WINDOW_DAYS`=14, cap 60/team → one Haiku call/team → validate → deterministic id
+resolution; run-once-per-week, `--force`, `--team`); `check_team_news_dossier.py` (internal-consistency
+gate). **New `data_layer` `team_news_dossier`** (one growing file; grain = one claim row per
+(season, week, team); replace-by-(season,week,team), idempotent). Per claim: scope (player/position_group/
+unit) / subject / claim_type / **`basis`** (official/reported/opinion — an opinion is never laundered into
+fact) / attributed `note` / direction (positive/negative/neutral/**mixed** = cross-pressured) / salience /
+cited `source_article_ids` + `source_types` (clustered across the 3 sources; diversity = trust). **Skill-only
+(V1):** player claims are QB/RB/WR/TE, resolved to a Sleeper id via a **team-restricted** index (the gate
+caught + we fixed a cross-team-id bug); all defensive news condensed into ONE `defense` unit note
+(game-script context now, pre-banked for when defensive positions are added). Verified live: **32/32 teams,
+317 claims, ~$0.46 (1 Haiku call/team)**; gate PASS (coverage / schema / grounding / on-team resolution /
+zero-signal honesty); 168/186 player claims resolved; direction 171 pos / 51 mixed / 48 neg / 47 neu, basis
+145 opinion / 132 reported / 40 official. Off-season window thin by nature; richness ramps into camp.
+**Next — Stage C:** per-player slice by inheritance + thinness tripwire + raw-content retention.
+
+> earlier build
 **§2 News pipeline REWORK — team-centric collection (Stage A) — supersedes the v1 player-news collector.**
 After sparring + source research, the §2 news layer was redesigned as a **3-stage per-team pipeline**
 (**A collection** → **B weekly AI extraction** of scope-tagged claims → **C per-player slice** by
@@ -106,30 +141,6 @@ St. Brown", "D.J.→DJ Moore", multi-player fan-out, rookie "Sam Roush" across 3
 bull/bear blurb + confidence in **one pass**. **Also still remaining Phase 4:** front-end surfacing of
 the six §1–§6 forward reads + dossiers.
 
-> earlier build
-**710 audit #3 — §1 Quality axis on the empirical expected-points model (+ core-upgrade tested & rejected).**
-The audit's last spec item, closing the whole 710 backlog. `quality_rate` was `xtd_g/opp_g` — a
-hand-rolled sum of nflfastR `td_prob`, TD-only and ungated. Now it's **expected fantasy points per
-opportunity** from ffverse's `ff_opportunity` model. **Four commits.** (1) **Data + scoring:**
-`fetchers/nfl_stats.py` gains `_load_ff_opportunity` (the `*_exp` component expectations, gsis-keyed,
-joined like the PBP signal; null-id "dupes" filtered), the old `xtd` TD-proxy retired (`redzone_touches`
-kept as companion). New `_scoring.expected_points_expr` re-scores the components **from-scratch** under
-the league's settings — exact here (every component exposed), reproducing ffverse's
-`total_fantasy_points_exp` under PPR to ±0.02, and it even scores first-down leagues. Also fixed a latent
-bare `import audit_join` the package refactor (#1) missed. (2) **Quality axis:** `compute_player_signal`
-sets `quality_rate = exp_pts_g/opp_g` (value per chance, kept separate from Volume), `point_correlation`
-now correlates weekly **actual vs expected** full points, and a new `luck` = recent − expected ppg. (3)
-**Gate:** `backtest_player_signal` adds a third verdict — `quality_rate` (exp_ppo) forecasts ROS realized
-efficiency at **MAE 0.311 vs 0.506** recent-realized; exit 0 (predictive 13.2% MAE cut, spike<sticky,
-quality). The **optional core-engine upgrade** (shrink the spike forecast toward exp_ppo instead of the
-positional mean) was implemented and **rejected by the answer key** — lost at every SHRINK_K (K=6: 2.699
-vs 2.599). Points-forecasting is regression toward the *population*; exp_ppo (same recent weeks) is too
-correlated with realized ppo to pull that way. **Not a contradiction:** exp_ppo beats *recent-realized*
-as an efficiency forecaster but loses to the *population mean* as a shrink target — so the core keeps its
-validated positional-mean prior; the model serves the §1 Quality axis, not the forecast. (4) docs
-closedown. **The 710 audit is now fully closed (7/7).** No UI (data + gate). **Next — remaining Phase 4:**
-front-end surfacing of the six §1–§6 reads + dossiers.
-
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
@@ -174,6 +185,7 @@ front-end surfacing of the six §1–§6 reads + dossiers.
     - 710 audit #3 (§1 Quality axis) — CLOSES the 710 audit (7/7). `quality_rate` was `xtd_g/opp_g` (nflfastR `td_prob`, TD-only, ungated); now = **expected fantasy points per opportunity** from ffverse's `ff_opportunity` component model. `nfl_stats._load_ff_opportunity` joins the `*_exp` components (gsis-keyed, null-id rows filtered; REG weeks); `xtd` retired, `redzone_touches` kept as companion; latent bare `import audit_join` (package-refactor #1 miss) fixed. New `_scoring.expected_points_expr` re-scores the components from-scratch under league settings — exact (all components exposed), reproduces ffverse's `total_fantasy_points_exp` under PPR to ±0.02, scores first-down leagues too. `compute_player_signal`: `quality_rate = exp_pts_g/opp_g` (value per chance, separate from Volume), `point_correlation` → weekly actual-vs-expected full points, new `luck` = recent − expected ppg; scoring applied at the consumption layer. Gate (`backtest_player_signal.py`, exit 0): new 3rd verdict — quality_rate (exp_ppo) forecasts ROS realized efficiency at MAE 0.311 vs 0.506 recent-realized; core still beats naive 13.2%, spike<sticky. **Core-engine upgrade tested & REJECTED by the answer key**: shrinking the spike forecast toward exp_ppo lost to the positional mean at every SHRINK_K (K=6: 2.699 vs 2.599) — points-forecasting regresses to the *population*, exp_ppo (same recent weeks) too correlated with realized ppo to pull that way; kept the validated positional-mean prior (the model serves the §1 axis, not the forecast). No UI (data + gate).
     - §2 Player-News Collector (aggregation half of the ROS AI-interpretation layer, Phase 6) — `fetchers/news.py`, a live/scheduled RSS collector → new `player_news` entity (`snapshots/news/player_news.parquet`; grain = one row per news-item × resolved player; writer append-only-of-new by `item_id`, idempotent; compact items only — headline/summary/url + `collected_at`, never article bodies → url+date = Wayback recall path). National feed registry (source_type stored so team beats drop in later); `_get_feed` timeout+backoff; **resolution** = exact full-name match vs the 967 active-rostered (`team`-not-null) skill players (0 collisions) + defensive team-mention disambiguation (`match_confidence` exact_full/disambiguated; ambiguous skipped — law 2); incremental per-feed snapshot with per-feed isolation; entry points snapshot/feeds/resolve-test/check (synthetic resolver self-check). +feedparser dep + `com.fantasyai.news-snapshot` launchd plist (5am ET). Live-acquired like manager_activity (forward pipeline, NOT tied to frozen-2025). Verified live: 5/5 feeds, 151 entries→48 items→66 rows, idempotent, dead-feed isolation, check PASS, 0 false positives. Next: the §2 on-demand AI synthesis (one lazy cached per-player call → headlines + bull/bear blurb + confidence).
     - §2 News pipeline REWORK — team-centric collection (Stage A), supersedes the v1 player-news collector — `fetchers/news.py` reworked to collect per-NFL-team from **3 native RSS sources/team** (SB Nation `/rss/index.xml` grounded + FanSided `/feed/` player-flavored/noisier + official `<team>.com/rss/news` authoritative/PR); all **96 feeds (32×3) validated live** (96/96 ok, 5021 articles). Nationals dropped (league-level); SI/FanNation ruled out (no native per-team RSS — 0 autodiscovery, all paths 404). New data_layer **`team_news_raw`** entity (grain = one row per **article**; **stores feed-provided content** for the extraction — reverses v1's headline-only rule; feed-provided only, no scraping; append-only-of-new by `article_id`, idempotent). Player resolution moved out of collection into Stages B/C (resolver retained: `build_index`/`resolve_players`/`_TEAM_ALIASES`). Per-feed isolation + backoff + per-team volume report (Stage-C thinness-tripwire input) + resilience-floor flag; `source_type` per article for weighting; `player_news` left as legacy. Verified: 96/96 feeds / 32 teams / 5021 articles, 0 dup titles, dead-feed isolation, resolver `check` PASS, `published_at` 100%. Stage A of the 3-stage pipeline (B = weekly AI claim-extraction → `team_news_dossier`; C = per-player slice + thinness tripwire + retention).
+    - §2 News pipeline Stage B — weekly per-team AI news synthesis → `team_news_dossier` (the interpretation half; the project's 2nd AI-layer read after §7 dossiers) — new `application/ai/`: `news_prompt.py` (pure; situation/security schema + cluster-across-sources + attribution guardrails), `write_team_news_dossier.py` (windows the raw store `WINDOW_DAYS`=14/cap 60 → 1 Haiku call/team → validate → deterministic on-team id resolution; run-once-per-week, `--force`, `--team`), `check_team_news_dossier.py` (internal-consistency gate). `client.py` refactored (`_raw_call` shared seam + `generate_claims` array path; `generate_dossier` behavior-identical). New data_layer **`team_news_dossier`** (one growing file; grain = one claim row per (season,week,team); replace-by-(season,week,team), idempotent). Per claim: scope (player/position_group/unit) / subject / claim_type / **`basis`** (official/reported/opinion — opinion never laundered into fact) / attributed `note` / direction (positive/negative/neutral/**mixed**) / salience / cited `source_article_ids` + `source_types` (clustered; source diversity = trust). Skill-only (V1): player claims QB/RB/WR/TE resolved via a **team-restricted** index (gate caught + fixed a cross-team-id bug); all defensive news condensed into ONE `defense` unit note (game-script context; pre-banked for later). Verified live 2026 wk0: 32/32 teams, 317 claims, ~$0.46; gate PASS (coverage/schema/grounding/on-team-resolution/zero-signal); 168/186 player claims resolved. Next — Stage C (per-player slice by inheritance + thinness tripwire + raw-content retention).
 
 > not yet built
     >> backend
@@ -187,14 +199,16 @@ front-end surfacing of the six §1–§6 reads + dossiers.
 
 ## Current build target
 
-> **⭐ ACTIVE BUILD (2026-07-11): the §2 team-news pipeline (rework).** Stage A (per-team collection)
-> **shipped** (see the most-recent build). **Next = Stage B** — the weekly per-team AI extraction that
-> distills `team_news_raw` into a `team_news_dossier` of scope-tagged claims (player / position-group /
-> unit), reusing `ai/client.py` + the retained resolver; then **Stage C** — the per-player slice by
-> inheritance + the thinness tripwire + raw-content retention (daily append-only now; prune content
-> >~4wk, keep claims). Full design: the approved plan + the most-recent build. **This pipeline finishes
-> before the two builds queued below resume** — a deliberate rework done after further research; the
-> queued notes are preserved, not dropped.
+> **⭐ ACTIVE BUILD (2026-07-11): the §2 team-news pipeline (rework).** Stage A (collection) + **Stage B
+> (weekly per-team AI news synthesis → `team_news_dossier`)** are both **shipped** (see the two most-recent
+> builds). **Next = Stage C** — the per-player slice by **inheritance** (a skill player inherits his own
+> player-scope claims + his position-group claims + his team's unit/`defense` claims from the
+> `team_news_dossier`), + the **thinness tripwire** (flag players/teams with too little signal to read) +
+> **raw-content retention** (daily append-only now → prune `team_news_raw.content` older than the ~4wk
+> synthesis window, keep the derived claims + links). Then the §2 synthesis (QUEUED #2) reads a player's
+> inherited slice next to the `ros_outcome_shape` anchors. Full design: the approved plan + the two
+> most-recent builds. **This pipeline finishes before the two builds queued below resume** — a deliberate
+> rework done after further research; the queued notes are preserved, not dropped.
 >
 > ---
 >
