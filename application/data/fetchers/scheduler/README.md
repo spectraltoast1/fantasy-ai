@@ -14,7 +14,7 @@ time (DST-aware). If the Mac is asleep at the scheduled time, the job runs at ne
 | Job | Label | Runs | Time (America/New_York) |
 |---|---|---|---|
 | Market values | `com.fantasyai.leaguelogs-snapshot` | `-m application.data.fetchers.leaguelogs snapshot` | 04:00 |
-| Player news | `com.fantasyai.news-snapshot` | `-m application.data.fetchers.news snapshot` | 05:00 |
+| Team news | `com.fantasyai.news-snapshot` | `-m application.data.fetchers.news snapshot` | 05:00 |
 
 (News is offset from leaguelogs so the two daily fetchers don't overlap. Daily to start —
 the cadence is tunable; bump it more frequent in-season by editing `StartCalendarInterval`.)
