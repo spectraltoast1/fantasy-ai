@@ -2,7 +2,7 @@
 
 > Engineering context document for Claude Code. Describes the stack, folder structure, data layer design, and technical principles. Updated regularly as the project evolves.
 
-**Last reviewed:** 2026-07-11 (§2 news pipeline **Stage B shipped** — weekly per-team AI news synthesis → `team_news_dossier` entity + `application/ai/news_prompt.py` / `write_team_news_dossier.py` / `check_team_news_dossier.py`, reusing the `ai/client.py` seam (now with a JSON-array `generate_claims` path) + the retained resolver. Stage A team-centric collection → `team_news_raw` shipped earlier)
+**Last reviewed:** 2026-07-11 (§2 news pipeline **COMPLETE — Stage C shipped**: per-player slice by inheritance → `player_news_slice` entity + `transforms/compute_player_news_slice.py` / `check_player_news_slice.py` (a deterministic reshape — no AI — so the gate is a HARD inheritance round-trip), + **raw-content retention** (`data_layer.prune_team_news_raw_content` + `fetchers/news.py prune`, `RETENTION_DAYS=28`). Stage B `team_news_dossier` + Stage A `team_news_raw` shipped earlier; the 3-stage pipeline A→B→C is now the whole news layer)
 
 ---
 
@@ -176,7 +176,7 @@ fantasy-ai/
     │   │   ├── nfl_stats.py        # ✅ built
     │   │   ├── sleeper.py          # ✅ built
     │   │   ├── leaguelogs.py       # ✅ built — daily market-value snapshots
-    │   │   ├── news.py             # ✅ built — daily TEAM-news RSS collector (§2 pipeline Stage A): 3 native sources/team → team_news_raw
+    │   │   ├── news.py             # ✅ built — daily TEAM-news RSS collector (§2 pipeline Stage A): 3 native sources/team → team_news_raw; also `prune` (Stage C retention: null content older than RETENTION_DAYS=28, keep row+link+claims) + the retained resolver (build_index/resolve_players, imported by Stages B/C)
     │   │   └── scheduler/          #   tracked launchd plists + README for the daily snapshot jobs
     │   │       ├── com.fantasyai.leaguelogs-snapshot.plist
     │   │       ├── com.fantasyai.news-snapshot.plist
@@ -202,8 +202,9 @@ fantasy-ai/
             ├── leaguelogs/
             │   └── market_values.parquet            # daily market-value history, all profiles
             ├── news/
-            │   ├── team_news_raw.parquet           # §2 pipeline Stage A: per-team article store — 3 native sources/team (SB Nation + FanSided + official); grain = one row per article; STORES feed-provided content (extraction input; no scraping); append-only-of-new by article_id
+            │   ├── team_news_raw.parquet           # §2 pipeline Stage A: per-team article store — 3 native sources/team (SB Nation + FanSided + official); grain = one row per article; STORES feed-provided content (extraction input; no scraping); append-only-of-new by article_id. RETENTION (Stage C): `content` older than RETENTION_DAYS (28) is nulled by `news.py prune` — the row + article_id/title/url/published_at + the derived claims survive
             │   ├── team_news_dossier.parquet       # §2 pipeline Stage B: weekly per-team AI news sheet — grain = one scope-tagged claim per (season,week,team); situation/security-focused, attributed (basis official/reported/opinion), skill-only + one condensed defense note; written by application/ai/write_team_news_dossier.py via Haiku; replace-by-(season,week,team)
+            │   ├── player_news_slice.parquet       # §2 pipeline Stage C: per-player inheritance view of the dossier — grain = one inherited-claim row per (season,week,player,claim); each on-team skill player (whole NFL pool) inherits his own player claims + his position_group claims (his position + team-wide offensive context) + his team's unit (offense/defense) claims; + thinness tripwire (signal_tier rich/thin/none + counts); honest-zero is_empty row for a player who inherits nothing. Deterministic reshape (transforms/compute_player_news_slice.py); replace-by-(season,week). The §2-synthesis (QUEUED #2) input
             │   └── player_news.parquet              # LEGACY (v1 national player-news collector, superseded by team_news_raw)
             ├── projections/
             │   └── projections_2025.parquet         # multi-source forward prior (Sleeper now, FantasyPros in-season); `source` a column; snapshot/append, grain (season, week, source, player)
@@ -250,7 +251,9 @@ fantasy-ai/
         ├── compute_ros_outcome_shape.py     # ✅ built — ROS Outcome Shape §2 (quantitative skeleton, completes the player-read backend): bull/bear = borrowed ros_value ± BULL_Z·√Σband², blended toward the preseason ADP anchor (adp_points_curve, weight w_N=ANCHOR_W·remaining/total) + situation/security from the player_signal trust axis → derived/ros_outcome_shape
         ├── backtest_ros_outcome_shape.py    # ✅ built — ROS Outcome Shape gate (exercises the shipped anchored path): freeze-wk bull/bear coverage 0.817 (target 0.80; joint BULL_Z×ANCHOR_W sweep → (1.44, 0.25), objective |cov−tgt|+|tail imbalance|) + monotonic realised ROS by bull tercile on the 2025 answer key (exit 0); anchor lifts coverage 0.744→0.817 + balances tails vs pre-anchor
         ├── compute_manager_features.py      # ✅ built — Manager Dossiers §7 Phase A: cross-league behavioral features per manager (owner_id) from manager_activity → derived/manager_features. Pure manager_features (injected constants); every league manager gets a row incl. zero-signal (null features)
-        └── backtest_manager_features.py     # ✅ built — Manager features gate (internal consistency — behaviour has no answer key): comparability invariant (0 leaked, grounded on persisted target facts) + accounting round-trip (independent re-aggregation; fractions ∈[0,1]; shares sum 1) + signal-depth honesty (all profiled; zero-signal → null) (exit 0)
+        ├── backtest_manager_features.py     # ✅ built — Manager features gate (internal consistency — behaviour has no answer key): comparability invariant (0 leaked, grounded on persisted target facts) + accounting round-trip (independent re-aggregation; fractions ∈[0,1]; shares sum 1) + signal-depth honesty (all profiled; zero-signal → null) (exit 0)
+        ├── compute_player_news_slice.py     # ✅ built — §2 news pipeline Stage C: per-player inheritance slice of team_news_dossier → news/player_news_slice (a deterministic reshape, no AI). Each on-team skill player inherits own player claims + position_group (his position + team-wide offensive context) + team unit (offense/defense) claims; + thinness tripwire signal_tier + counts; honest-zero is_empty row when nothing inherited. position_group_positions() is the shared subject→position mapper
+        └── check_player_news_slice.py       # ✅ built — §2 Stage C gate (HARD — Stage C is deterministic): independently recomputes each player's expected inherited claim set from the dossier+registry and demands an exact multiset match incl. inheritance tag + provenance; + coverage / identity / thinness honesty / zero-signal / retention safety (cited ids survive) (exit 0)
     ├── ai/                         # the AI layer — distinct from the deterministic polars transforms. Parquet I/O still via data_layer; the Anthropic call is external (like a fetcher's HTTP). Two reads now: §7 Manager Dossiers (Phase B) + §2 Team News Dossier (news pipeline Stage B)
         ├── client.py                  # ✅ built — the isolation seam: api_available() key gate (locked on absent/placeholder/non-sk-ant) + the ONE synchronous call point _raw_call (Haiku 4.5, no thinking/effort; THE swap point for a Batch path); generate_dossier() parses a JSON object, generate_claims() parses a JSON ARRAY (Stage B) — both tolerant json.loads NOT messages.parse
         ├── dossier_prompt.py          # ✅ built — §7 pure prompt construction: system_prompt (fixed 7-key JSON schema + tendencies-not-verdicts guardrails) + user_prompt (blindspot framing for is_primary / exploitable-edge for opponents) + zero_signal_dossier (hardcoded "no intel")

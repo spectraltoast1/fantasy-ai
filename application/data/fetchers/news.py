@@ -37,7 +37,7 @@ import html
 import re
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import feedparser
@@ -48,6 +48,11 @@ from application.data import data_layer
 from application.data.fetchers import sleeper
 
 SKILL_POSITIONS = ("QB", "RB", "WR", "TE")
+
+# Content retention (§2 Stage C): keep raw article `content` this long, then null it (the row/link
+# survive). Must exceed the Stage-B synthesis window (WINDOW_DAYS=14) by a safe margin, so pruning
+# can never null a body still inside an extraction window.
+RETENTION_DAYS = 28
 
 # --- Team feed registry: 3 native RSS sources per team, all 96 validated live ---
 # (abbr, official_domain, sbnation_domain, fansided_domain). Feed URLs are built by _build_registry:
@@ -337,6 +342,29 @@ def snapshot(*, team_filter: str | None = None) -> None:
         print(f"  ⚠ BELOW RESILIENCE FLOOR (<2/3 feeds): {', '.join(below)}")
 
 
+def prune(*, dry_run: bool = False) -> None:
+    """Retention: null raw article `content` older than RETENTION_DAYS (keeps the row + link + claims).
+
+    The store grows unbounded (daily append-only; the first run was a ~5k backfill reaching to 2018).
+    Content is only extraction fuel inside the ~2-week window, so old bodies are pure weight. This
+    computes the cutoff from RETENTION_DAYS and calls the data_layer pruner. `--dry-run` reports the
+    numbers without writing — always eyeball those first (nulling content is irreversible).
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)).date().isoformat()
+    rep = data_layer.prune_team_news_raw_content(cutoff, dry_run=dry_run)
+    tag = "DRY-RUN" if dry_run else "LIVE"
+    print(f"News content retention [{tag}] — cutoff {cutoff} (keep last {RETENTION_DAYS}d of content)")
+    print(f"  store {rep['total']} rows; oldest {rep['oldest']}; {rep['eligible']} older than cutoff; "
+          f"{rep['to_null']} with content to null (~{rep['chars_freed'] // 1000} kchars)")
+    if dry_run:
+        print("  (dry-run — nothing written; re-run without --dry-run to apply)")
+    elif rep["written"]:
+        print("  ✓ content nulled for pruned rows; article_id / title / url / published_at + the "
+              "derived claims are kept")
+    else:
+        print("  nothing to prune")
+
+
 def check() -> bool:
     """Credit-free synthetic self-check of the resolver (registry-independent): exact match,
     non-match, same-name collision resolved by team, and collision-without-cue skipped."""
@@ -369,8 +397,10 @@ def check() -> bool:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Team-news RSS collector (§2 pipeline Stage A).")
     parser.add_argument("command", nargs="?", default="snapshot",
-                        choices=["snapshot", "feeds", "check"])
+                        choices=["snapshot", "feeds", "check", "prune"])
     parser.add_argument("--team", default=None, help="limit snapshot to one team abbr (e.g. KC)")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="prune: report what would be nulled without writing")
     args = parser.parse_args()
 
     if args.command == "feeds":
@@ -380,6 +410,8 @@ def main() -> None:
         print(f"  {len(_TEAM_FEEDS)} feeds across {len(_TEAM_SITES)} teams")
     elif args.command == "check":
         sys.exit(0 if check() else 1)
+    elif args.command == "prune":
+        prune(dry_run=args.dry_run)
     else:
         snapshot(team_filter=args.team)
 

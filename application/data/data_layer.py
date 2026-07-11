@@ -528,6 +528,51 @@ def team_news_raw_exists() -> bool:
     return _team_news_raw_path().exists()
 
 
+def prune_team_news_raw_content(cutoff_date: str, *, dry_run: bool = False) -> dict:
+    """Null the heavy `content` of raw articles older than `cutoff_date`, KEEPING the row.
+
+    Retention for the growing raw store (§2 Stage C). The Stage-B extraction only ever reads a ~2-week
+    window, so an article's `content` is dead weight once it's well past that — but the row itself is
+    still worth keeping. This nulls `content` where `published_at < cutoff_date` (a YYYY-MM-DD string)
+    and leaves everything else intact: `article_id` / `team` / `source_type` / `title` / `url` /
+    `published_at` all survive, so the derived claims (which cite `article_id`, never the text) and the
+    url+date Wayback-recall path are untouched. Idempotent (already-null content stays null; a re-poll
+    can't restore it — the append-writer dedups on `article_id`). Rows with a null/undatable
+    `published_at` are never pruned (can't be dated → kept conservatively).
+
+    Returns a report dict; `dry_run=True` computes it without writing (the numbers to eyeball first).
+    """
+    empty = {"total": 0, "eligible": 0, "to_null": 0, "chars_freed": 0,
+             "oldest": None, "cutoff": cutoff_date, "written": False}
+    path = _team_news_raw_path()
+    if not path.exists():
+        return empty
+    df = pl.read_parquet(path)
+    if df.is_empty():
+        return empty
+    day = pl.col("published_at").str.slice(0, 10)
+    old = day < cutoff_date
+    has_content = pl.col("content").is_not_null() & (pl.col("content").str.len_chars() > 0)
+    to_null = df.filter(old & has_content)
+    report = {
+        "total": df.height,
+        "eligible": df.filter(old).height,                       # rows older than the cutoff
+        "to_null": to_null.height,                               # rows whose content actually changes
+        "chars_freed": int(to_null.select(pl.col("content").str.len_chars().sum()).item() or 0),
+        "oldest": df.select(day.min()).item(),
+        "cutoff": cutoff_date,
+        "written": False,
+    }
+    if dry_run or to_null.height == 0:
+        return report
+    pruned = df.with_columns(
+        pl.when(old).then(pl.lit(None, dtype=pl.Utf8)).otherwise(pl.col("content")).alias("content")
+    )
+    pruned.write_parquet(path)
+    report["written"] = True
+    return report
+
+
 # --- Team News Dossier (weekly per-team synthesis, §2 news pipeline Stage B) ---
 # Stage B distills team_news_raw (Stage A) into a compact, situation/security-focused
 # "news sheet" per team-week: a set of scope-tagged claims (player / position_group / unit),
@@ -578,6 +623,57 @@ def read_team_news_dossier(team: str | None = None, season: int | None = None,
 
 def team_news_dossier_exists() -> bool:
     return _team_news_dossier_path().exists()
+
+
+# --- Player News Slice (per-player inheritance view, §2 news pipeline Stage C) ---
+# Stage C collapses each team's Stage-B news sheet (`team_news_dossier`) down to ONE player by
+# INHERITANCE: a skill player inherits his own resolved `player` claims + his `position_group`
+# claims (his position, plus team-wide offensive context) + his team's `unit` claims (offense +
+# the one condensed defense note). Deterministic reshape — no AI. The per-player consumable the
+# §2 synthesis (QUEUED #2) reads next to the ros_outcome_shape anchors. Every on-team skill player
+# is present; one who inherits nothing gets an explicit is_empty "no-signal" row (honest-zero) so
+# thinness is queryable, not an inferred absence. Each row carries a `signal_tier` (rich/thin/none)
+# + counts (the thinness tripwire). Grain = one inherited-claim row per (season, week, player,
+# claim). One growing file, tall over player-weeks. Writer is REPLACE-BY (season, week): the whole
+# week's slice is a pure function of that week's dossier, so a re-run regenerates it wholesale.
+
+
+def _player_news_slice_path() -> Path:
+    return _SNAPSHOT_DIR / "news" / "player_news_slice.parquet"
+
+
+def write_player_news_slice(df: pl.DataFrame) -> None:
+    """Replace the (season, week) slices present in `df`, leaving other weeks intact.
+
+    Every (season, week) tuple appearing in `df` is dropped from the store first, then the new rows
+    appended — so a re-run of a week overwrites it (idempotent). Concat is diagonal so a later schema
+    tweak doesn't break the append.
+    """
+    path = _player_news_slice_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    keys = df.select("season", "week").unique()
+    if path.exists():
+        existing = pl.read_parquet(path)
+        existing = existing.join(keys, on=["season", "week"], how="anti")
+        df = pl.concat([existing, df], how="diagonal")
+    df.write_parquet(path)
+
+
+def read_player_news_slice(sleeper_player_id: str | None = None, season: int | None = None,
+                           week: int | None = None) -> pl.DataFrame:
+    """Read the per-player inherited news slice, optionally filtered by player / season / week."""
+    df = pl.read_parquet(_player_news_slice_path())
+    if sleeper_player_id is not None:
+        df = df.filter(pl.col("sleeper_player_id") == sleeper_player_id)
+    if season is not None:
+        df = df.filter(pl.col("season") == season)
+    if week is not None:
+        df = df.filter(pl.col("week") == week)
+    return df
+
+
+def player_news_slice_exists() -> bool:
+    return _player_news_slice_path().exists()
 
 
 # --- Projections (multi-source: Sleeper now, FantasyPros in-season) ---
