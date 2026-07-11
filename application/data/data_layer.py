@@ -528,6 +528,51 @@ def team_news_raw_exists() -> bool:
     return _team_news_raw_path().exists()
 
 
+def prune_team_news_raw_content(cutoff_date: str, *, dry_run: bool = False) -> dict:
+    """Null the heavy `content` of raw articles older than `cutoff_date`, KEEPING the row.
+
+    Retention for the growing raw store (§2 Stage C). The Stage-B extraction only ever reads a ~2-week
+    window, so an article's `content` is dead weight once it's well past that — but the row itself is
+    still worth keeping. This nulls `content` where `published_at < cutoff_date` (a YYYY-MM-DD string)
+    and leaves everything else intact: `article_id` / `team` / `source_type` / `title` / `url` /
+    `published_at` all survive, so the derived claims (which cite `article_id`, never the text) and the
+    url+date Wayback-recall path are untouched. Idempotent (already-null content stays null; a re-poll
+    can't restore it — the append-writer dedups on `article_id`). Rows with a null/undatable
+    `published_at` are never pruned (can't be dated → kept conservatively).
+
+    Returns a report dict; `dry_run=True` computes it without writing (the numbers to eyeball first).
+    """
+    empty = {"total": 0, "eligible": 0, "to_null": 0, "chars_freed": 0,
+             "oldest": None, "cutoff": cutoff_date, "written": False}
+    path = _team_news_raw_path()
+    if not path.exists():
+        return empty
+    df = pl.read_parquet(path)
+    if df.is_empty():
+        return empty
+    day = pl.col("published_at").str.slice(0, 10)
+    old = day < cutoff_date
+    has_content = pl.col("content").is_not_null() & (pl.col("content").str.len_chars() > 0)
+    to_null = df.filter(old & has_content)
+    report = {
+        "total": df.height,
+        "eligible": df.filter(old).height,                       # rows older than the cutoff
+        "to_null": to_null.height,                               # rows whose content actually changes
+        "chars_freed": int(to_null.select(pl.col("content").str.len_chars().sum()).item() or 0),
+        "oldest": df.select(day.min()).item(),
+        "cutoff": cutoff_date,
+        "written": False,
+    }
+    if dry_run or to_null.height == 0:
+        return report
+    pruned = df.with_columns(
+        pl.when(old).then(pl.lit(None, dtype=pl.Utf8)).otherwise(pl.col("content")).alias("content")
+    )
+    pruned.write_parquet(path)
+    report["written"] = True
+    return report
+
+
 # --- Team News Dossier (weekly per-team synthesis, §2 news pipeline Stage B) ---
 # Stage B distills team_news_raw (Stage A) into a compact, situation/security-focused
 # "news sheet" per team-week: a set of scope-tagged claims (player / position_group / unit),
