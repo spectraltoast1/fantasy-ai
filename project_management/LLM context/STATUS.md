@@ -183,6 +183,30 @@ reads + the dossiers (unchanged by this cleanup).
           Remaining: more panels (per the Build Order below), deployment.
 
 ## Current build target
+
+> **⭐ NEXT BUILD (chosen 2026-07-10 for the next session): §2 ROS Outcome Shape — the AI-interpretation
+> layer (Phase 6).** Today the read ships only its **quantitative skeleton**
+> (`compute_ros_outcome_shape.py`: the bull/bear band + the preseason ADP anchor + situation/security
+> evidence carried from the player-signal trust axis). **The AI-interpretation layer is NOT built** —
+> `application/ai/` is §7 Manager-Dossiers-only (zero §2 code; verified). Per **`scope docs/DECISION_READS.md
+> §2`** (read it — the full spec), this layer's three jobs: **(1)** interpret unstructured news/context
+> (depth charts, injuries, coaching/scheme change, roster/personnel moves) into structured **situation
+> signals**; **(2)** write the short **bull/bear narrative** (the "why"); **(3)** roll the narrative +
+> signals into a **confidence-flagged 1-10 grade**. Guardrails (from the spec): **anchor the AI to the
+> structured inputs** (opportunity trend + **draft capital/ADP** — now materialised by the #4 anchor:
+> `adp_ecr`/`best`/`worst` + `anchor_floor`/`ceiling` already on `ros_outcome_shape` — + the projection
+> range), **always show the narrative with the grade**, and **flag confidence** (law 2 — qualitative +
+> AI = the least provable read).
+>
+> **What it needs — 3 new pieces on the existing §7 AI seam:** (a) a **news/context feed fetcher** — the
+> messy/unstructured input, and the **real gap**: no such feed is fetched anywhere today (the primary
+> blocker to start); (b) a **§2 prompt module** (mirror `ai/dossier_prompt.py`) anchored to the
+> ros_outcome_shape structured quantities; (c) a **writer** (mirror `ai/write_manager_dossiers.py`) that
+> emits the narrative + grade + confidence. **Reuse, don't rebuild:** `ai/client.py` is a generic
+> isolation seam (`api_available()` API-key gate + one model-call point, Haiku, SDK-version-safe
+> `json.loads`) — the §2 layer builds on it. Architecturally distinct from the polars/stats transforms
+> and dependent on the quantitative reads as anchors, which is why it was sequenced late (Phase 6).
+
 **Phase 1 (the spike signal-quality slice) is COMPLETE** — all four parts shipped:
 (1) the engine (`compute_player_signal.py`), (2) the backtest gate (beats naive
 recent-points −13% MAE on the full-2025 answer key), (3) the Players sub-view surface
