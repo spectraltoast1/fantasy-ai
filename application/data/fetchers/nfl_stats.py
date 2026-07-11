@@ -19,6 +19,9 @@ _DATA_DIR = _HERE.parent                      # .../application/data/
 # data_layer.py lives one level up in application/data/ — all snapshot/cache I/O
 # goes through it (the fetcher constructs no paths and calls no polars read/write).
 from application.data import data_layer
+# The expected-points component list is owned by the scoring seam so the fetcher (which stores the
+# raw components) and the read (which re-scores them) agree on one source of truth.
+from application.data.transforms import _scoring
 
 
 def _build_player_id_map() -> pl.DataFrame:
@@ -69,35 +72,51 @@ def _load_team_rates(year: int) -> pl.DataFrame:
     ]).select(["team", "week", "team_pass_rate", "team_rush_rate"])
 
 
-def _load_pbp_quality(year: int) -> pl.DataFrame:
-    """Return (gsis_id, week, xtd, redzone_touches) from play-by-play.
-
-    `xtd` is the sum of nflfastR's per-play `td_prob` (expected-TD probability given
-    down/distance/yardline/score/time) over every touch a player is credited with —
-    rush attempts (rusher_player_id), targets (receiver_player_id, complete or not),
-    and pass attempts (passer_player_id). It's the Quality axis from the Decision
-    Reads spec (DECISION_READS.md §1): an expected-value weight per chance, independent
-    of how many chances a player got. `redzone_touches` (yardline_100 <= 20) is the
-    legible companion evidence. Player ids are already gsis_id format, matching every
-    other join in this fetcher — no new id mapping needed.
+def _load_redzone_touches(year: int) -> pl.DataFrame:
+    """Return (gsis_id, week, redzone_touches) from play-by-play — the legible companion evidence for
+    the Quality read (a player's touches inside the 20). The Quality axis *itself* is now the
+    ff_opportunity expected-points model (`_load_ff_opportunity`, DECISION_READS §1), which retired the
+    old hand-rolled `xtd = Σ td_prob` TD-proxy; this keeps only the red-zone volume that model doesn't
+    express. Player ids are already gsis_id format, matching every other join here — no id mapping.
     """
     pbp = nflreadpy.load_pbp(year).filter(pl.col("season_type") == "REG")
     redzone = pl.col("yardline_100") <= 20
 
     rush = pbp.filter(
         pl.col("rush_attempt") == 1, pl.col("rusher_player_id").is_not_null()
-    ).select(pl.col("rusher_player_id").alias("gsis_id"), "week", "td_prob", redzone.alias("redzone"))
+    ).select(pl.col("rusher_player_id").alias("gsis_id"), "week", redzone.alias("redzone"))
     targets = pbp.filter(
         pl.col("pass_attempt") == 1, pl.col("receiver_player_id").is_not_null()
-    ).select(pl.col("receiver_player_id").alias("gsis_id"), "week", "td_prob", redzone.alias("redzone"))
+    ).select(pl.col("receiver_player_id").alias("gsis_id"), "week", redzone.alias("redzone"))
     passes = pbp.filter(
         pl.col("pass_attempt") == 1, pl.col("passer_player_id").is_not_null()
-    ).select(pl.col("passer_player_id").alias("gsis_id"), "week", "td_prob", redzone.alias("redzone"))
+    ).select(pl.col("passer_player_id").alias("gsis_id"), "week", redzone.alias("redzone"))
 
     touches = pl.concat([rush, targets, passes], how="vertical")
     return touches.group_by("gsis_id", "week").agg(
-        pl.col("td_prob").sum().alias("xtd"),
         pl.col("redzone").sum().cast(pl.Int64).alias("redzone_touches"),
+    )
+
+
+def _load_ff_opportunity(year: int) -> pl.DataFrame:
+    """Return (gsis_id, week, *expected-points components) from ffverse's ff_opportunity model.
+
+    The empirical Quality basis (DECISION_READS §1): ffverse fits, from historical play-by-play, the
+    **expected** fantasy value of each chance (target depth / air yards, field position, down &
+    distance) and exposes it as per-component expectations — `receptions_exp`, `rec_yards_gained_exp`,
+    `rec_touchdown_exp`, `rush_*_exp`, `pass_*_exp`, `*_first_down_exp`, `*_two_point_conv_exp`. The
+    read re-scores these under the league's settings (`_scoring.expected_points_expr`) at the
+    consumption layer — so the fetcher stores the raw components, scoring-agnostic. `player_id` is
+    gsis_id (joins like every other source here). Non-null ids, REG weeks (≤ 18) — 1 row per
+    (gsis, week).
+    """
+    df = nflreadpy.load_ff_opportunity(year, stat_type="weekly").filter(
+        pl.col("player_id").is_not_null() & (pl.col("week") <= 18)
+    )
+    return df.select(
+        pl.col("player_id").alias("gsis_id"),
+        pl.col("week").cast(pl.Int64),
+        *_scoring.EXP_COMPONENT_COLS,
     )
 
 
@@ -128,15 +147,22 @@ def _fetch_and_save(year: int, week: int | None = None) -> None:
         rates = rates.filter(pl.col("week") == week)
     stats = stats.join(rates, on=["team", "week"], how="left")
 
-    print("  Loading play-by-play quality signal...")
-    quality = _load_pbp_quality(year)
+    print("  Loading red-zone touches (companion evidence)...")
+    redzone = _load_redzone_touches(year)
     if week is not None:
-        quality = quality.filter(pl.col("week") == week)
+        redzone = redzone.filter(pl.col("week") == week)
     stats = stats.join(
-        quality, left_on=["player_id", "week"], right_on=["gsis_id", "week"], how="left"
+        redzone, left_on=["player_id", "week"], right_on=["gsis_id", "week"], how="left"
+    ).with_columns(pl.col("redzone_touches").fill_null(0))
+
+    print("  Loading ff_opportunity expected-points components (Quality axis)...")
+    ff_opp = _load_ff_opportunity(year)
+    if week is not None:
+        ff_opp = ff_opp.filter(pl.col("week") == week)
+    stats = stats.join(
+        ff_opp, left_on=["player_id", "week"], right_on=["gsis_id", "week"], how="left"
     ).with_columns(
-        pl.col("xtd").fill_null(0.0),
-        pl.col("redzone_touches").fill_null(0),
+        [pl.col(c).fill_null(0.0) for c in _scoring.EXP_COMPONENT_COLS]
     )
 
     stats = stats.with_columns([

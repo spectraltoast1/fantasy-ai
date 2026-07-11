@@ -390,5 +390,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
     run(args.season, args.week)
     # Audit runs automatically after every join to resolve any remainders.
-    import audit_join
+    from application.data.transforms import audit_join
     audit_join.audit(args.season, args.week)

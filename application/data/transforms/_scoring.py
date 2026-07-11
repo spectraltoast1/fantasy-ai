@@ -189,3 +189,60 @@ def actual_points_expr(profile: str, scoring: dict) -> pl.Expr:
     if profile == "std":
         return pl.col("fantasy_points")
     return (pl.col("fantasy_points_ppr") + pl.col("fantasy_points")) / 2.0  # half
+
+
+# --- Expected-points engine (ff_opportunity component expectations) ------------------------------
+
+# Each Sleeper scoring key → its ffverse/ff_opportunity expected component + the standard-scoring
+# default weight. Unlike the projection substrate (opaque `proj_pts`, forcing the delta engine and
+# rejecting first-down bonuses), ff_opportunity exposes **every** component — so expected points are a
+# clean from-scratch weighted sum that reproduces `total_fantasy_points_exp` under PPR to ~0.02 pts,
+# and it can even score first-down leagues (the component exists). Order-independent.
+_EXP_TERMS = [
+    ("pass_yd", "pass_yards_gained_exp", 0.04),
+    ("pass_td", "pass_touchdown_exp", 4.0),
+    ("pass_int", "pass_interception_exp", -2.0),
+    ("pass_2pt", "pass_two_point_conv_exp", 2.0),
+    ("rush_yd", "rush_yards_gained_exp", 0.1),
+    ("rush_td", "rush_touchdown_exp", 6.0),
+    ("rush_2pt", "rush_two_point_conv_exp", 2.0),
+    ("rec_yd", "rec_yards_gained_exp", 0.1),
+    ("rec_td", "rec_touchdown_exp", 6.0),
+    ("rec_2pt", "rec_two_point_conv_exp", 2.0),
+    ("rec", "receptions_exp", 0.0),          # PPR value; std default 0 (no reception points)
+    ("pass_fd", "pass_first_down_exp", 0.0),  # first-down bonuses: 0 unless the league scores them
+    ("rush_fd", "rush_first_down_exp", 0.0),
+    ("rec_fd", "rec_first_down_exp", 0.0),
+]
+# The exp columns a df must carry for expected_points_expr — the fetcher (nfl_stats._load_ff_opportunity)
+# joins exactly these; exported so the fetcher and the read agree on one list.
+EXP_COMPONENT_COLS = [col for _, col, _ in _EXP_TERMS]
+
+
+def expected_points_expr(scoring: dict) -> pl.Expr:
+    """A player's **expected** fantasy points under the league scoring, from the ff_opportunity
+    component expectations — the empirical Quality basis (DECISION_READS §1): the value his chances are
+    worth, independent of how many he got. A from-scratch weighted sum (exact here — every component is
+    exposed, see `_EXP_TERMS`), so it re-derives under *any* scoring: PPR variants, 6-pt pass TD,
+    first-down leagues, and TE-premium reception bonuses (gated on position, like the delta engine).
+    Applied at the consumption layer (compute_player_signal) on the joined `*_exp` columns."""
+    terms: list[pl.Expr] = []
+    for key, col, default in _EXP_TERMS:
+        w = float(scoring.get(key, default))
+        if abs(w) > _TOL:
+            terms.append(w * pl.col(col).fill_null(0.0))
+    # Position-conditional per-reception bonuses (TE premium family) — same `receptions_exp` component.
+    for key, pos in _REC_BONUS_POS.items():
+        bonus = float(scoring.get(key, 0.0))
+        if _nonzero(bonus):
+            terms.append(
+                pl.when(pl.col("position") == pos)
+                .then(bonus * pl.col("receptions_exp").fill_null(0.0))
+                .otherwise(0.0)
+            )
+    if not terms:
+        return pl.lit(0.0)
+    total = terms[0]
+    for t in terms[1:]:
+        total = total + t
+    return total
