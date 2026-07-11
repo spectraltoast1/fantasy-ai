@@ -16,7 +16,9 @@ positional norm. So recent production is decomposed:
     forward as the anchor.
   - points per opportunity (`ppo`) — the fragile part, shrunk toward the league-wide
     positional mean by sample size (a player with few games gets pulled harder toward
-    the norm; SHRINK_K games of "prior" weight).
+    the norm; SHRINK_K games of "prior" weight). (Shrinking toward the player's own
+    model-expected efficiency was tested and lost to the positional mean on the answer
+    key — see `_player_signal`; the model feeds the §1 Quality axis, not this forecast.)
 
 `expected_ppg = opp_g * shrunk_ppo` is the volume-anchored, efficiency-regressed
 estimate. The headline is **regression_risk = 1 - expected_ppg / recent_ppg**: the
@@ -195,11 +197,16 @@ def _player_signal(agg, pos_mean_ppo, *, shrink_k, min_games, spike_band, sticky
     exp_pts_g = agg.get("exp_pts_g", 0.0)
 
     low_sample = games < min_games or opp_g <= 0.0
-    quality_rate = exp_pts_g / opp_g if opp_g > 0 else 0.0
+    quality_rate = exp_pts_g / opp_g if opp_g > 0 else 0.0  # exp_ppo: the model's expected efficiency
     luck = ppg - exp_pts_g  # observed minus expected points per game (variance/luck residual)
     ppo = ppg / opp_g if opp_g > 0 else 0.0
-    # Shrink efficiency toward the positional norm by sample size; opportunity is the
-    # anchor and is carried forward as-is (the sticky half).
+    # Shrink realized efficiency toward the league positional mean by sample size; opportunity is the
+    # anchor and is carried forward as-is (the sticky half). **The 710 #3 upgrade to shrink toward the
+    # player's own model-expected efficiency (exp_ppo) was tested and REJECTED by the answer key** —
+    # it lost to the positional mean at every SHRINK_K (K=6: MAE 2.699 vs 2.599). Forecasting efficiency
+    # is regression toward the *population*; exp_ppo (built on the same recent weeks) is too correlated
+    # with realized ppo to supply that pull. So the model serves the §1 Quality axis (quality_rate /
+    # luck / point_correlation), not the core forecast — validate the bet, don't assume it.
     shrunk_ppo = (games * ppo + shrink_k * pos_mean_ppo) / (games + shrink_k)
     expected_ppg = opp_g * shrunk_ppo
     regression_risk = 1.0 - expected_ppg / ppg if ppg > 0 else 0.0

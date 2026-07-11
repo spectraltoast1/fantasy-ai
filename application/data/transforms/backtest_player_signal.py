@@ -20,11 +20,14 @@ Method (no peeking — the input window is strictly before the truth window):
       signal = expected_ppg              (opportunity × efficiency-regressed-to-mean)
   - Reported on the population with a real recent sample and a real rest sample.
 
-Two verdicts:
+Three verdicts:
   1. Predictive — does `signal` beat `naive` on MAE / RMSE / correlation?
   2. Decision-relevant — among HOT players (top-tercile recent ppg, which the naive
      read cannot tell apart), does the read's `spike` group regress more than the
      `sticky` group? This is the actual product question.
+  3. Quality axis (§1) — does the model-expected efficiency (`quality_rate` = exp_ppo)
+     forecast a player's rest-of-season realized efficiency (pts/opp) better than his
+     recent realized efficiency (`ppo`)? The Quality axis's own answer-key check.
 
 Usage:
     python -m application.data.transforms.backtest_player_signal --season 2025
@@ -39,6 +42,7 @@ import polars as pl
 
 from application.data import data_layer
 from application.data.transforms._analytics import round1
+from application.data.transforms._scoring import EXP_COMPONENT_COLS, expected_points_expr
 from application.data.transforms.compute_player_signal import (
     MIN_GAMES,
     OPP_HALF_LIFE_WK,
@@ -63,16 +67,16 @@ SWEEP_HALF_LIVES = [None, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0]
 def _series(df: pl.DataFrame) -> pl.DataFrame:
     """Per-player recent series from a raw nfl_stats slice (keyed on display name — the
     backtest validates the scoring math, not the roster plumbing). Carries the per-week
-    (pts, opp, td_pts, xtd) list so `_weighted_rates` can derive EWMA rates at any
-    half-life — the same path the transform ships. `xtd` (play-by-play quality) is
-    already a column on nfl_stats — read straight off the raw slice, no join needed."""
+    (pts, opp, td_pts, exp_pts) list so `_weighted_rates` can derive EWMA rates at any
+    half-life — the same path the transform ships. `exp_pts` (the league-scored expected
+    points, the Quality basis) is added to the slice by `_load`, no join needed."""
     return (
         df.with_columns(opportunity_expr().alias("opp"), td_points_expr().alias("td_pts"))
         .group_by("player_display_name", "position")
         .agg(
             pl.len().alias("games"),
             pl.struct(
-                "week", pl.col("fantasy_points_ppr").alias("pts"), "opp", "td_pts", "xtd"
+                "week", pl.col("fantasy_points_ppr").alias("pts"), "opp", "td_pts", "exp_pts"
             ).alias("weeks"),
         )
     )
@@ -109,7 +113,7 @@ def _predict(series: pl.DataFrame, pos_mean: dict, half_life) -> pl.DataFrame:
         weeks = [
             {
                 "week": int(w["week"]), "pts": float(w["pts"]), "opp": float(w["opp"]),
-                "td_pts": float(w["td_pts"]), "xtd": float(w["xtd"]),
+                "td_pts": float(w["td_pts"]), "exp_pts": float(w["exp_pts"]),
             }
             for w in r["weeks"]
         ]
@@ -141,7 +145,10 @@ def _corr(p, y):
 
 
 def _load(season: int) -> pl.DataFrame:
-    """Cleaned skill-position stats (usage/score nulls → 0) for the season."""
+    """Cleaned skill-position stats (usage/score nulls → 0) for the season, with `exp_pts` — the
+    league-scored expected points (the Quality basis) — derived from the ff_opportunity components
+    exactly as the transform does (`expected_points_expr`), so the gate exercises the shipped math."""
+    scoring = data_layer.read_scoring_settings(season)
     return data_layer.read_nfl_stats(season).filter(
         pl.col("position").is_in(SKILL_POSITIONS)
     ).with_columns(
@@ -149,10 +156,10 @@ def _load(season: int) -> pl.DataFrame:
             pl.col(c).fill_null(0.0)
             for c in [
                 "carries", "targets", "attempts", "fantasy_points_ppr",
-                "rushing_tds", "receiving_tds", "passing_tds", "xtd",
+                "rushing_tds", "receiving_tds", "passing_tds", *EXP_COMPONENT_COLS,
             ]
         ]
-    )
+    ).with_columns(expected_points_expr(scoring).alias("exp_pts"))
 
 
 def _evaluate(stats: pl.DataFrame, recent_weeks, rest_weeks, half_life):
@@ -165,8 +172,13 @@ def _evaluate(stats: pl.DataFrame, recent_weeks, rest_weeks, half_life):
 
     rest = (
         stats.filter(pl.col("week").is_in(rest_weeks))
+        .with_columns(opportunity_expr().alias("opp"))
         .group_by("player_display_name")
-        .agg(pl.len().alias("rest_games"), pl.col("fantasy_points_ppr").mean().alias("rest_ppg"))
+        .agg(
+            pl.len().alias("rest_games"),
+            pl.col("fantasy_points_ppr").mean().alias("rest_ppg"),
+            pl.col("opp").mean().alias("rest_opp_g"),
+        )
     )
     df = (
         pred.join(rest, on="player_display_name", how="inner")
@@ -242,6 +254,21 @@ def run(season: int, recent_weeks, rest_weeks, half_life=OPP_HALF_LIFE_WK) -> bo
         print(f"    {r['player_display_name']:<22}{r['position']:<3} recent {r['recent_ppg']:5.1f} → "
               f"rest {r['rest_ppg']:5.1f}  risk {r['regression_risk']:.2f}  td_share {r['td_share']:.2f}")
 
+    # --- Quality-axis test: does model-expected efficiency (quality_rate = exp_ppo) predict a
+    # player's REST-OF-SEASON realized efficiency (pts/opp) better than his recent realized
+    # efficiency (ppo)? The §1 Quality axis's own answer-key check — the whole point of a de-noised,
+    # context-aware efficiency read is that it forecasts true efficiency better than noisy recent. ---
+    q = df.filter(pl.col("rest_opp_g") > 0).with_columns(
+        (pl.col("rest_ppg") / pl.col("rest_opp_g")).alias("ros_ppo")
+    )
+    mae_realized = _mae(q["ppo"], q["ros_ppo"])
+    mae_quality = _mae(q["quality_rate"], q["ros_ppo"])
+    quality_better = mae_quality < mae_realized
+    print(f"\n  Quality axis — predicting rest-of-season efficiency (pts/opp), n={q.height}:")
+    print(f"    recent realized ppo      MAE {mae_realized:.3f}")
+    print(f"    quality_rate (exp_ppo)   MAE {mae_quality:.3f}   → quality "
+          f"{'BEATS' if quality_better else 'does NOT beat'} realized efficiency")
+
     # --- Verdict ---
     passed = _mae(signal, truth) < _mae(naive, truth)
     spike_regresses_more = (
@@ -253,8 +280,10 @@ def run(season: int, recent_weeks, rest_weeks, half_life=OPP_HALF_LIFE_WK) -> bo
     print(f"  VERDICT: predictive {'PASS' if passed else 'FAIL'} "
           f"(signal {'beats' if passed else 'does NOT beat'} naive on MAE); "
           f"decision-relevant {'PASS' if spike_regresses_more else 'FAIL'} "
-          f"(spike group regresses {'more' if spike_regresses_more else 'NOT more'} than sticky).")
-    return passed and spike_regresses_more
+          f"(spike group regresses {'more' if spike_regresses_more else 'NOT more'} than sticky); "
+          f"quality {'PASS' if quality_better else 'FAIL'} "
+          f"(exp_ppo {'beats' if quality_better else 'does NOT beat'} realized efficiency).")
+    return passed and spike_regresses_more and quality_better
 
 
 def _parse_weeks(spec: str):
