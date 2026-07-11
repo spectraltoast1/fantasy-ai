@@ -580,6 +580,57 @@ def team_news_dossier_exists() -> bool:
     return _team_news_dossier_path().exists()
 
 
+# --- Player News Slice (per-player inheritance view, §2 news pipeline Stage C) ---
+# Stage C collapses each team's Stage-B news sheet (`team_news_dossier`) down to ONE player by
+# INHERITANCE: a skill player inherits his own resolved `player` claims + his `position_group`
+# claims (his position, plus team-wide offensive context) + his team's `unit` claims (offense +
+# the one condensed defense note). Deterministic reshape — no AI. The per-player consumable the
+# §2 synthesis (QUEUED #2) reads next to the ros_outcome_shape anchors. Every on-team skill player
+# is present; one who inherits nothing gets an explicit is_empty "no-signal" row (honest-zero) so
+# thinness is queryable, not an inferred absence. Each row carries a `signal_tier` (rich/thin/none)
+# + counts (the thinness tripwire). Grain = one inherited-claim row per (season, week, player,
+# claim). One growing file, tall over player-weeks. Writer is REPLACE-BY (season, week): the whole
+# week's slice is a pure function of that week's dossier, so a re-run regenerates it wholesale.
+
+
+def _player_news_slice_path() -> Path:
+    return _SNAPSHOT_DIR / "news" / "player_news_slice.parquet"
+
+
+def write_player_news_slice(df: pl.DataFrame) -> None:
+    """Replace the (season, week) slices present in `df`, leaving other weeks intact.
+
+    Every (season, week) tuple appearing in `df` is dropped from the store first, then the new rows
+    appended — so a re-run of a week overwrites it (idempotent). Concat is diagonal so a later schema
+    tweak doesn't break the append.
+    """
+    path = _player_news_slice_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    keys = df.select("season", "week").unique()
+    if path.exists():
+        existing = pl.read_parquet(path)
+        existing = existing.join(keys, on=["season", "week"], how="anti")
+        df = pl.concat([existing, df], how="diagonal")
+    df.write_parquet(path)
+
+
+def read_player_news_slice(sleeper_player_id: str | None = None, season: int | None = None,
+                           week: int | None = None) -> pl.DataFrame:
+    """Read the per-player inherited news slice, optionally filtered by player / season / week."""
+    df = pl.read_parquet(_player_news_slice_path())
+    if sleeper_player_id is not None:
+        df = df.filter(pl.col("sleeper_player_id") == sleeper_player_id)
+    if season is not None:
+        df = df.filter(pl.col("season") == season)
+    if week is not None:
+        df = df.filter(pl.col("week") == week)
+    return df
+
+
+def player_news_slice_exists() -> bool:
+    return _player_news_slice_path().exists()
+
+
 # --- Projections (multi-source: Sleeper now, FantasyPros in-season) ---
 # The borrowed forward prior every Phase-2 read rests on (Product Roadmap Phase 2).
 # Normalized, source-agnostic entity: one growing file per season, with `source` as a
