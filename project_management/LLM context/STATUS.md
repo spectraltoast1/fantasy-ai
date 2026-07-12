@@ -1,6 +1,20 @@
 # STATUS
 
-**Last updated:** 2026-07-12 (**§2 ROS SYNTHESIS SHIPPED (QUEUED #2 done) — the AI interpretation
+**Last updated:** 2026-07-12 (**§4 MARKET VOR + PRODUCTION−MARKET TRADE GAP SHIPPED — the primary
+remaining backend read, and the one un-backdatable piece built on CURRENT (2026) data.** The market-value
+twin of Production VOR: the same waiver=0 ÷ pool-spread VOR (reusing the shared `position_pools` /
+`_pool_lines` / `_vor` engine — no new math, law 3) on the borrowed LeagueLogs `value` for the
+format-matched `redraft-1qb-12t-ppr1` profile. New `data_layer` `market_vor` entity
+(`derived/market_vor_{season}.parquet`, tall over the market's `snapshot_date` axis); `compute_market_vor.py`
+(position from the Sleeper registry); the Production−Market **gap folded in** (`trade_gap`). The app is
+frozen at 2025 wk4 but the LeagueLogs series is current 2026 and can't be backdated, so the gap is
+**cross-time by construction** — every row carries `is_cross_time` + `market_season` + `has_production_vor`
+as first-class columns (never fused — the `anchor_is_prior_season` precedent), and it's **POC/architecture
+validation, not a live trade call** until the season rolls to 2026. **Purely additive — nothing reads it
+yet, so the current-vs-2025 split does NOT affect app functioning.** Internal-consistency gate
+`check_market_vor.py` (no answer key at the freeze). Verified live: 31 snapshots → 5270 rows, 170/171
+frozen roster priced, gate exit 0, Production VOR gate unaffected. **Next = front-end surfacing of the
+gated reads.** — Prior: **§2 ROS SYNTHESIS SHIPPED (QUEUED #2 done) — the AI interpretation
 layer, completing the §2 read.** The last mile `compute_ros_outcome_shape.py` deferred ("the AI
 narrative + 1-10 grade roll-up is Phase 6") now exists: a **per-player Claude call** (`application/ai/
 write_ros_synthesis.py`, reusing the `ai/client.py` seam) that **fuses** the quantitative anchor
@@ -108,6 +122,46 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**§4 Market VOR + Production−Market trade gap — the market-value twin of Production VOR (completes the
+§4 read; the un-backdatable POC piece built on CURRENT 2026 data).** The primary remaining backend read.
+Per design law 3 it borrows the LeagueLogs market value and adds only the decision layer — the SAME
+anchoring + normalisation as Production VOR, reusing the shared engine (`_analytics.position_pools`,
+`compute_production_vor._pool_lines`/`_vor`/`_roster_as_of`, `round1`) with **no new VOR math**. **New
+`data_layer` `market_vor` entity** (`snapshots/derived/market_vor_{season}.parquet`; grain one row per
+(snapshot_date, rostered skill player); **tall over the market's `snapshot_date` axis** — the analog of
+Production VOR's `as_of_week`, banking the un-backdatable market series in derived form; `read_market_vor(
+season, snapshot_date=None)` defaults to the latest banked day). **`compute_market_vor.py`:** filters the
+market to the **format-matched** profile `redraft-1qb-12t-ppr1` (redraft ✓ 1QB ✓ full-PPR ✓ — resolves
+the §4 open prereq flag; LeagueLogs only publishes 12-team profiles vs our 10-team, a documented non-issue
+because the waiver line is computed from OUR league's roster/available split, not the profile), joins
+**position from the Sleeper registry** (the feed carries only `position_rank`, no label), resolves the
+frozen-2025 roster/available split (`_roster_as_of` at the freeze week), and per pool sets waiver = best
+**available** value / top = best value → `market_vor = (value − waiver) / (top − waiver)` (waiver=0,
+top≈1, negative = below the best freely-available player). **Pools identical to Production VOR** (QB pool
++ pooled flex line from `lineup_slots`). **The Production−Market gap folded in:** joins the frozen
+Production VOR slice (latest `as_of_week`) → `trade_gap = market_vor − production_vor` (Market ≫ Production
+→ sell; Production ≫ Market → buy/hold; the gap ≈ the speculation premium). **Time-world honesty (the
+crux):** the app is frozen at 2025 wk4 but the LeagueLogs market is **current 2026 and can't be backdated**,
+so the gap is **cross-time by construction** — `is_cross_time` + `market_season` + `production_as_of` +
+`has_production_vor` ride as **first-class columns**; the market number is never silently fused with the
+production number (the `ros_synthesis.anchor_is_prior_season` precedent). At the freeze the gap is
+**POC/architecture validation, NOT a live trade call** (the biggest gaps are cross-time + 1QB-pool-
+compression artifacts — "sell all your QBs" is noise, exactly what the flag warns against); it becomes a
+real signal once the season rolls to 2026 and production is recomputed there. **Purely additive** — a new
+derived parquet + `data_layer` fns + a gate; **nothing in the front end or any existing transform reads
+it**, so the current-vs-2025 split does NOT touch app functioning (front-end surfacing is the next work).
+**Internal-consistency gate `check_market_vor.py`** (no answer key at the 2026-offseason freeze — the
+market has no future truth to grade against here, the `backtest_manager_features`/`check_ros_synthesis`
+regime): recompute-match (persisted == shipped `compute()` frame-for-frame) / VOR algebra (waiver≤top,
+market_vor reproduces (value−waiver)/spread within a spread-aware rounding tol ⇒ monotonic + negatives
+below waiver, top≈1.0) / pool integrity (= Production VOR's pools) / profile+coverage (single profile, no
+picks, ≥95%) / gap honesty (all cross-time flagged; `trade_gap` null iff no production row else exactly
+market−production). Verified live 2026 offseason: **31 snapshots → 5270 rows**, 170/171 frozen roster
+priced (99.4%), 248 no-production rows null (law 2), gate exit 0; Production VOR gate unaffected (corr
+0.944 QB / 0.955 FLEX). No UI (data + gate). **Next — front-end surfacing of the gated forward reads
+(Phase 4).**
+
+> earlier build
 **§2 ROS Synthesis — the per-player AI interpretation call (QUEUED #2; §2 read COMPLETE).** The last
 mile the ROS Outcome Shape skeleton deferred to Phase 6. The project's 3rd AI-layer read, reusing the
 `ai/client.py` isolation seam. **New `application/ai/` trio:** `ros_synthesis_prompt.py` (pure, editable
@@ -167,34 +221,6 @@ COMPLETED reporting "2/5 failed (isolated)" instead of aborting); the gate repro
 real recent gap (07-05 partial → FAIL/exit 1; `--since 3` clean → PASS/exit 0). **Next — QUEUED #2**
 (§2 ROS synthesis call).
 
-> earlier build
-**§2 News pipeline Stage C — per-player slice by inheritance + thinness tripwire + raw-content retention
-(the pipeline is now COMPLETE, A→B→C).** Collapses each team's Stage-B news sheet (`team_news_dossier`)
-down to ONE player by **inheritance** — a deterministic reshape (no AI, no credits), so the gate is
-**hard**. **Two commits + docs.** (1) **Slice + thinness + gate:** new `data_layer` **`player_news_slice`**
-entity (`snapshots/news/player_news_slice.parquet`; grain = one inherited-claim row per
-(season, week, player, claim); write replace-by-(season,week)); `transforms/compute_player_news_slice.py`
-— each on-team skill player inherits his **own** resolved `player` claims + his **position_group** claims
-(subject normalized to his skill position, OR team-wide offensive context — `offense`/`offensive line`/a
-coaching-scheme note → all skill players; unmapped subjects dropped + reported as Stage-B drift) + his
-team's **unit** claims (`offense` + the condensed `defense` note). Thinness tripwire as columns:
-`signal_tier` (rich = ≥1 own / thin = only inherited / none = nothing) + `n_own_claims`/
-`n_inherited_claims`/`team_news_volume`; a player who inherits nothing gets ONE explicit `is_empty`
-"no-signal" row (honest-zero, like positional_depth). Whole NFL skill pool (~967), forward/league-agnostic
-(NOT the frozen-2025 roster). `check_player_news_slice.py` — **independently recomputes** each player's
-expected inherited set from the dossier+registry (does NOT call the compute) and demands an exact multiset
-match incl. the inheritance tag + provenance; + coverage / identity / thinness honesty / zero-signal /
-retention-safety (cited ids survive). (2) **Retention:** `data_layer.prune_team_news_raw_content` +
-`news.py prune [--dry-run]` (`RETENTION_DAYS=28`) — nulls `content` older than the cutoff, keeps the row +
-`article_id`/`title`/`url`/`published_at` + the derived claims (which cite `article_id`, never the text).
-Verified live 2026 wk0: 967 players → 3058 rows (own 168 = the resolved player claims / pg 626 / unit
-2264; tiers rich 160 / thin 807 / none 0 — all 32 teams covered); eyeballed a TE inheriting his own claim
-+ team offense but NOT the WR-room claim, a team-wide o-line claim reaching all 4 positions; slice gate
-exit 0. Prune: dry-run 1243/5021 rows → live kept all 5021 rows (0 null id/url), nulled all old content,
-kept the 28d window (3748 with content), idempotent; both gates still exit 0 post-prune. **The §2
-synthesis (QUEUED #2) now has its news input.** **Next — QUEUED #1** (Daily-collector reliability).
-
-
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
@@ -243,6 +269,7 @@ synthesis (QUEUED #2) now has its news input.** **Next — QUEUED #1** (Daily-co
     - §2 News pipeline Stage C — per-player slice by inheritance + thinness tripwire + raw-content retention (COMPLETES the 3-stage news pipeline A→B→C) — a **deterministic reshape** (no AI), so the gate is **hard**. New data_layer **`player_news_slice`** entity (`snapshots/news/player_news_slice.parquet`; grain = one inherited-claim row per (season,week,player,claim); write replace-by-(season,week)). `transforms/compute_player_news_slice.py`: each on-team skill player (whole NFL skill pool ~967, forward/league-agnostic) inherits his **own** resolved `player` claims + his **position_group** claims (subject normalized to his skill position, OR team-wide offensive context — `offense`/`offensive line`/coaching-scheme → all skill players; unmapped subjects dropped + reported as Stage-B drift) + his team's **unit** claims (`offense` + the condensed `defense` note) from `team_news_dossier`. Thinness tripwire as columns: `signal_tier` (rich=≥1 own / thin=only inherited / none=nothing) + `n_own_claims`/`n_inherited_claims`/`team_news_volume`; a player who inherits nothing gets ONE `is_empty` honest-zero row (like positional_depth's zero-count rows). `transforms/check_player_news_slice.py`: HARD gate — **independently recomputes** each player's expected inherited set from the dossier+registry (does NOT call the compute) and demands an exact multiset match incl. inheritance tag + provenance; + coverage/identity/thinness-honesty/zero-signal/retention-safety. **Retention:** `data_layer.prune_team_news_raw_content` + `fetchers/news.py prune [--dry-run]` (`RETENTION_DAYS=28` > the 14d synthesis window) nulls raw article `content` older than the cutoff, KEEPS the row + `article_id`/`title`/`url`/`published_at` + the derived claims (which cite `article_id`, never the text); idempotent. Verified live 2026 wk0: 967 players → 3058 rows (own 168 = the resolved player claims / pg 626 / unit 2264; tiers rich 160 / thin 807 / none 0); eyeballed a TE inheriting his own claim + team offense but NOT the WR-room claim + a team-wide o-line claim reaching all 4 positions; slice gate exit 0. Prune: dry-run 1243/5021 rows → live kept all 5021 rows (0 null id/url), nulled all old content, kept the 28d window (3748 with content), idempotent; both gates exit 0 post-prune. The §2 synthesis (QUEUED #2) now has its news input: a player's inherited `player_news_slice`. No UI (data + gate). Next — QUEUED #1 (Daily-collector reliability).
     - Daily-collector reliability — shared `_http` resilience layer + collector registry + coverage gate (QUEUED #1) — separation of concerns: retry/backoff/throttle/per-item isolation now live ONCE in `fetchers/_http.py`, so every collector shares a consistent resilient fetch process. **3 commits.** (1) `_http.py`: `get`/`get_json` (bounded timeout + exponential-backoff-with-jitter retry on TRANSIENT failures — timeouts/conn-errors/5xx; a 4xx raises immediately) + `set_throttle` (process min-gap; the manager-activity fan-out raises it) + `isolate` (per-item catch+log+continue). All three HTTP callers migrated: `sleeper._get_json` → behaviour-identical thin wrapper (`set_throttle` re-exported); `news._get_feed` → `_http.get` + `_http.isolate`; **`leaguelogs._get` → `_http.get_json` (ADDS retry) + `snapshot()` per-item isolation** (ADDS it — the fix for the audit's ~7 transient-fail + "dynasty profiles drop first" days). (2) `fetchers/run.py`: declarative collector REGISTRY (leaguelogs + news — the banked daily series; NOT sleeper = on-demand) with cadence + coverage-shape per collector, + a `run <name>|--all|--list` dispatcher (uniform process → post-run freshness); the **meter stays external** (launchd → GitHub Actions calls this same dispatcher — nothing wasted). `fetchers/check_collectors.py`: network-free coverage/health gate — leaguelogs STRICT daily coverage (per-day distinct profiles vs max-seen full day), news RECENCY (append-only); HARD criterion is a recent window (default 7d, excl. today) so permanent powered-off gaps don't fail forever; `--today` monitoring; UTC-dated to match the collectors. (3) Docs. The **off-laptop host** (the ~8 powered-off days — a host problem retry can't fix) stays **deferred to the deployment decision** (GitHub Actions the lead: collects + publishes). Verified: network-free retry/4xx/isolate self-test (PASS); live no-regression on all 3 fetchers; isolation proof (2 forced-dead leaguelogs profiles → the 3 good ones collected + the run COMPLETED reporting "2/5 failed (isolated)" instead of aborting); gate reproduces the audit (leaguelogs full-span 28 complete / 65% / 72% any-data — matches the documented 63%/71%) + flags the real recent gap (07-05 partial → FAIL/exit 1; `--since 3` clean → PASS/exit 0). Next — QUEUED #2 (§2 ROS synthesis call).
     - §2 ROS Synthesis — the per-player AI interpretation call (QUEUED #2; completes the §2 read, the last mile compute_ros_outcome_shape deferred to Phase 6) — the project's 3rd AI-layer read, reusing the `ai/client.py` seam. New `application/ai/` trio + a `data_layer` entity. (1) **`ros_synthesis_prompt.py`** — the pure, editable prompt (`system_prompt()` + `user_prompt(ctx)` + `SYNTHESIS_KEYS` + `zero_signal_synthesis()` + plain-language translations of the internal security/direction labels). (2) **`write_ros_synthesis.py`** — per player: `assemble_player` gathers his `player_news_slice` claims + `ros_outcome_shape` anchor (by id, from `--anchor-season`) + Sleeper injury/depth facts → one `client.generate_dossier` Haiku call → `_validate` (grades 1-10, notes non-empty, headline ids ⊆ the slice, confidence vocab) → row. Modes: `run` (write, run-once superset guard by (season,week,player), `--force`), `--preview` (print output), and the **no-AI** `--render` (print the exact assembled prompt) / `--replay REPLY.json` (run a canned reply through validation) — both need no key/no cost, the prompt-iteration loop. Zero-signal (no anchor AND no news) → hardcoded row, API skipped. (3) **`check_ros_synthesis.py`** — internal-consistency gate (no answer key): coverage / schema / grounding (headlines trace to the slice) / confidence honesty (thin or no-anchor ⇒ not 'high'; zero rows are clean fallbacks) / data-flag honesty + a soft high-precision prose-leak scan. New **`data_layer` `ros_synthesis`** entity (`snapshots/derived/ros_synthesis_{season}.parquet`; grain one row per (season,week,player); replace-by-(season,week,player)). Output columns fully separable: `bull_grade`/`bear_grade`/`situation_grade` (Int, independent axes — no ordering) each with its `*_note`, `headlines` (List(Struct{text, source_article_ids})), `confidence`/`confidence_note`, availability flags (`has_ros_anchor`/`has_news`/`signal_tier`/`n_news_claims`), anchor carries + `anchor_is_prior_season`, `news_content_hash` (future on-demand-cache seam), provenance. **Grade convention (with the PM):** 10=best on all three; bull hard-anchored to a caliber bucket (elite→9-10 … fringe→1-2, full range) and decoupled from downside (that lives in bear/situation). **Prose discipline:** notes are natural manager language; the substrata (percentile/tier/projection/trend) drive the grades but are banned from the prose; attributed news stays. **Season/time-world honesty:** keyed by the news (season,week); a differing anchor season is flagged PRIOR-SEASON, never silently fused (the STATUS caveat — 2026 news × 2025 anchor). Verified live 2026 wk0: 16 players across all regimes (Chase bull 9 … Kraft/Rodriguez 3-4; ~$0.07), gate exit 0, guard tests (run-once / locked-key refusal / partial run hits the API only for the new player / zero-signal skip) all clean. Front-end wiring + the browser on-demand runtime + validated same-season fusion deferred with deployment (no server; key server-side). No UI (data + gate + prompt tooling).
+    - §4 Market VOR + Production−Market trade gap — the market-value twin of Production VOR (completes §4; the primary remaining backend read, and the un-backdatable POC piece built on CURRENT 2026 data). Per law 3 borrows the LeagueLogs market value + adds only the decision layer, reusing the shared engine (`_analytics.position_pools`, `compute_production_vor._pool_lines`/`_vor`/`_roster_as_of`, `round1`) — **no new VOR math**. **2 code commits + docs.** (1) New `data_layer` **`market_vor`** entity (`snapshots/derived/market_vor_{season}.parquet`; grain one row per (snapshot_date, rostered skill player); **tall over the market's `snapshot_date` axis** — the analog of Production VOR's `as_of_week`, banking the un-backdatable series; `read_market_vor(season, snapshot_date=None)` → latest banked day) + `compute_market_vor.py`: filters to the format-matched profile **`redraft-1qb-12t-ppr1`** (redraft/1QB/full-PPR — resolves the §4 open prereq flag; 12t-vs-our-10t a documented non-issue since the waiver line is from OUR roster/available split), joins **position from the Sleeper registry** (feed carries only `position_rank`), resolves the frozen-2025 roster (`_roster_as_of` at the freeze week), per pool sets waiver=best-available / top=best value → `market_vor=(value−waiver)/(top−waiver)`; QB pool + pooled flex line identical to Production VOR. The **Production−Market gap folded in**: joins the frozen Production VOR slice → `trade_gap=market_vor−production_vor` + `is_cross_time`/`market_season`/`production_as_of`/`has_production_vor` as **first-class columns** (the market is CURRENT 2026, rosters/production are 2025 → cross-time by construction, never fused — the `anchor_is_prior_season` precedent; POC/architecture validation, NOT a live trade call, until the season rolls to 2026). **Purely additive** — nothing in the front end or any existing transform reads it, so the current-vs-2025 split does NOT affect app functioning. (2) **Internal-consistency gate `check_market_vor.py`** (no answer key at the 2026-offseason freeze — the `backtest_manager_features`/`check_ros_synthesis` regime): recompute-match (persisted == shipped `compute()`) / VOR algebra (waiver≤top, reproduces (value−waiver)/spread within a spread-aware rounding tol, top≈1.0) / pool integrity (= Production VOR's pools) / profile+coverage (single profile, no picks, ≥95%) / gap honesty (all cross-time flagged; `trade_gap` null iff no production row else exactly market−production). Verified live 2026 offseason: **31 snapshots → 5270 rows**, 170/171 frozen roster priced (99.4%), 248 no-production rows null (law 2), gate exit 0; Production VOR gate unaffected (0.944/0.955). No UI (data + gate). Next — front-end surfacing of the gated forward reads (Phase 4).
 
 > not yet built
     >> backend
@@ -256,6 +283,32 @@ synthesis (QUEUED #2) now has its news input.** **Next — QUEUED #1** (Daily-co
 
 ## Current build target
 
+> **✅ §4 Market VOR + Production−Market trade gap — DONE (2026-07-12).** The **primary remaining backend
+> read** and the only one buildable NOW rather than blocked at the freeze. The market-value twin of
+> Production VOR: the same waiver=0 ÷ pool-spread VOR (reuses the shared `position_pools` / `_pool_lines`
+> / `_vor` engine — no new math, law 3) computed on the borrowed LeagueLogs `value` for the
+> **format-matched** profile `redraft-1qb-12t-ppr1` (resolves the §4 open prereq flag; 10-vs-12-team is a
+> documented non-issue — the waiver line comes from our own roster/available split, not the profile).
+> New `data_layer` `market_vor` entity (`derived/market_vor_{season}.parquet`, **tall over the market's
+> `snapshot_date` axis** — banks the un-backdatable series in derived form); `compute_market_vor.py`
+> (position joined from the Sleeper registry — the feed carries only `position_rank`); the
+> Production−Market **gap folded in** (`trade_gap = market_vor − production_vor`). **Time-world honesty
+> (the crux):** the app is frozen at 2025 wk4 but the market is **current (2026 offseason)** and can't be
+> backdated, so the gap is **cross-time by construction** — every row carries `is_cross_time` +
+> `market_season` + `has_production_vor` as first-class columns, never silently fused (the
+> `anchor_is_prior_season` precedent). **Purely additive** — nothing in the front end or any existing
+> transform reads it, so the current-vs-2025 split does NOT affect app functioning; it's the trade layer
+> banked/wired for the eventual surface. Internal-consistency gate `check_market_vor.py` (no answer key
+> at the freeze — the market has no future truth to grade against here): recompute-match / VOR algebra /
+> pool integrity / profile+coverage / gap honesty. Verified live: 31 snapshots → 5270 rows, 170/171
+> frozen roster priced (99.4%), gate exit 0, Production VOR gate unaffected (0.944/0.955). **The gap is
+> POC/architecture validation, NOT a live trade call** until the season rolls to 2026 and production is
+> recomputed there (at the freeze the largest gaps are cross-time + 1QB-pool-compression artifacts —
+> e.g. "sell all your QBs" is noise, exactly what `is_cross_time` warns against). **Next — front-end
+> surfacing of the gated backend reads** (Phase 4).
+>
+> ---
+>
 > **✅ §2 team-news pipeline (rework) — COMPLETE (2026-07-11).** All three stages shipped:
 > **A collection** (`team_news_raw`) → **B weekly AI synthesis** (`team_news_dossier`) → **C per-player
 > slice by inheritance** (`player_news_slice` — each skill player inherits his own `player` claims + his
