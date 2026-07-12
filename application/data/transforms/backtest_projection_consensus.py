@@ -31,8 +31,8 @@ volatile players both near 50%, where a one-size band over-covers the steady and
 under-covers the volatile.
 
 Usage:
-    python -m application.data.transforms.backtest_projection_consensus --season 2025
-    python -m application.data.transforms.backtest_projection_consensus --season 2025 --sweep
+    python3 -m application.data.transforms.backtest_projection_consensus --season 2025
+    python3 -m application.data.transforms.backtest_projection_consensus --season 2025 --sweep
 """
 
 import argparse

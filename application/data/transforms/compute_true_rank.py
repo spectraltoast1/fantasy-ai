@@ -30,7 +30,7 @@ Monte Carlo (§5 full) is what turns this + the weekly-spread variance into play
 Output: snapshots/derived/true_rank_{season}.parquet, one row per (as_of_week, roster_id).
 
 Usage:
-    python -m application.data.transforms.compute_true_rank --season 2025
+    python3 -m application.data.transforms.compute_true_rank --season 2025
 """
 
 import argparse

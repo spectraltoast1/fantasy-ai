@@ -42,7 +42,7 @@ week 18. read via read_production_vor(season, as_of_week=None) (default = latest
 Output: snapshots/derived/production_vor_{season}.parquet, one row per (as_of_week, rostered player).
 
 Usage:
-    python -m application.data.transforms.compute_production_vor --season 2025
+    python3 -m application.data.transforms.compute_production_vor --season 2025
 """
 
 import argparse

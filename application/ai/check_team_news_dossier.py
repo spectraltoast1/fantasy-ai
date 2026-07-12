@@ -19,7 +19,7 @@ Soft evidence (reported, not gated): claim/scope breakdown, player-resolution ra
 claims cite >1 source type (cross-source corroboration = the trust signal).
 
 Usage:
-    python -m application.ai.check_team_news_dossier [--season 2026] [--week 0]
+    python3 -m application.ai.check_team_news_dossier [--season 2026] [--week 0]
 """
 
 import argparse

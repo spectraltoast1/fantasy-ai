@@ -30,8 +30,8 @@ Three verdicts:
      recent realized efficiency (`ppo`)? The Quality axis's own answer-key check.
 
 Usage:
-    python -m application.data.transforms.backtest_player_signal --season 2025
-    python -m application.data.transforms.backtest_player_signal --season 2025 --recent 1-6   # different freeze
+    python3 -m application.data.transforms.backtest_player_signal --season 2025
+    python3 -m application.data.transforms.backtest_player_signal --season 2025 --recent 1-6   # different freeze
 """
 
 import argparse

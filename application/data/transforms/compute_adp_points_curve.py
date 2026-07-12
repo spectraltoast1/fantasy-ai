@@ -19,8 +19,8 @@ Output: snapshots/derived/adp_points_curve.parquet — one row per (position, po
 floor_ppr / center_ppr / ceiling_ppr + bin count n. Season-agnostic (pooled history), overwrite.
 
 Usage:
-    python -m application.data.transforms.compute_adp_points_curve
-    python -m application.data.transforms.compute_adp_points_curve --holdout 2025
+    python3 -m application.data.transforms.compute_adp_points_curve
+    python3 -m application.data.transforms.compute_adp_points_curve --holdout 2025
 """
 
 import argparse

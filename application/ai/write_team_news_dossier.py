@@ -18,7 +18,7 @@ fantasy-relevant news gets one explicit `is_empty` row. Run-once-per (season, we
 regenerate. The writer replaces only the team-weeks it produced, so `--team KC` is a safe partial run.
 
 Usage:
-    python -m application.ai.write_team_news_dossier [--season 2026] [--week 0] [--team KC] [--force]
+    python3 -m application.ai.write_team_news_dossier [--season 2026] [--week 0] [--team KC] [--force]
 """
 
 import argparse

@@ -8,7 +8,7 @@ manager skips the AI (a hardcoded "no intel" dossier); the whole read is skipped
 is configured; a re-run is a no-op unless `--force` (run once per season).
 
 Usage:
-    python -m application.ai.write_manager_dossiers --season 2025 [--force] [--model claude-haiku-4-5]
+    python3 -m application.ai.write_manager_dossiers --season 2025 [--force] [--model claude-haiku-4-5]
 """
 
 import argparse

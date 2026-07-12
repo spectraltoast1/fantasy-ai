@@ -11,7 +11,7 @@ Any player still unresolvable is left in the remainders file for manual review.
 The joined file is considered "closed" when the remainders file is empty.
 
 Usage:
-    python -m application.data.transforms.audit_join --season 2025 --week 1
+    python3 -m application.data.transforms.audit_join --season 2025 --week 1
 
 Idempotent: safe to re-run. If remainders are already empty the script exits
 immediately without touching the joined file.

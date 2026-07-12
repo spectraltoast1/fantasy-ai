@@ -16,7 +16,7 @@ root, `run(season)` writes. Every manager in the league gets a row — including
 zero comparable-league activity (depth 0, null features), so the profile set is complete.
 
 Usage:
-    python -m application.data.transforms.compute_manager_features --season 2025
+    python3 -m application.data.transforms.compute_manager_features --season 2025
 """
 
 import argparse

@@ -56,7 +56,7 @@ rm ~/Library/LaunchAgents/$LABEL.plist
   Python is the python.org 3.13 build (has polars + requests + feedparser). If Python is
   reinstalled/moved, update `ProgramArguments[0]` and reload both jobs.
 - Each job runs its fetcher as a **package module** (`-m application.data.fetchers.<name>`)
-  with `WorkingDirectory` set to the **repo root** — `python -m` puts the cwd on `sys.path`,
+  with `WorkingDirectory` set to the **repo root** — `python3 -m` puts the cwd on `sys.path`,
   so the `application` package resolves without an editable install. If the repo moves, update
   `WorkingDirectory` (and reload); it is hardcoded to this machine's checkout (`/Users/willdaniel/...`).
 - Logs are under `~/Library/Logs/fantasy-ai/` (outside the repo). Snapshots append to

@@ -23,7 +23,7 @@ from the nfl_stats answer key. Small-sample honesty (10-team league): the freeze
 read, the pooled-over-weeks correlation is reported as evidence only.
 
 Usage:
-    python -m application.data.transforms.backtest_positional_depth --season 2025
+    python3 -m application.data.transforms.backtest_positional_depth --season 2025
 """
 
 import argparse

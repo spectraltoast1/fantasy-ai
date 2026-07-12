@@ -54,7 +54,7 @@ VOR slice); read via read_ros_outcome_shape(season, as_of_week=None) (default = 
 Output: snapshots/derived/ros_outcome_shape_{season}.parquet, one row per (as_of_week, rostered player).
 
 Usage:
-    python -m application.data.transforms.compute_ros_outcome_shape --season 2025
+    python3 -m application.data.transforms.compute_ros_outcome_shape --season 2025
 """
 
 import argparse

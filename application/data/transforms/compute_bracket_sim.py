@@ -27,7 +27,7 @@ The engine, per as-of cutoff N:
 **Playoff config (from the league's real settings).** reg_season_end + playoff_teams come from
 `_playoff_config` reading the persisted `league_settings` (playoff_week_start − 1, playoff_teams) — the
 sim does *not* assume them and raises if they haven't been fetched
-(`python -m application.data.fetchers.sleeper fetch-league-config`).
+(`python3 -m application.data.fetchers.sleeper fetch-league-config`).
 For this league that's a **4-team** championship playoff, playoffs starting wk16 (⇒ regular season ends
 wk15) — correcting an earlier schedule-inferred "6-team" guess. The gate (backtest_bracket_sim.py) is
 still deliberately config-light (win-prob calibration + expected-wins correlation on actual results),
@@ -38,7 +38,7 @@ Tall over as_of_week N=1..maxweek (roster-as-of-N, frozen wks 1–4), each simul
 Output: snapshots/derived/bracket_odds_{season}.parquet, one row per (as_of_week, roster_id).
 
 Usage:
-    python -m application.data.transforms.compute_bracket_sim --season 2025
+    python3 -m application.data.transforms.compute_bracket_sim --season 2025
 """
 
 import argparse
@@ -70,7 +70,7 @@ def _playoff_config(season: int) -> tuple:
     if "playoff_week_start" not in s or "playoff_teams" not in s:
         raise RuntimeError(
             "league_settings missing playoff config — run "
-            "`python -m application.data.fetchers.sleeper fetch-league-config <year>` "
+            "`python3 -m application.data.fetchers.sleeper fetch-league-config <year>` "
             "first. The bracket sim reads the league's real playoff_week_start / playoff_teams; it "
             "does not assume them."
         )

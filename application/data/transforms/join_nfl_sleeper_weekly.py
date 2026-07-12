@@ -13,7 +13,7 @@ Design:
     player_id_map provides gsis_id for players absent from nflreadpy entirely.
 
 Usage:
-    python -m application.data.transforms.join_nfl_sleeper_weekly --season 2025 --week 4
+    python3 -m application.data.transforms.join_nfl_sleeper_weekly --season 2025 --week 4
 """
 
 import argparse
