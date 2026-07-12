@@ -144,9 +144,11 @@ gets repaid — those are the cross-cutting *how* of these reads, not a separate
 - ✅ **Weekly Projection Spread (§3) — DONE.** The percentile band around the
   borrowed weekly center (`compute_projection_consensus.py`); the start/sit read.
   Built alongside the Phase-2 substrate, per-tail calibration-gated.
-- ✅ **Value / VOR (§4) — Production VOR DONE.** Production VOR over the waiver line
-  (`compute_production_vor.py`), gated on the answer key → roster management
-  (adds/drops). **Market VOR + the Production−Market trade gap remain V4.**
+- ✅ **Value / VOR (§4) — COMPLETE (Production + Market + the gap).** Production VOR over the waiver line
+  (`compute_production_vor.py`), answer-key gated → roster management (adds/drops). **Market VOR**
+  (`compute_market_vor.py`) — the market-value twin on the borrowed LeagueLogs value, same engine, +
+  the **Production−Market trade gap**; shipped early as the un-backdatable POC piece (the market is
+  current-2026 and can't be backdated), cross-time-flagged at the freeze, internal-consistency gated.
 - ✅ **True rank (half of §5) — DONE.** Aggregate Production VOR over each team's optimal
   lineup → record-independent roster strength (`compute_true_rank.py`), answer-key gated;
   half of posture. Reused the optimal-lineup engine (lifted into shared `_analytics`). Bracket

@@ -56,9 +56,17 @@ with a paired `backtest_*.py` / `check_*.py`. **No UI yet on any of these** — 
 - **§3 Weekly Projection Spread** — `compute_projection_consensus.py` (+ `backtest_projection_consensus.py`).
   Borrowed center + spread band, all three components (width = shrunk residual std, skew =
   Cornish-Fisher from shrunk residual skewness); per-tail calibration-gated.
-- **§4 Production VOR** — `compute_production_vor.py` (+ `backtest_production_vor.py`). ROS value over
-  the waiver line, normalized by pool spread; QB pool + pooled flex line. (*Production* only; Market
-  VOR + the trade gap are Unbuilt.)
+- **§4 Value/VOR (COMPLETE — Production + Market + the trade gap)** — Production VOR
+  `compute_production_vor.py` (+ `backtest_production_vor.py`): ROS value over the waiver line,
+  normalized by pool spread; QB pool + pooled flex line; answer-key gated. **Market VOR**
+  `compute_market_vor.py` (+ `check_market_vor.py`): the market-value twin — the SAME waiver=0 ÷
+  pool-spread VOR (reuses `position_pools`/`_pool_lines`/`_vor`/`_roster_as_of` — no new math) on the
+  borrowed LeagueLogs `value` (format-matched profile `redraft-1qb-12t-ppr1`; position from the Sleeper
+  registry), tall over the market's `snapshot_date` axis. The **Production−Market gap** (`trade_gap`) is
+  folded in. **Internal-consistency gate** (no answer key: the market is current-2026, no future truth at
+  the 2026-offseason freeze). **Time-world:** rosters are frozen-2025 but the market is current-2026 and
+  can't be backdated → the gap is **cross-time by construction**, flagged (`is_cross_time`) and treated as
+  POC/architecture validation, not a live trade call, until the season rolls to 2026.
 - **§5 Posture (complete)** — True Rank `compute_true_rank.py` (+ `backtest_true_rank.py`,
   record-independent roster strength) **and** bracket-math `compute_bracket_sim.py`
   (+ `backtest_bracket_sim.py`, 10k-sim playoff odds over the real remaining schedule; Brier 0.224
@@ -126,9 +134,10 @@ build detail — its former home in STATUS.md's "V1 Dashboard Build Order" secti
 
 Each with the reason it isn't built. Ordered roughly by how soon it matters.
 
-- **Front-end surfacing of the gated backend reads** — UNBUILT; the **next work after Market VOR** (the
-  user is finishing the backend read layer first). The front end surfaces only `team_form` /
-  `team_leakage` / `player_signal`. No UI yet for `production_vor` (§4), `true_rank` / `bracket_odds`
+- **Front-end surfacing of the gated backend reads** — UNBUILT; **now the immediate next work** (Market
+  VOR closed the backend read layer — every §1–§7 read is built + gated). The front end surfaces only
+  `team_form` / `team_leakage` / `player_signal`. No UI yet for `production_vor` / `market_vor` (§4),
+  `true_rank` / `bracket_odds`
   (§5), `positional_depth` (§6), `ros_outcome_shape` + `ros_synthesis` (§2), `projection_consensus`
   (§3), `manager_features` / `manager_dossiers` (§7). Includes the posture *presentation* (True Rank +
   odds shown adjacent, the risk-appetite lens).
@@ -136,12 +145,13 @@ Each with the reason it isn't built. Ordered roughly by how soon it matters.
   projection source, and no source but Sleeper serves *historical* 2025 weekly projections.
   `disagreement_ppr` is scaffolded null; it fills **in-season via ffanalytics** (a value change, not a
   schema change).
-- **§4 Market VOR + the Production−Market trade gap** — UNBUILT; **the primary remaining backend read**
-  (the only unbuilt read that's buildable NOW, not blocked at the freeze). LeagueLogs market values are
-  snapshotted daily but **nothing consumes them yet** — the entire trade layer of §4 (and the §6→§7
-  trade-targeting handoff) is absent. Mirrors the `compute_production_vor.py` engine + `position_pools`
-  on market value instead of projection; the Production−Market gap isolates the speculation premium.
-  **Prereq:** confirm the LeagueLogs profile is redraft / format-matched, not dynasty (open flag below).
+- ~~**§4 Market VOR + the Production−Market trade gap**~~ — **BUILT (2026-07-12)** — see Built — Backend
+  above (`compute_market_vor.py` + `check_market_vor.py`). Mirrors the `compute_production_vor.py` engine
+  + `position_pools` on the borrowed LeagueLogs market value (format-matched profile
+  `redraft-1qb-12t-ppr1`); the Production−Market gap isolates the speculation premium; cross-time-flagged
+  at the freeze (market current-2026 vs rosters/production frozen-2025). **Purely additive — nothing
+  reads it yet, so building it on current data does not affect app functioning.** The §6→§7
+  trade-targeting handoff (consuming the gap) remains for the front-end/opponent work.
 - **§1 "routes run" volume sub-component** — DEFERRED (the genuinely hard one): coverage gaps in free
   data / behind paid charting; snap-share stands in. (The rest of §1 Quality — empirical expected-points
   per opportunity — shipped, 710 audit #3.)
@@ -175,7 +185,11 @@ Each with the reason it isn't built. Ordered roughly by how soon it matters.
   itself shipped in `ros_synthesis`, and ROS scores already update weekly via the `as_of_week` tall
   dimension, so the "dynamic-update model" is handled in the data. What's open is how to *show* a
   qualitative 1–10 without implying false precision (the note rides with the grade — a UI choice).
-- **Redraft / format-matched market source** for Market VOR (§4) — the prereq to verify before building
-  it (confirm the banked LeagueLogs profile is redraft, not dynasty asset value).
+- ~~**Redraft / format-matched market source** for Market VOR (§4)~~ — **RESOLVED**: Market VOR uses the
+  **`redraft-1qb-12t-ppr1`** profile (redraft ✓, 1QB ✓, full-PPR ✓ — matches the league's scoring/QB
+  structure). LeagueLogs only publishes 12-team profiles vs the league's 10 teams; that's a **documented
+  non-issue** — the waiver line is computed from the league's own roster/available split, so the profile's
+  team count only sets the valuation context, not the anchor. (Dynasty profiles are excluded — they bake
+  in age + multi-year outlook, noise for a redraft call.)
 - **Backend hygiene backlog** — **RESOLVED**: all seven `710_AUDIT.md` items closed (six fixed; the
   read-modify-write append pattern is a documented no-op-by-design migration trigger, not a fix).

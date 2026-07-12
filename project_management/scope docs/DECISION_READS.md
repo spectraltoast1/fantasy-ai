@@ -140,8 +140,14 @@ produces this directly.
 spots). The Production-vs-Market gap → trades (buy-low / sell-high). Start/sit is **not** here —
 that's the weekly projection spread (§3).
 
-**Open flag:** confirm the LeagueLogs profile is **redraft / format-matched**, not dynasty asset
-value (dynasty bakes in age + multi-year outlook — noise for a redraft call).
+**Open flag — RESOLVED (Market VOR built 2026-07-12):** uses the **`redraft-1qb-12t-ppr1`** profile
+(redraft ✓, 1QB ✓, full-PPR ✓); dynasty profiles excluded (they bake in age + multi-year outlook —
+noise for a redraft call). LeagueLogs publishes only 12-team profiles vs the league's 10 — a documented
+non-issue, since the waiver line comes from the league's own roster/available split, not the profile.
+**Time-world caveat:** the app is frozen at 2025 wk4 but the market is current-2026 and can't be
+backdated, so the Production−Market gap is **cross-time by construction** — every gap row carries
+`is_cross_time`; treat it as POC/architecture validation, not a live trade call, until the season rolls
+to 2026 (`compute_market_vor.py` / `check_market_vor.py`).
 
 ---
 
