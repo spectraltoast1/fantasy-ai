@@ -20,7 +20,7 @@ Imports the SAME pure functions the transform ships (`_team_week_dist`, `_win_pr
 actually finished top-PLAYOFF_TEAMS.
 
 Usage:
-    python -m application.data.transforms.backtest_bracket_sim --season 2025
+    python3 -m application.data.transforms.backtest_bracket_sim --season 2025
 """
 
 import argparse

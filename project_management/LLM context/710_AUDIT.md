@@ -22,7 +22,7 @@ spec-completeness → hygiene). Check them off as they land.
   `application/` a proper package: added `__init__.py` to the 6 dirs + a root `pyproject.toml`,
   converted every bare import to absolute package form (`from application.data import data_layer`
   …), and **deleted all 56 `sys.path.insert` lines across 31 files** (zero remain). Scripts now
-  run as `python -m application.<pkg>.<module>` from the repo root; the lazy `_import_manager_helpers`
+  run as `python3 -m application.<pkg>.<module>` from the repo root; the lazy `_import_manager_helpers`
   is a top-level package import, and the launchd plist runs the fetcher via `-m` with
   `WorkingDirectory` = repo root. Behavior-preserving — all backtest gates pass with identical
   numbers.

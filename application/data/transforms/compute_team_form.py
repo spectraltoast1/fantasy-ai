@@ -22,7 +22,7 @@ Per team it derives:
 Output: snapshots/derived/team_form_{season}.parquet, one row per roster_id.
 
 Usage:
-    python -m application.data.transforms.compute_team_form --season 2025
+    python3 -m application.data.transforms.compute_team_form --season 2025
 """
 
 import argparse

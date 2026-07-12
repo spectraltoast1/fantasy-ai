@@ -23,8 +23,8 @@ Public API:
     list_profiles()   — return the currently published profile keys
 
 Usage:
-    python -m application.data.fetchers.leaguelogs snapshot
-    python -m application.data.fetchers.leaguelogs profiles
+    python3 -m application.data.fetchers.leaguelogs snapshot
+    python3 -m application.data.fetchers.leaguelogs profiles
 """
 
 import sys
@@ -171,5 +171,5 @@ if __name__ == "__main__":
         for p in list_profiles():
             print(p)
     else:
-        print("Usage: python -m application.data.fetchers.leaguelogs {snapshot | profiles}")
+        print("Usage: python3 -m application.data.fetchers.leaguelogs {snapshot | profiles}")
         sys.exit(1)

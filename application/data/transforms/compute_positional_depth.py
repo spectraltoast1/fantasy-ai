@@ -34,7 +34,7 @@ would otherwise be invisible in a rostered-players-only frame).
 Output: snapshots/derived/positional_depth_{season}.parquet, one row per (as_of_week, roster_id, position).
 
 Usage:
-    python -m application.data.transforms.compute_positional_depth --season 2025
+    python3 -m application.data.transforms.compute_positional_depth --season 2025
 """
 
 import argparse

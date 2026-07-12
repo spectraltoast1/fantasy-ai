@@ -198,7 +198,7 @@ def refresh() -> None:
 
 
 if __name__ == "__main__":
-    usage = "Usage: python -m application.data.fetchers.nfl_stats {backfill <year> | refresh}"
+    usage = "Usage: python3 -m application.data.fetchers.nfl_stats {backfill <year> | refresh}"
     if len(sys.argv) < 2:
         print(usage)
         sys.exit(1)

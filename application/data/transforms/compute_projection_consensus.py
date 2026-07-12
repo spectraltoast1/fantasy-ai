@@ -55,7 +55,7 @@ any-league project).
 Output: snapshots/derived/projection_consensus_{season}.parquet, one row per (week, player).
 
 Usage:
-    python -m application.data.transforms.compute_projection_consensus --season 2025
+    python3 -m application.data.transforms.compute_projection_consensus --season 2025
 """
 
 import argparse

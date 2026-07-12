@@ -655,7 +655,7 @@ def refresh(league_id: str) -> None:
 
 if __name__ == "__main__":
     usage = (
-        "Usage: python -m application.data.fetchers.sleeper <command>  (run from repo root)\n"
+        "Usage: python3 -m application.data.fetchers.sleeper <command>  (run from repo root)\n"
         "  commands: backfill <year> | refresh | fetch-players | fetch-teams <year> | "
         "fetch-roster-positions <year> | fetch-league-config <year> | "
         "projections <season> [week] | "

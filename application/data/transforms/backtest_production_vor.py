@@ -21,7 +21,7 @@ Also reported as evidence (not gated): how near the waiver-line anchor (vor ≈ 
 actual replacement level, and the QB-vs-flex pool spreads (why 1QB compresses QB VOR).
 
 Usage:
-    python -m application.data.transforms.backtest_production_vor --season 2025
+    python3 -m application.data.transforms.backtest_production_vor --season 2025
 """
 
 import argparse

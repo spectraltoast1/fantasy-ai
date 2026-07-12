@@ -30,7 +30,7 @@ only — the same team at N=1..4 isn't independent, so pooling inflates n withou
 signal.
 
 Usage:
-    python -m application.data.transforms.backtest_true_rank --season 2025
+    python3 -m application.data.transforms.backtest_true_rank --season 2025
 """
 
 import argparse

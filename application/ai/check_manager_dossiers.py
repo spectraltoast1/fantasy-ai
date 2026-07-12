@@ -16,7 +16,7 @@ Soft evidence (reported, not gated): how many confidence_notes cite the transact
 the primary user's dossier is self-framed (blindspot) rather than opponent-framed.
 
 Usage:
-    python -m application.ai.check_manager_dossiers --season 2025
+    python3 -m application.ai.check_manager_dossiers --season 2025
 """
 
 import argparse

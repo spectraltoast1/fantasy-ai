@@ -25,7 +25,7 @@ and a league-relative 0–1 Leaky↔Optimal spectrum marker (min→max efficienc
 Output: snapshots/derived/team_leakage_{season}.parquet, one row per roster_id.
 
 Usage:
-    python -m application.data.transforms.compute_team_leakage --season 2025
+    python3 -m application.data.transforms.compute_team_leakage --season 2025
 """
 
 import argparse

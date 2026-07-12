@@ -55,7 +55,7 @@ def read_sleeper_players() -> pl.DataFrame:
     if not path.exists():
         raise FileNotFoundError(
             f"Sleeper players cache not found at {path}. "
-            "Run: python -m application.data.fetchers.sleeper fetch-players"
+            "Run: python3 -m application.data.fetchers.sleeper fetch-players"
         )
     return pl.read_parquet(path)
 
@@ -162,7 +162,7 @@ def write_league_settings(df: pl.DataFrame, season: int) -> None:
 
     Tall frame: section ∈ {"scoring", "league"}, key (the Sleeper setting name), value (float —
     scoring values and league settings are all numeric on Sleeper). Output of
-    `python -m application.data.fetchers.sleeper fetch-league-config`.
+    `python3 -m application.data.fetchers.sleeper fetch-league-config`.
     """
     path = _league_settings_path(season)
     path.parent.mkdir(parents=True, exist_ok=True)

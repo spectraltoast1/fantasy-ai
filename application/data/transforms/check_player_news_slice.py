@@ -21,7 +21,7 @@ Reads only persisted parquet (no API), so it is free and repeatable. Checks:
      rows), and no article still inside the synthesis window has had its content nulled.
 
 Usage:
-    python -m application.data.transforms.check_player_news_slice [--season 2026] [--week 0]
+    python3 -m application.data.transforms.check_player_news_slice [--season 2026] [--week 0]
 """
 
 import argparse

@@ -151,7 +151,7 @@ name, independent values and semantics; fold into shared config when it exists.)
 > `__init__.py`, a root `pyproject.toml` declares it, and modules import each other by absolute
 > package path (`from application.data import data_layer`,
 > `from application.data.transforms._analytics import …`) — **no `sys.path` manipulation anywhere**.
-> Run scripts as **`python -m application.<pkg>.<module>` from the repo root** (`-m` puts the cwd on
+> Run scripts as **`python3 -m application.<pkg>.<module>` from the repo root** (`-m` puts the cwd on
 > `sys.path`, so the package resolves without an editable install; `pip install -e .` is available
 > for IDE/tooling). The launchd scheduler invokes the fetcher the same way (`-m` module,
 > `WorkingDirectory` = repo root).
@@ -441,7 +441,7 @@ refresh() current-week snapshot writes will silently skip with an explicit log m
 
 players_points in matchup snapshots is stored as a serialized JSON string (map of sleeperPlayerId → points). Parse with json.loads before joining. Same applies to starters (JSON array of starter IDs).
 
-fetch_players() caches the full Sleeper /players/nfl endpoint to cache/sleeper/players.parquet. Skips the network call if the cache is less than 24 hours old; pass force=True to override. Called automatically by refresh() and by audit_join.py when the cache is stale or missing. Can also be triggered standalone: python -m application.data.fetchers.sleeper fetch-players. Position values in this endpoint use Sleeper's internal codes: QB/RB/WR/TE for skill, K for kicker, DEF for defense.
+fetch_players() caches the full Sleeper /players/nfl endpoint to cache/sleeper/players.parquet. Skips the network call if the cache is less than 24 hours old; pass force=True to override. Called automatically by refresh() and by audit_join.py when the cache is stale or missing. Can also be triggered standalone: python3 -m application.data.fetchers.sleeper fetch-players. Position values in this endpoint use Sleeper's internal codes: QB/RB/WR/TE for skill, K for kicker, DEF for defense.
 
 **Injury/depth-chart fields (added 2026-07-08, Phase 1 refinement):** fetch_players() now also carries injury_status, injury_body_part, depth_chart_order, depth_chart_position, and practice_participation through to the cache — the endpoint already returns them, previously discarded. Feeds compute_player_signal.py's `security` read. **Gotcha:** these fields are null for most players in the sampled prefix polars uses for schema inference, which can pin the wrong dtype for a column that's stringy/numeric further down — fetch_players() passes `infer_schema_length=None` to pl.DataFrame() to force a full scan. This is "now" data only (no history), so the same value applies across every as_of_week slice for a given player — a documented simplification, not a bug.
 

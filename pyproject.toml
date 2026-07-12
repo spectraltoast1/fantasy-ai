@@ -14,7 +14,7 @@ dynamic = ["dependencies"]
 dependencies = { file = ["application/requirements.txt"] }
 
 # `application` is the importable package tree; every script runs as
-#   python -m application.data.transforms.<name>   (from the repo root)
+#   python3 -m application.data.transforms.<name>   (from the repo root)
 # so no editable install is required to run. `pip install -e .` is available for IDE/tooling.
 [tool.setuptools.packages.find]
 include = ["application*"]

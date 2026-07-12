@@ -15,7 +15,7 @@
         <string>snapshot</string>
     </array>
 
-    <!-- Repo root: `python -m` puts the cwd on sys.path, so the `application` package
+    <!-- Repo root: `python3 -m` puts the cwd on sys.path, so the `application` package
          resolves without an editable install. -->
     <key>WorkingDirectory</key>
     <string>/Users/willdaniel/Documents/fantasy-ai</string>

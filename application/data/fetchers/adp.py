@@ -17,8 +17,8 @@ Public API:
     backfill(seasons=None)  — default backfills 2020..current; writes one season slice at a time.
 
 Usage:
-    python -m application.data.fetchers.adp backfill            # 2020..current
-    python -m application.data.fetchers.adp backfill 2025       # a single season
+    python3 -m application.data.fetchers.adp backfill            # 2020..current
+    python3 -m application.data.fetchers.adp backfill 2025       # a single season
 """
 
 import sys
@@ -149,7 +149,7 @@ def backfill(seasons: list[int] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    usage = "Usage: python -m application.data.fetchers.adp backfill [season]"
+    usage = "Usage: python3 -m application.data.fetchers.adp backfill [season]"
     if len(sys.argv) < 2 or sys.argv[1] != "backfill":
         print(usage)
         sys.exit(1)

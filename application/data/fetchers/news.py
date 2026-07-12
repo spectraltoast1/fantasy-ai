@@ -26,9 +26,9 @@ Player resolution has moved OUT of collection (into Stage B extraction + Stage C
 resolver here (`build_index` / `resolve_players`) is RETAINED for those stages to import.
 
 Usage:
-    python -m application.data.fetchers.news snapshot [--team KC]   # fetch team feeds + persist
-    python -m application.data.fetchers.news feeds                  # list the team registry
-    python -m application.data.fetchers.news check                  # resolver self-check
+    python3 -m application.data.fetchers.news snapshot [--team KC]   # fetch team feeds + persist
+    python3 -m application.data.fetchers.news feeds                  # list the team registry
+    python3 -m application.data.fetchers.news check                  # resolver self-check
 """
 
 import argparse

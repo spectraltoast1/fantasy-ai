@@ -56,7 +56,7 @@ Output: snapshots/derived/player_signal_{season}.parquet, one row per rostered s
 player.
 
 Usage:
-    python -m application.data.transforms.compute_player_signal --season 2025
+    python3 -m application.data.transforms.compute_player_signal --season 2025
 """
 
 import argparse

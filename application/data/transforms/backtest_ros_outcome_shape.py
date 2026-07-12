@@ -41,8 +41,8 @@ anchor matters most, which is the honest place to tune it. The gate reports the 
 anchored freeze-week tails so the anchor's calibration contribution is visible, not assumed.
 
 Usage:
-    python -m application.data.transforms.backtest_ros_outcome_shape --season 2025
-    python -m application.data.transforms.backtest_ros_outcome_shape --season 2025 --sweep
+    python3 -m application.data.transforms.backtest_ros_outcome_shape --season 2025
+    python3 -m application.data.transforms.backtest_ros_outcome_shape --season 2025 --sweep
 """
 
 import argparse

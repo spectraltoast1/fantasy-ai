@@ -25,7 +25,7 @@ Whole-pool + forward: the universe is EVERY on-team skill player in the live Sle
 not the frozen-2025 league — the news layer is the forward/live pipeline by design.
 
 Usage:
-    python -m application.data.transforms.compute_player_news_slice [--season 2026] [--week 0] \
+    python3 -m application.data.transforms.compute_player_news_slice [--season 2026] [--week 0] \
         [--force] [--player 4046]
 """
 
@@ -124,7 +124,7 @@ def compute(season: int, week: int) -> pl.DataFrame:
                if data_layer.team_news_dossier_exists() else pl.DataFrame())
     if dossier.is_empty():
         raise SystemExit(f"No team_news_dossier for season={season} week={week} — run Stage B first "
-                         f"(python -m application.ai.write_team_news_dossier).")
+                         f"(python3 -m application.ai.write_team_news_dossier).")
 
     players = data_layer.read_sleeper_players().filter(
         pl.col("position").is_in(news.SKILL_POSITIONS) & pl.col("team").is_not_null()

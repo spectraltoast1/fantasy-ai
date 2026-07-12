@@ -17,7 +17,7 @@ pipeline is self-consistent and honest, three ways (each PASS/FAIL, exit 0 iff a
      backed by real activity.
 
 Usage:
-    python -m application.data.transforms.backtest_manager_features --season 2025
+    python3 -m application.data.transforms.backtest_manager_features --season 2025
 """
 
 import argparse
