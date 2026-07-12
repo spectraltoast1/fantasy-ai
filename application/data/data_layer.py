@@ -1014,6 +1014,58 @@ def read_ros_outcome_shape(season: int, as_of_week=None) -> pl.DataFrame:
     return _as_of_slice(pl.read_parquet(_ros_outcome_shape_path(season)), as_of_week)
 
 
+# --- ROS Synthesis (the §2 AI interpretation of ROS Outcome Shape) ---
+# The interpretation half of §2 (DECISION_READS.md §2) — the last mile compute_ros_outcome_shape.py
+# deferred ("the AI narrative + 1-10 grade roll-up is Phase 6"). Per player, one Claude call fuses the
+# quantitative anchor (ros_outcome_shape) with the situation news (player_news_slice) into three 1-10
+# grades (bull / bear / situation) EACH with a prose note, consolidated headlines (grounded in the
+# cited claims), and a confidence flag. Keyed by the NEWS (season, week) = the current world; the ros
+# anchor is a by-id lookup carrying anchor_season / anchor_is_prior_season so a prior-season anchor is
+# flagged, never silently fused. Written by application/ai/write_ros_synthesis.py via Claude Haiku; a
+# player with no anchor AND no news gets a hardcoded "insufficient data" row (is_zero_signal, AI
+# skipped). One file per season; REPLACE-BY (season, week, sleeper_player_id) so a single-player
+# re-run (news changed / --force) overwrites just his row — the per-player, cache-friendly grain the
+# on-demand runtime will lean on (news_content_hash is the staleness seam).
+
+
+def _ros_synthesis_path(season: int) -> Path:
+    return _SNAPSHOT_DIR / "derived" / f"ros_synthesis_{season}.parquet"
+
+
+def write_ros_synthesis(df: pl.DataFrame) -> None:
+    """Replace the (season, week, sleeper_player_id) rows present in `df`, per-player idempotent.
+
+    A re-run of a player overwrites just his row (idempotent) and a single-player verify run replaces
+    only that player, leaving the rest of the week intact. One file per season (from `df`'s season).
+    Concat is diagonal so a later schema tweak doesn't break the append.
+    """
+    for season in df.select("season").unique().to_series().to_list():
+        part = df.filter(pl.col("season") == season)
+        path = _ros_synthesis_path(season)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        keys = part.select("season", "week", "sleeper_player_id").unique()
+        if path.exists():
+            existing = pl.read_parquet(path)
+            existing = existing.join(keys, on=["season", "week", "sleeper_player_id"], how="anti")
+            part = pl.concat([existing, part], how="diagonal")
+        part.write_parquet(path)
+
+
+def read_ros_synthesis(season: int, week: int | None = None,
+                       sleeper_player_id: str | None = None) -> pl.DataFrame:
+    """Read the per-player §2 ROS synthesis for a season, optionally one week / player."""
+    df = pl.read_parquet(_ros_synthesis_path(season))
+    if week is not None:
+        df = df.filter(pl.col("week") == week)
+    if sleeper_player_id is not None:
+        df = df.filter(pl.col("sleeper_player_id") == sleeper_player_id)
+    return df
+
+
+def ros_synthesis_exists(season: int) -> bool:
+    return _ros_synthesis_path(season).exists()
+
+
 # --- Manager Activity (cross-league, DECISION_READS.md §7) ---
 # The FIRST cross-league / user-keyed entity — every other store is single-league,
 # per-season. Acquired by sleeper.py's `fetch-manager-activity` mode: for each manager in
