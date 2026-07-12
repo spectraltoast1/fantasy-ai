@@ -42,10 +42,10 @@ from pathlib import Path
 
 import feedparser
 import polars as pl
-import requests
 
 from application.data import data_layer
 from application.data.fetchers import sleeper
+from application.data.fetchers import _http
 
 SKILL_POSITIONS = ("QB", "RB", "WR", "TE")
 
@@ -136,22 +136,15 @@ _SUFFIX_RE = re.compile(r"\b(jr|sr|ii|iii|iv|v)\b")
 # --- HTTP + feed parsing ---
 
 def _get_feed(url: str):
-    """Fetch + parse one feed with a bounded timeout and backoff retry on transient errors.
+    """Fetch + parse one feed via the shared _http layer (bounded timeout + transient retry/backoff).
 
-    Returns a parsed feedparser result (entries in `.entries`) or raises the last error after
-    exhausting retries — the caller isolates the failure so one dead feed can't kill the run.
+    Returns a parsed feedparser result (entries in `.entries`) or raises after exhausting retries —
+    the caller isolates the failure (via _http.isolate) so one dead feed can't kill the run. Keeps the
+    descriptive User-Agent (several feeds 403 the default python-requests UA).
     """
-    last = None
-    for attempt in range(1, _RETRIES + 1):
-        try:
-            resp = requests.get(url, timeout=_TIMEOUT, headers={"User-Agent": _UA})
-            resp.raise_for_status()
-            return feedparser.parse(resp.content)
-        except requests.RequestException as exc:
-            last = exc
-            if attempt < _RETRIES:
-                time.sleep(_BACKOFF * attempt)
-    raise last
+    resp = _http.get(url, headers={"User-Agent": _UA}, timeout=_TIMEOUT,
+                     retries=_RETRIES, backoff=_BACKOFF)
+    return feedparser.parse(resp.content)
 
 
 def _clean(s: str, limit: int | None = None) -> str:
@@ -313,21 +306,22 @@ def snapshot(*, team_filter: str | None = None) -> None:
           f"{len(feeds)} feeds across {len(teams)} team(s)")
 
     stat = {t: {"ok": 0, "articles": 0, "chars": 0} for t in teams}
-    for feed in feeds:
-        t = feed["team"]
-        net = feed["source_type"].split("_")[-1]       # official / sbn / fansided
-        try:
-            parsed = _get_feed(feed["url"])
-        except Exception as exc:                        # noqa: BLE001 — isolate any feed failure
-            print(f"  [{t:<3} {net:<8}] FAILED: {type(exc).__name__} — {feed['url']}")
-            continue
+
+    def _collect(feed):
+        """One feed's full unit — fetch + build rows + persist + tally (isolated by _http.isolate)."""
+        parsed = _get_feed(feed["url"])
         rows = [r for r in (_article_row(e, feed, ctx) for e in parsed.entries) if r]
+        t = feed["team"]
         stat[t]["ok"] += 1
         stat[t]["articles"] += len(rows)
         stat[t]["chars"] += sum(len(r["content"]) for r in rows)
-        if rows:
+        if rows:                                        # persist per-feed → a later failure can't discard it
             data_layer.write_team_news_raw(pl.DataFrame(rows, schema_overrides=_SCHEMA))
         time.sleep(0.2)                                 # be polite between feeds
+
+    # Per-feed isolation via the shared helper: one dead feed logs + is skipped, never aborts the run.
+    _http.isolate(feeds, _collect, label="feed",
+                  describe=lambda f: f"{f['team']} {f['source_type'].split('_')[-1]}")
 
     below = [t for t in teams if stat[t]["ok"] < 2]
     tot_ok = sum(stat[t]["ok"] for t in teams)
