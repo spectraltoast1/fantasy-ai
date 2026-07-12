@@ -1,6 +1,29 @@
 # STATUS
 
-**Last updated:** 2026-07-12 (**Daily-collector reliability SHIPPED — shared `_http` layer + collector
+**Last updated:** 2026-07-12 (**§2 ROS SYNTHESIS SHIPPED (QUEUED #2 done) — the AI interpretation
+layer, completing the §2 read.** The last mile `compute_ros_outcome_shape.py` deferred ("the AI
+narrative + 1-10 grade roll-up is Phase 6") now exists: a **per-player Claude call** (`application/ai/
+write_ros_synthesis.py`, reusing the `ai/client.py` seam) that **fuses** the quantitative anchor
+(`ros_outcome_shape`) with the situation news (`player_news_slice`) + Sleeper facts into the three §2
+scores as **1-10 grades — bull / bear / situation — each with a prose note**, **consolidated headlines**
+(grounded in the cited article ids), and a **confidence flag**. Graceful per-input degradation makes
+the gaps FIRST-CLASS columns (`has_ros_anchor` / `has_news` / `anchor_is_prior_season` + confidence):
+full-set → fully-anchored; news-only → news-led, confidence capped; nothing → a hardcoded "insufficient
+data" row, **API skipped**. This is how the 2026-news × 2025-anchor **time-world mismatch** is handled
+HONESTLY (the anchor is flagged prior-season, never silently fused). Output is a **structured parquet**
+(`ros_synthesis_{season}`, replace-by (season,week,player)) — every grade / note / confidence is its
+own column, extractable apart. The **prompt is a pure editable module** (`ai/ros_synthesis_prompt.py`)
+with **no-AI iteration tooling** in the writer (`--render` prints the exact assembled prompt, `--replay`
+runs a canned reply through validation — both need no API key / no cost). Gate
+(`ai/check_ros_synthesis.py`) is internal-consistency (no answer key): coverage / schema / **grounding**
+(headlines trace to the slice) / **confidence honesty** (thin/no-anchor ⇒ not 'high') / data-flag
+honesty + a soft prose-leak scan. Verified live 2026 wk0: 16 players across all regimes (~$0.07,
+grades spread bull 3-9), gate PASS, guard tests (run-once / locked-key / partial / zero-signal) all
+clean. **Front-end surfacing + the browser-triggered on-demand runtime stay deferred with the
+deployment/server decision** (no server exists; API key is server-side; the `news_content_hash` column
+is laid down now as the future cache seam). **The prompt TEXT is expected to keep evolving — it lives in
+that one pure module, and `--render`/`--replay` make tweaking it AI-free.** **Prior — Daily-collector
+reliability SHIPPED — shared `_http` layer + collector
 registry/dispatcher + coverage gate (QUEUED #1 done).** Separation of concerns: retry / backoff /
 throttle / per-item isolation now live ONCE in `fetchers/_http.py`, and all three HTTP callers
 (`sleeper` / `news` / `leaguelogs`) route through it — **leaguelogs gains the missing retry + per-item
@@ -85,6 +108,39 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**§2 ROS Synthesis — the per-player AI interpretation call (QUEUED #2; §2 read COMPLETE).** The last
+mile the ROS Outcome Shape skeleton deferred to Phase 6. The project's 3rd AI-layer read, reusing the
+`ai/client.py` isolation seam. **New `application/ai/` trio:** `ros_synthesis_prompt.py` (pure, editable
+prompt — `system_prompt()`/`user_prompt(ctx)` + `SYNTHESIS_KEYS` + the zero-signal fallback + the
+plain-language translations of the internal role signals); `write_ros_synthesis.py` (gathers a player's
+inputs → one `generate_dossier` Haiku call → validate → row); `check_ros_synthesis.py` (internal-
+consistency gate). **New `data_layer` `ros_synthesis` entity** (`snapshots/derived/ros_synthesis_
+{season}.parquet`; grain one row per (season, week, player); replace-by-(season,week,player) so a
+single-player re-run overwrites just his row — the per-player cache-friendly grain the on-demand runtime
+will use). Per player it **fuses** the quantitative anchor (`ros_outcome_shape`: caliber bucket + bull/
+bear band + security/trend), the situation news (`player_news_slice`), and Sleeper injury/depth facts
+into: **bull/bear/situation 1-10 grades (each with a prose note)** + **consolidated headlines** (each
+citing the article ids that back it) + a **confidence** flag. **Grade convention** (decided with the
+PM): all three 1-10 with 10 best, INDEPENDENT axes (no ordering) — bull = ceiling height (hard-anchored
+to a caliber bucket so elites hit 9-10 and the full range is used), bear = floor safety, situation =
+how smooth/settled. **Prose discipline:** notes are natural manager-facing language — the substrata
+(percentiles/tiers/projection points/trend flags) drive the grades but are BANNED from the prose;
+attributed news stays. **Graceful per-input degradation** with the gaps as first-class columns
+(`has_ros_anchor`/`has_news`/`anchor_is_prior_season`); a player with neither anchor nor news gets a
+hardcoded row, **API skipped**. **No-AI prompt iteration** (self-serve, no session, no key, no cost):
+`write_ros_synthesis.py --render` prints the exact assembled prompt; `--replay` runs a canned reply
+through validation. **Season/time-world honesty:** output keyed by the NEWS (season, week); the ros
+anchor is a by-id lookup from `--anchor-season`, flagged PRIOR-SEASON when it differs — never silently
+fused (the STATUS caveat). Gate checks coverage / schema / grounding / confidence honesty / data-flag
+honesty + a soft prose-leak scan. Verified live 2026 wk0: 16 players across all regimes (Chase bull 9 …
+Kraft/Rodriguez 3-4; ~$0.07), gate exit 0, guard tests (run-once superset / locked-key refusal /
+partial run calls the API only for the new player / zero-signal skips it) all clean; the persisted
+parquet carries every grade/note/confidence as its own column. **Deferred with deployment:** front-end
+wiring + the browser-triggered on-demand runtime (no server; the key is server-side; `news_content_hash`
+is the future staleness-cache seam) + validated same-season live fusion. **Next — front-end surfacing
+of the gated forward reads** (Phase 4).
+
+> earlier build
 **Daily-collector reliability — shared `_http` resilience layer + collector registry + coverage gate
 (QUEUED #1).** Separation of concerns: retry / backoff / throttle / per-item isolation now live ONCE in
 one shared script, so every collector gets a consistent, resilient fetch process. **Three commits.**
@@ -138,27 +194,6 @@ exit 0. Prune: dry-run 1243/5021 rows → live kept all 5021 rows (0 null id/url
 kept the 28d window (3748 with content), idempotent; both gates still exit 0 post-prune. **The §2
 synthesis (QUEUED #2) now has its news input.** **Next — QUEUED #1** (Daily-collector reliability).
 
-> earlier build
-**§2 News pipeline Stage B — weekly per-team AI news synthesis → `team_news_dossier` (the interpretation
-half of the news layer).** Distills each team's recent `team_news_raw` window into a compact,
-situation/security-focused, **attributed** set of **scope-tagged claims** a downstream AI reads next to the
-numeric analytics. **New `application/ai/` code, reusing the §7 pattern:** `client.py` refactored (`_raw_call`
-shared seam + new `generate_claims` array path; `generate_dossier` untouched); pure `news_prompt.py`
-(situation/security schema + cluster-across-sources + attribution guardrails); `write_team_news_dossier.py`
-(windows the raw store — `WINDOW_DAYS`=14, cap 60/team → one Haiku call/team → validate → deterministic id
-resolution; run-once-per-week, `--force`, `--team`); `check_team_news_dossier.py` (internal-consistency
-gate). **New `data_layer` `team_news_dossier`** (one growing file; grain = one claim row per
-(season, week, team); replace-by-(season,week,team), idempotent). Per claim: scope (player/position_group/
-unit) / subject / claim_type / **`basis`** (official/reported/opinion — an opinion is never laundered into
-fact) / attributed `note` / direction (positive/negative/neutral/**mixed** = cross-pressured) / salience /
-cited `source_article_ids` + `source_types` (clustered across the 3 sources; diversity = trust). **Skill-only
-(V1):** player claims are QB/RB/WR/TE, resolved to a Sleeper id via a **team-restricted** index (the gate
-caught + we fixed a cross-team-id bug); all defensive news condensed into ONE `defense` unit note
-(game-script context now, pre-banked for when defensive positions are added). Verified live: **32/32 teams,
-317 claims, ~$0.46 (1 Haiku call/team)**; gate PASS (coverage / schema / grounding / on-team resolution /
-zero-signal honesty); 168/186 player claims resolved; direction 171 pos / 51 mixed / 48 neg / 47 neu, basis
-145 opinion / 132 reported / 40 official. Off-season window thin by nature; richness ramps into camp.
-**Next — Stage C:** per-player slice by inheritance + thinness tripwire + raw-content retention.
 
 > built
     - nflreadpy fetcher
@@ -207,6 +242,7 @@ zero-signal honesty); 168/186 player claims resolved; direction 171 pos / 51 mix
     - §2 News pipeline Stage B — weekly per-team AI news synthesis → `team_news_dossier` (the interpretation half; the project's 2nd AI-layer read after §7 dossiers) — new `application/ai/`: `news_prompt.py` (pure; situation/security schema + cluster-across-sources + attribution guardrails), `write_team_news_dossier.py` (windows the raw store `WINDOW_DAYS`=14/cap 60 → 1 Haiku call/team → validate → deterministic on-team id resolution; run-once-per-week, `--force`, `--team`), `check_team_news_dossier.py` (internal-consistency gate). `client.py` refactored (`_raw_call` shared seam + `generate_claims` array path; `generate_dossier` behavior-identical). New data_layer **`team_news_dossier`** (one growing file; grain = one claim row per (season,week,team); replace-by-(season,week,team), idempotent). Per claim: scope (player/position_group/unit) / subject / claim_type / **`basis`** (official/reported/opinion — opinion never laundered into fact) / attributed `note` / direction (positive/negative/neutral/**mixed**) / salience / cited `source_article_ids` + `source_types` (clustered; source diversity = trust). Skill-only (V1): player claims QB/RB/WR/TE resolved via a **team-restricted** index (gate caught + fixed a cross-team-id bug); all defensive news condensed into ONE `defense` unit note (game-script context; pre-banked for later). Verified live 2026 wk0: 32/32 teams, 317 claims, ~$0.46; gate PASS (coverage/schema/grounding/on-team-resolution/zero-signal); 168/186 player claims resolved. Next — Stage C (per-player slice by inheritance + thinness tripwire + raw-content retention).
     - §2 News pipeline Stage C — per-player slice by inheritance + thinness tripwire + raw-content retention (COMPLETES the 3-stage news pipeline A→B→C) — a **deterministic reshape** (no AI), so the gate is **hard**. New data_layer **`player_news_slice`** entity (`snapshots/news/player_news_slice.parquet`; grain = one inherited-claim row per (season,week,player,claim); write replace-by-(season,week)). `transforms/compute_player_news_slice.py`: each on-team skill player (whole NFL skill pool ~967, forward/league-agnostic) inherits his **own** resolved `player` claims + his **position_group** claims (subject normalized to his skill position, OR team-wide offensive context — `offense`/`offensive line`/coaching-scheme → all skill players; unmapped subjects dropped + reported as Stage-B drift) + his team's **unit** claims (`offense` + the condensed `defense` note) from `team_news_dossier`. Thinness tripwire as columns: `signal_tier` (rich=≥1 own / thin=only inherited / none=nothing) + `n_own_claims`/`n_inherited_claims`/`team_news_volume`; a player who inherits nothing gets ONE `is_empty` honest-zero row (like positional_depth's zero-count rows). `transforms/check_player_news_slice.py`: HARD gate — **independently recomputes** each player's expected inherited set from the dossier+registry (does NOT call the compute) and demands an exact multiset match incl. inheritance tag + provenance; + coverage/identity/thinness-honesty/zero-signal/retention-safety. **Retention:** `data_layer.prune_team_news_raw_content` + `fetchers/news.py prune [--dry-run]` (`RETENTION_DAYS=28` > the 14d synthesis window) nulls raw article `content` older than the cutoff, KEEPS the row + `article_id`/`title`/`url`/`published_at` + the derived claims (which cite `article_id`, never the text); idempotent. Verified live 2026 wk0: 967 players → 3058 rows (own 168 = the resolved player claims / pg 626 / unit 2264; tiers rich 160 / thin 807 / none 0); eyeballed a TE inheriting his own claim + team offense but NOT the WR-room claim + a team-wide o-line claim reaching all 4 positions; slice gate exit 0. Prune: dry-run 1243/5021 rows → live kept all 5021 rows (0 null id/url), nulled all old content, kept the 28d window (3748 with content), idempotent; both gates exit 0 post-prune. The §2 synthesis (QUEUED #2) now has its news input: a player's inherited `player_news_slice`. No UI (data + gate). Next — QUEUED #1 (Daily-collector reliability).
     - Daily-collector reliability — shared `_http` resilience layer + collector registry + coverage gate (QUEUED #1) — separation of concerns: retry/backoff/throttle/per-item isolation now live ONCE in `fetchers/_http.py`, so every collector shares a consistent resilient fetch process. **3 commits.** (1) `_http.py`: `get`/`get_json` (bounded timeout + exponential-backoff-with-jitter retry on TRANSIENT failures — timeouts/conn-errors/5xx; a 4xx raises immediately) + `set_throttle` (process min-gap; the manager-activity fan-out raises it) + `isolate` (per-item catch+log+continue). All three HTTP callers migrated: `sleeper._get_json` → behaviour-identical thin wrapper (`set_throttle` re-exported); `news._get_feed` → `_http.get` + `_http.isolate`; **`leaguelogs._get` → `_http.get_json` (ADDS retry) + `snapshot()` per-item isolation** (ADDS it — the fix for the audit's ~7 transient-fail + "dynasty profiles drop first" days). (2) `fetchers/run.py`: declarative collector REGISTRY (leaguelogs + news — the banked daily series; NOT sleeper = on-demand) with cadence + coverage-shape per collector, + a `run <name>|--all|--list` dispatcher (uniform process → post-run freshness); the **meter stays external** (launchd → GitHub Actions calls this same dispatcher — nothing wasted). `fetchers/check_collectors.py`: network-free coverage/health gate — leaguelogs STRICT daily coverage (per-day distinct profiles vs max-seen full day), news RECENCY (append-only); HARD criterion is a recent window (default 7d, excl. today) so permanent powered-off gaps don't fail forever; `--today` monitoring; UTC-dated to match the collectors. (3) Docs. The **off-laptop host** (the ~8 powered-off days — a host problem retry can't fix) stays **deferred to the deployment decision** (GitHub Actions the lead: collects + publishes). Verified: network-free retry/4xx/isolate self-test (PASS); live no-regression on all 3 fetchers; isolation proof (2 forced-dead leaguelogs profiles → the 3 good ones collected + the run COMPLETED reporting "2/5 failed (isolated)" instead of aborting); gate reproduces the audit (leaguelogs full-span 28 complete / 65% / 72% any-data — matches the documented 63%/71%) + flags the real recent gap (07-05 partial → FAIL/exit 1; `--since 3` clean → PASS/exit 0). Next — QUEUED #2 (§2 ROS synthesis call).
+    - §2 ROS Synthesis — the per-player AI interpretation call (QUEUED #2; completes the §2 read, the last mile compute_ros_outcome_shape deferred to Phase 6) — the project's 3rd AI-layer read, reusing the `ai/client.py` seam. New `application/ai/` trio + a `data_layer` entity. (1) **`ros_synthesis_prompt.py`** — the pure, editable prompt (`system_prompt()` + `user_prompt(ctx)` + `SYNTHESIS_KEYS` + `zero_signal_synthesis()` + plain-language translations of the internal security/direction labels). (2) **`write_ros_synthesis.py`** — per player: `assemble_player` gathers his `player_news_slice` claims + `ros_outcome_shape` anchor (by id, from `--anchor-season`) + Sleeper injury/depth facts → one `client.generate_dossier` Haiku call → `_validate` (grades 1-10, notes non-empty, headline ids ⊆ the slice, confidence vocab) → row. Modes: `run` (write, run-once superset guard by (season,week,player), `--force`), `--preview` (print output), and the **no-AI** `--render` (print the exact assembled prompt) / `--replay REPLY.json` (run a canned reply through validation) — both need no key/no cost, the prompt-iteration loop. Zero-signal (no anchor AND no news) → hardcoded row, API skipped. (3) **`check_ros_synthesis.py`** — internal-consistency gate (no answer key): coverage / schema / grounding (headlines trace to the slice) / confidence honesty (thin or no-anchor ⇒ not 'high'; zero rows are clean fallbacks) / data-flag honesty + a soft high-precision prose-leak scan. New **`data_layer` `ros_synthesis`** entity (`snapshots/derived/ros_synthesis_{season}.parquet`; grain one row per (season,week,player); replace-by-(season,week,player)). Output columns fully separable: `bull_grade`/`bear_grade`/`situation_grade` (Int, independent axes — no ordering) each with its `*_note`, `headlines` (List(Struct{text, source_article_ids})), `confidence`/`confidence_note`, availability flags (`has_ros_anchor`/`has_news`/`signal_tier`/`n_news_claims`), anchor carries + `anchor_is_prior_season`, `news_content_hash` (future on-demand-cache seam), provenance. **Grade convention (with the PM):** 10=best on all three; bull hard-anchored to a caliber bucket (elite→9-10 … fringe→1-2, full range) and decoupled from downside (that lives in bear/situation). **Prose discipline:** notes are natural manager language; the substrata (percentile/tier/projection/trend) drive the grades but are banned from the prose; attributed news stays. **Season/time-world honesty:** keyed by the news (season,week); a differing anchor season is flagged PRIOR-SEASON, never silently fused (the STATUS caveat — 2026 news × 2025 anchor). Verified live 2026 wk0: 16 players across all regimes (Chase bull 9 … Kraft/Rodriguez 3-4; ~$0.07), gate exit 0, guard tests (run-once / locked-key refusal / partial run hits the API only for the new player / zero-signal skip) all clean. Front-end wiring + the browser on-demand runtime + validated same-season fusion deferred with deployment (no server; key server-side). No UI (data + gate + prompt tooling).
 
 > not yet built
     >> backend
@@ -251,14 +287,30 @@ zero-signal honesty); 168/186 player claims resolved; direction 171 pos / 51 mix
 > once. (Also still to wire into the meter: the weekly `write_team_news_dossier` + `compute_player_news_slice`
 > + daily `news.py prune`.)
 >
-> **⭐ NEXT ACTIVE BUILD — QUEUED #2: §2 ROS Outcome Shape — the AI SYNTHESIS
-> call (Phase 6, the interpretation half).** The §2 AI layer was decomposed (sparred with the PM) into
+> **✅ QUEUED #2 — §2 ROS Synthesis — DONE (2026-07-12).** The AI interpretation half of §2 (Phase 6),
+> completing the §2 read. Per-player Claude call (`application/ai/write_ros_synthesis.py`, reusing
+> `ai/client.py`) fusing the `ros_outcome_shape` anchor + the `player_news_slice` news + Sleeper facts
+> → bull/bear/situation 1-10 grades (each with a prose note) + grounded headlines + a confidence flag,
+> persisted to the structured `ros_synthesis` entity; pure editable prompt (`ai/ros_synthesis_prompt.py`)
+> + no-AI `--render`/`--replay` iteration tooling; internal-consistency gate (`ai/check_ros_synthesis.py`).
+> Verified live 2026 wk0 (16 players, gate exit 0). See the most-recent build for the full record. The
+> shipped shape differs from the original sketch below in three PM-decided ways: **(a)** it is a
+> **batch-capable CLI writer → parquet + gate** (matching how every AI read shipped), NOT the live
+> lazy/cached on-demand runtime — that (and front-end wiring) is **deferred with deployment** (no server
+> exists; the key is server-side; `news_content_hash` is laid down now as the future cache seam);
+> **(b)** the three §2 scores are **three independent 1-10 grades** (bull/bear/situation), not a single
+> roll-up, each with its own note (extractable columns); **(c)** the 2026-news × 2025-anchor mismatch is
+> handled by **graceful per-input degradation + a prior-season flag** (run on whatever resolves, make
+> the gaps first-class), honoring the time-world caveat below. **The original design sketch (kept as the
+> design record):**
+>
+> The §2 AI layer was decomposed (sparred with the PM) into
 > **aggregation** (the news layer — REBUILT as the 3-stage team-news pipeline, now **COMPLETE**) and
 > **interpretation** (this synthesis). The quantitative skeleton
 > (`compute_ros_outcome_shape.py`: bull/bear band + preseason ADP anchor + situation/security evidence)
-> exists and the news layer has **landed**; what's left is the synthesis that reads them. **Note:** the
+> exists and the news layer has **landed**; the synthesis reads them. **Note:** the
 > news input is the team-pipeline **player-slice** — `player_news_slice` (Stage C output — a player's
-> inherited scope-tagged claims + `signal_tier`), **now shipped**, not the retired `player_news`.
+> inherited scope-tagged claims + `signal_tier`), not the retired `player_news`.
 >
 > **The synthesis design (decided):** a **single lazy, cached, per-player** Claude call — NOT a batch
 > pre-compute of all rostered players (you'd pay for players nobody views). It fires **on demand** when a
