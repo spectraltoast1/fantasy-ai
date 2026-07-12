@@ -885,6 +885,41 @@ def read_production_vor(season: int, as_of_week=None) -> pl.DataFrame:
     return _as_of_slice(pl.read_parquet(_production_vor_path(season)), as_of_week)
 
 
+# --- Market VOR ---
+# The market-value twin of Production VOR (DECISION_READS.md §4): the same waiver = 0 ÷ pool-spread
+# VOR, computed on the LeagueLogs market value instead of the borrowed projection, so both land on one
+# comparable scale and the gap between them is the trade signal. Output of
+# transforms/compute_market_vor.py: one row per (snapshot_date, rostered skill player), carrying the
+# borrowed market value, the pool waiver/top used to normalise it, the resulting market_vor, and the
+# joined Production VOR + trade_gap. TALL over `snapshot_date` (the market's own time axis — the analog
+# of Production VOR's as_of_week), so the un-backdatable market series is banked in derived form.
+# TIME-WORLD NOTE: the rosters are frozen-2025 but the market is current (2026 offseason) — every row
+# carries `is_cross_time` + `market_season`, so the gap is never silently fused across time.
+
+
+def _market_vor_path(season: int) -> Path:
+    return _SNAPSHOT_DIR / "derived" / f"market_vor_{season}.parquet"
+
+
+def write_market_vor(df: pl.DataFrame, season: int) -> None:
+    """Write the per-(snapshot_date, player) Market VOR read for a league season (overwrite)."""
+    path = _market_vor_path(season)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
+
+def read_market_vor(season: int, snapshot_date=None) -> pl.DataFrame:
+    """Read the Market VOR read for one market snapshot (default = latest banked date)."""
+    df = pl.read_parquet(_market_vor_path(season))
+    if snapshot_date is None:
+        return df.filter(pl.col("snapshot_date") == df["snapshot_date"].max())
+    return df.filter(pl.col("snapshot_date") == pl.lit(snapshot_date).str.to_date())
+
+
+def market_vor_exists(season: int) -> bool:
+    return _market_vor_path(season).exists()
+
+
 # --- True Rank ---
 # The team-level aggregation of the Value read (DECISION_READS.md §5, first half): sum the
 # borrowed ROS production value of each team's *optimal* (lineup-slot-aware) lineup → a
