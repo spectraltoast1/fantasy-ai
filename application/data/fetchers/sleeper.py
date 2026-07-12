@@ -7,14 +7,12 @@ Public API:
 """
 
 import json
-import random
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import polars as pl
-import requests
 
 _HERE = Path(__file__).resolve().parent        # .../application/data/fetchers/
 _DATA_DIR = _HERE.parent                       # .../application/data/
@@ -24,6 +22,7 @@ CACHE_DIR = _DATA_DIR / "cache" / "sleeper"    # raw JSON current-state dumps (s
 # goes through it (the fetcher constructs no parquet paths). The raw JSON dumps written by
 # _write_json stay put: they're current-state API captures, not data-layer entities.
 from application.data import data_layer
+from application.data.fetchers import _http
 
 _SLEEPER_BASE = "https://api.sleeper.app/v1"
 # Projections/stats live on a separate host (no /v1), distinct from the main league API.
@@ -97,56 +96,27 @@ _MANAGER_ACTIVITY_SCHEMA = {
 # ---------------------------------------------------------------------------
 # Sleeper has no documented hard rate limit but asks for < ~1000 calls/min. The
 # once-a-season manager-activity fan-out (~10 managers x <=5 leagues x ~17 weeks)
-# issues hundreds of calls, so every request routes through _get_json: a bounded
-# timeout, exponential-backoff retry on transient failures (timeouts / connection
-# resets / 5xx), and an optional module-level throttle the fan-out raises to space
-# calls. Existing single-shot callers get the timeout + retry for free at the
-# default throttle of 0 (behaviour-preserving).
+# issues hundreds of calls, so every request routes through the shared _http layer:
+# a bounded timeout, exponential-backoff retry on transient failures (timeouts /
+# connection resets / 5xx), and the process throttle the fan-out raises to space calls.
+# The retry/backoff/throttle logic lives ONCE in _http; `set_throttle` is re-exported so
+# the fan-out (fetch_manager_activity) keeps calling sleeper.set_throttle unchanged.
 _HTTP_TIMEOUT = 15.0     # seconds per request
 _HTTP_RETRIES = 4        # total attempts before giving up
 _HTTP_BACKOFF = 0.5      # base backoff seconds (exponential + jitter)
-_throttle_seconds = 0.0  # min gap between calls; set_throttle() raises it for the fan-out
-_last_call = 0.0
 
-
-def set_throttle(seconds: float) -> None:
-    """Set the minimum gap enforced between _get_json calls (0 disables)."""
-    global _throttle_seconds
-    _throttle_seconds = max(0.0, seconds)
+set_throttle = _http.set_throttle   # re-export: min gap between calls (the fan-out raises it)
 
 
 def _get_json(url: str, params=None, *, timeout: float = _HTTP_TIMEOUT,
               retries: int = _HTTP_RETRIES, backoff: float = _HTTP_BACKOFF):
-    """GET `url` and return parsed JSON, with throttle + timeout + retry/backoff.
+    """GET `url` and return parsed JSON via the shared _http resilience layer.
 
-    Retries transient failures (request timeouts, connection errors, and 5xx responses)
-    with exponential backoff + jitter, raising the last error after `retries` attempts.
-    Client errors (4xx) raise immediately and are NOT retried — a 404 for a season a
-    manager never played is an expected, non-transient "no leagues" the caller handles.
-    Honors the module-level throttle set via set_throttle().
+    Bounded timeout + transient retry/backoff + process throttle; a 4xx raises immediately
+    (not retried). Sleeper returns null (not a 4xx) for "no leagues", which callers handle
+    with `or []` / `or {}`, so this only ever raises on a genuine error.
     """
-    global _last_call
-    last_exc = None
-    for attempt in range(retries):
-        if _throttle_seconds:
-            gap = time.monotonic() - _last_call
-            if gap < _throttle_seconds:
-                time.sleep(_throttle_seconds - gap)
-        try:
-            resp = requests.get(url, params=params, timeout=timeout)
-        except (requests.Timeout, requests.ConnectionError) as exc:
-            last_exc = exc                       # transient network failure -> retry
-        else:
-            _last_call = time.monotonic()
-            if 400 <= resp.status_code < 500:
-                resp.raise_for_status()          # client error -> raise now, not transient
-            if resp.status_code < 400:
-                return resp.json()               # success
-            last_exc = requests.HTTPError(       # 5xx -> transient, retry
-                f"{resp.status_code} Server Error for url: {url}", response=resp)
-        if attempt < retries - 1:
-            time.sleep(backoff * (2 ** attempt) + random.uniform(0.0, backoff))
-    raise last_exc
+    return _http.get_json(url, params=params, timeout=timeout, retries=retries, backoff=backoff)
 
 
 # ---------------------------------------------------------------------------
