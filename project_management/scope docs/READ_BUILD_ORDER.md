@@ -1,6 +1,6 @@
 # READ BUILD ORDER
 
-**Last reviewed:** 2026-07-11
+**Last reviewed:** 2026-07-12
 **Companion to:** `PRODUCT_ROADMAP.md` (the *why* — phases, four design laws, scope filter) and the
 **Decision Reads spec** (`DECISION_READS.md` — the *what*, full definition of each read).
 This doc is now the ***state of build*** — what's Built (Backend / Frontend) and what's
@@ -49,8 +49,10 @@ with a paired `backtest_*.py` / `check_*.py`. **No UI yet on any of these** — 
 
 - **§1 Opportunity** — `compute_player_signal.py` (+ `backtest_player_signal.py`). Sticky opportunity
   vs. fragile efficiency, regression_risk, sample-gated read; Trust axis (direction/reliability/security)
-  + point-correlation companion. *Caveat: the Quality axis (`quality_rate`) is a TD-probability proxy,
-  not the full empirical-EV-weight spec — see `710_AUDIT.md` item 3.*
+  + point-correlation companion. Quality axis (`quality_rate`) is now **expected fantasy points per
+  opportunity** from `ff_opportunity`'s empirical component model, re-scored under league settings
+  (`_scoring.expected_points_expr`; 710 audit #3 done). *Remaining sub-component: "routes run" volume —
+  deferred (coverage gaps in free data / behind paid charting; snap-share stands in).*
 - **§3 Weekly Projection Spread** — `compute_projection_consensus.py` (+ `backtest_projection_consensus.py`).
   Borrowed center + spread band, all three components (width = shrunk residual std, skew =
   Cornish-Fisher from shrunk residual skewness); per-tail calibration-gated.
@@ -63,10 +65,14 @@ with a paired `backtest_*.py` / `check_*.py`. **No UI yet on any of these** — 
   beats coin-flip, expected-wins Spearman 0.756, top-4 by odds = 3/4 actual playoff teams).
 - **§6 Positional Depth** — `compute_positional_depth.py` (+ `backtest_positional_depth.py`).
   Production VOR re-sliced per position net of starting need → surplus / gap vs league.
-- **§2 ROS Outcome Shape (quantitative skeleton)** — `compute_ros_outcome_shape.py`
-  (+ `backtest_ros_outcome_shape.py`). Bull/bear = borrowed ROS centre ± BULL_Z·√Σband², floored,
-  emergent time decay; situation/security carried as evidence. *Missing: the preseason ADP/draft-capital
-  anchor and the AI narrative + 1–10 roll-up — see Unbuilt / `710_AUDIT.md` item 4.*
+- **§2 ROS Outcome Shape (COMPLETE — quantitative + AI interpretation)** — quantitative skeleton
+  `compute_ros_outcome_shape.py` (+ `backtest_ros_outcome_shape.py`): bull/bear = borrowed ROS centre
+  ± BULL_Z·√Σband², floored, emergent time decay; situation/security carried as evidence; **preseason
+  ADP/draft-capital anchor** blended in (`compute_adp_points_curve.py` + `fetchers/adp.py`; 710 audit
+  #4). **AI interpretation half** — `application/ai/write_ros_synthesis.py` (+ `ros_synthesis_prompt.py`
+  / `check_ros_synthesis.py`): a per-player Haiku call fusing the anchor + `player_news_slice` news +
+  Sleeper facts → bull/bear/situation 1–10 grades (each with a prose note) + grounded headlines + a
+  confidence flag → the `ros_synthesis` entity. Both AI-layer reads (§2 + §7) are now shipped.
 - **§7 Manager Dossiers (complete)** — Phase A: cross-league acquisition (`sleeper.py fetch-manager-activity`
   → `manager_activity`) + deterministic features (`compute_manager_features.py` → `manager_features`,
   gated by `backtest_manager_features.py`). Phase B: the AI layer — `application/ai/` writes one
@@ -74,11 +80,15 @@ with a paired `backtest_*.py` / `check_*.py`. **No UI yet on any of these** — 
   gated by `check_manager_dossiers.py`).
 
 **Supporting substrate (built, underpins the reads):** `data_layer.py` (the single I/O seam); fetchers
-`nfl_stats.py` / `sleeper.py` / `leaguelogs.py` / `news.py`; joins `join_nfl_sleeper_weekly.py` + `audit_join.py`;
-`derive_lineup_slots.py`; the `_scoring.py` dispatcher + custom-scoring recompute engine; shared pure
-helpers `_analytics.py` / `_manager.py`; the `league_settings` entity; the multi-source `projections`
-entity; the season-replay `as_of_week` tall dimension; and the `position_pools` / any-league
-generalization (superflex, custom scoring, division seeding).
+`nfl_stats.py` / `sleeper.py` / `leaguelogs.py` / `news.py` / `adp.py`, all routed through the shared
+`fetchers/_http.py` resilience layer (timeout / backoff / retry / throttle / per-item isolation) with a
+`run.py` collector registry/dispatcher + `check_collectors.py` coverage gate (QUEUED #1); joins
+`join_nfl_sleeper_weekly.py` + `audit_join.py`; `derive_lineup_slots.py`; the `_scoring.py` dispatcher +
+custom-scoring recompute engine + `expected_points_expr`; the AI seam `application/ai/client.py`; shared
+pure helpers `_analytics.py` / `_manager.py`; the `league_settings`, multi-source `projections`, ADP
+(`adp_preseason` / `adp_points_curve`), and §2 team-news pipeline (`team_news_raw` → `team_news_dossier`
+→ `player_news_slice`) entities; the season-replay `as_of_week` tall dimension; and the `position_pools`
+/ any-league generalization (superflex, custom scoring, division seeding).
 
 ## Built — Frontend
 
@@ -116,43 +126,37 @@ build detail — its former home in STATUS.md's "V1 Dashboard Build Order" secti
 
 Each with the reason it isn't built. Ordered roughly by how soon it matters.
 
-- **Front-end surfacing of the 8 gated backend reads** — UNBUILT, and the **immediate next work.** Of
-  the 11 derived parquets on disk, the front end surfaces only `team_form` / `team_leakage` /
-  `player_signal`. No UI yet for `production_vor` (§4), `true_rank` / `bracket_odds` (§5),
-  `positional_depth` (§6), `ros_outcome_shape` (§2), `projection_consensus` (§3), `manager_features` /
-  `manager_dossiers` (§7). Includes the posture *presentation* (True Rank + odds shown adjacent, the
-  risk-appetite lens).
+- **Front-end surfacing of the gated backend reads** — UNBUILT; the **next work after Market VOR** (the
+  user is finishing the backend read layer first). The front end surfaces only `team_form` /
+  `team_leakage` / `player_signal`. No UI yet for `production_vor` (§4), `true_rank` / `bracket_odds`
+  (§5), `positional_depth` (§6), `ros_outcome_shape` + `ros_synthesis` (§2), `projection_consensus`
+  (§3), `manager_features` / `manager_dossiers` (§7). Includes the posture *presentation* (True Rank +
+  odds shown adjacent, the risk-appetite lens).
 - **§3 cross-source disagreement** — BLOCKED at the freeze. A cross-source spread needs a live 2nd
   projection source, and no source but Sleeper serves *historical* 2025 weekly projections.
   `disagreement_ppr` is scaffolded null; it fills **in-season via ffanalytics** (a value change, not a
   schema change).
-- **§4 Market VOR + the Production−Market trade gap** — UNBUILT (V4). LeagueLogs market values are
-  being snapshotted daily but **nothing consumes them yet** — the entire trade layer of §4 (and the
-  §6→§7 trade-targeting handoff) is absent.
-- **§2 preseason anchor** (realistic draft-capital / ADP ceiling & floor for bull/bear) — UNBUILT; the
-  shipped band is a pure statistical spread off the projection. See `710_AUDIT.md` item 4.
-- **§2 AI narrative + 1–10 roll-up** — deferred to Phase 6 (the AI-interpretation half of §2).
-- **§1 full Quality spec** (empirical EV-weights per chance-type, re-derived under league scoring) —
-  UNBUILT; the shipped `quality_rate` is a TD-probability proxy. See `710_AUDIT.md` item 3.
+- **§4 Market VOR + the Production−Market trade gap** — UNBUILT; **the primary remaining backend read**
+  (the only unbuilt read that's buildable NOW, not blocked at the freeze). LeagueLogs market values are
+  snapshotted daily but **nothing consumes them yet** — the entire trade layer of §4 (and the §6→§7
+  trade-targeting handoff) is absent. Mirrors the `compute_production_vor.py` engine + `position_pools`
+  on market value instead of projection; the Production−Market gap isolates the speculation premium.
+  **Prereq:** confirm the LeagueLogs profile is redraft / format-matched, not dynasty (open flag below).
+- **§1 "routes run" volume sub-component** — DEFERRED (the genuinely hard one): coverage gaps in free
+  data / behind paid charting; snap-share stands in. (The rest of §1 Quality — empirical expected-points
+  per opportunity — shipped, 710 audit #3.)
 - **Fetchers** — `fantasypros.py` (the §3 2nd source, in-season), `odds.py` (Vegas game totals —
   optional environment add), `weather.py` — none built.
-- **Daily-collector reliability — shared resilience layer + off-laptop host** — UNBUILT (maintenance;
-  wanted *before* either banked series is leaned on). Two fetchers **bank a now-only, un-backfillable**
-  series — `leaguelogs.py` (market values → §4) and `news.py` (player news → §2) — so a missed run is
-  **permanent** (no historical endpoint). A leaguelogs audit (2026-05-31→07-10, 41 days) found only
-  **26/41 complete · 29/41 any-data (63% / 71%)**: ~8 days the laptop was off at the 04:00 fire (launchd
-  skips a powered-off run, no catch-up) + ~7 days a transient network error aborted the run
-  (`leaguelogs._get` is a bare `requests.get` with **no retry**; dynasty profiles, fetched last, drop
-  first). Three parts: **(1)** a single shared `fetchers/_http.py` (timeout / backoff / retry / throttle)
-  every fetcher calls — folds in `sleeper._get_json` + `news._get_feed` (both already retry), fixes
-  `leaguelogs._get`, + per-item isolation so one dead profile/feed can't abort a run (news has it,
-  leaguelogs doesn't); **(2)** a `check_*` coverage/health gate (gate style — span / coverage % /
-  missing / partial days, non-zero on a gap) that **certifies a series as an official source**;
-  **(3)** the **off-laptop host** — the ~8 powered-off days can't be fixed locally, so this merges with
-  the **Deployment** decision below (GitHub Actions is the lead: one scheduled workflow both collects
-  *and* publishes parquet to the static site). Interim: multi-fire the plists + install the
-  written-but-unloaded `com.fantasyai.news-snapshot` job. Promotes STATUS.md's leaguelogs follow-up +
-  `TECHNICAL_ARCHITECTURE.md`'s "resilience + host migration" note into one tracked, generalized item.
+- **Off-laptop collector host** — UNBUILT; **merges with Deployment.** The shared resilience *code*
+  SHIPPED (QUEUED #1): `fetchers/_http.py` (timeout / backoff / retry / throttle / per-item isolation),
+  all fetchers routed through it — `leaguelogs._get` gained the missing retry + per-item isolation (the
+  fix for the audit's ~7 transient-fail days), plus a `run.py` collector registry/dispatcher and a
+  `check_collectors.py` coverage/health gate that certifies a banked series. What remains is the
+  **host**: two fetchers bank a now-only, un-backfillable series — `leaguelogs.py` (market values → §4)
+  and `news.py` (team news → §2) — and launchd skips a powered-off run with no catch-up, so the ~8
+  laptop-off days can't be fixed locally. A static deploy has no compute, so a scheduled runner (GitHub
+  Actions the lead) both collects *and* publishes parquet — **decide it WITH Deployment below.** Interim:
+  multi-fire the plists + install the written-but-unloaded `com.fantasyai.news-snapshot` job.
 - **Multi-user / multi-league plumbing** — UNBUILT. Storage keys, config, and front-end addressing are
   single-league / single-user (`{season}`-keyed paths, one `SLEEPER_LEAGUE_ID`, hardcoded
   `MY_USERNAME` / single-season parquet names in `db.js`). The *any-league engine* (scoring / roster /
@@ -167,7 +171,11 @@ Each with the reason it isn't built. Ordered roughly by how soon it matters.
 ---
 
 ## Open flags (carried from the reads spec)
-- ROS **dynamic-update model** + the **1-10 precision-display** question (§2).
-- **Redraft / format-matched market source** for Market VOR (§4).
-- **Backend hygiene backlog** — packaging, the append pattern, spec-completeness gaps, config/deps/doc
-  drift — tracked in **`710_AUDIT.md`** (LLM context).
+- **1-10 precision-display** question (§2) — now a frontend/presentation decision: the 1–10 roll-up
+  itself shipped in `ros_synthesis`, and ROS scores already update weekly via the `as_of_week` tall
+  dimension, so the "dynamic-update model" is handled in the data. What's open is how to *show* a
+  qualitative 1–10 without implying false precision (the note rides with the grade — a UI choice).
+- **Redraft / format-matched market source** for Market VOR (§4) — the prereq to verify before building
+  it (confirm the banked LeagueLogs profile is redraft, not dynasty asset value).
+- **Backend hygiene backlog** — **RESOLVED**: all seven `710_AUDIT.md` items closed (six fixed; the
+  read-modify-write append pattern is a documented no-op-by-design migration trigger, not a fix).
