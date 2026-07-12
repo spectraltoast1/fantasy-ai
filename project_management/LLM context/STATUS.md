@@ -1,19 +1,22 @@
 # STATUS
 
-**Last updated:** 2026-07-11 (**§2 News pipeline COMPLETE — Stage C SHIPPED (per-player slice by
-inheritance + thinness tripwire + raw-content retention).** The 3-stage pipeline is **(A) collection**
-*(shipped)* → **(B) weekly AI synthesis** *(shipped)* → **(C) per-player slice** *(now built)* →
-`player_news_slice`, the per-player consumable the §2 synthesis (QUEUED #2) reads. **Next = QUEUED #1**
-(Daily-collector reliability). Stage C is a **deterministic reshape** (no AI): each on-team skill player
-inherits his own resolved `player` claims + his `position_group` claims (his position + team-wide
-offensive context) + his team's `unit` (`offense`/`defense`) claims from `team_news_dossier`; a
-`signal_tier` (rich/thin/none) + counts = the thinness tripwire (law-2 confidence honesty); a player who
-inherits nothing gets an honest-zero `is_empty` row. The **hard** gate `check_player_news_slice.py`
-independently recomputes the inheritance and demands an exact match (exit 0). **Retention:** `news.py
-prune` (RETENTION_DAYS=28 > the 14d synthesis window) nulls raw `content` older than the cutoff while
-keeping the row/link/claims. Verified live 2026 wk0: 967 players → 3058 rows (own 168 / pg 626 / unit
-2264; tiers rich 160 / thin 807 / none 0); prune kept all 5021 raw rows, nulled 1243 old bodies; both
-gates exit 0 post-prune. **Prior detail — Stage B (`application/ai/news_prompt.py`
+**Last updated:** 2026-07-12 (**Daily-collector reliability SHIPPED — shared `_http` layer + collector
+registry/dispatcher + coverage gate (QUEUED #1 done).** Separation of concerns: retry / backoff /
+throttle / per-item isolation now live ONCE in `fetchers/_http.py`, and all three HTTP callers
+(`sleeper` / `news` / `leaguelogs`) route through it — **leaguelogs gains the missing retry + per-item
+isolation** (the fix for the audit's ~7 transient-fail + "dynasty profiles drop first" days).
+`fetchers/run.py` is a declarative collector **REGISTRY + `run <name>` dispatcher** (cadence declared
+per collector; the **meter stays external** — launchd → GitHub Actions, which will call this same
+dispatcher, so nothing is wasted). `fetchers/check_collectors.py` **certifies** the banked series
+(leaguelogs strict daily coverage; news recency), hard-gating a recent window so permanent powered-off
+gaps don't fail forever; `--today` monitoring. The **off-laptop host** (the ~8 powered-off days) stays
+**deferred to the deployment decision**. Verified: network-free retry/4xx self-test, live no-regression
+on all three fetchers, isolation proof (a dead profile no longer aborts the run), gate reproduces the
+audit (65% complete / 72% any-data) + flags the real recent gap. **Next = QUEUED #2** (§2 ROS synthesis
+call — the news input `player_news_slice` now exists). **Prior — §2 news pipeline COMPLETE (Stage C):**
+per-player slice by inheritance (`player_news_slice`) + thinness tripwire + retention; deterministic
+reshape, hard gate, verified live 2026 wk0 (967 players → 3058 rows; prune kept all 5021 raw rows,
+nulled 1243 old bodies). **Prior detail — Stage B (`application/ai/news_prompt.py`
 + `write_team_news_dossier.py` + `check_team_news_dossier.py`, reusing the `ai/client.py` seam + the
 retained resolver) distills each team's recent `team_news_raw` window into a compact, **situation/security-
 focused, attributed** set of **scope-tagged claims** (player / position_group / unit) a downstream AI reads
@@ -82,6 +85,33 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**Daily-collector reliability — shared `_http` resilience layer + collector registry + coverage gate
+(QUEUED #1).** Separation of concerns: retry / backoff / throttle / per-item isolation now live ONCE in
+one shared script, so every collector gets a consistent, resilient fetch process. **Three commits.**
+(1) **`fetchers/_http.py`** — `get`/`get_json` (bounded timeout + exponential-backoff-with-jitter retry
+on TRANSIENT failures — timeouts/conn-errors/5xx; a 4xx raises immediately, not retried) + `set_throttle`
+(the process min-gap the manager-activity fan-out raises) + `isolate` (per-item catch+log+continue).
+All three HTTP callers migrated: `sleeper._get_json` → thin wrapper (behaviour-identical, `set_throttle`
+re-exported); `news._get_feed` → `_http.get` + `_http.isolate`; **`leaguelogs._get` → `_http.get_json`
+(ADDS retry) + `snapshot()` per-item isolation** (ADDS it — the fix for "dynasty profiles, fetched last,
+drop first"). (2) **`fetchers/run.py`** — a declarative collector REGISTRY (leaguelogs + news — the
+banked daily series; NOT sleeper, which is on-demand) with cadence + coverage-shape per collector, and a
+`run <name> | --all | --list` dispatcher (uniform process → post-run freshness). The **meter stays
+external** (launchd → GitHub Actions calls this same dispatcher — nothing wasted). **`fetchers/
+check_collectors.py`** — a network-free coverage/health gate: leaguelogs STRICT daily coverage
+(per-day distinct profiles vs the max-seen full day), news RECENCY (append-only); HARD criterion is a
+recent window (default 7d, excl. today) so permanent historical gaps don't fail forever; `--today`
+monitoring; UTC-dated to match the collectors. (3) **Docs.** The **off-laptop host** (the ~8
+powered-off days — a host problem retry can't fix) stays **deferred to the deployment decision** (GitHub
+Actions the lead, collects + publishes). Verified: network-free retry/4xx/isolate self-test (all PASS);
+live no-regression on all three fetchers (sleeper nfl-state + set_throttle, leaguelogs profiles, news
+KC snapshot); isolation proof (2 forced-dead leaguelogs profiles → the 3 good ones collected + the run
+COMPLETED reporting "2/5 failed (isolated)" instead of aborting); the gate reproduces the audit
+(leaguelogs full-span 28 complete / 65% / 72% any-data — matches the documented 63%/71%) and flags the
+real recent gap (07-05 partial → FAIL/exit 1; `--since 3` clean → PASS/exit 0). **Next — QUEUED #2**
+(§2 ROS synthesis call).
+
+> earlier build
 **§2 News pipeline Stage C — per-player slice by inheritance + thinness tripwire + raw-content retention
 (the pipeline is now COMPLETE, A→B→C).** Collapses each team's Stage-B news sheet (`team_news_dossier`)
 down to ONE player by **inheritance** — a deterministic reshape (no AI, no credits), so the gate is
@@ -130,29 +160,6 @@ zero-signal honesty); 168/186 player claims resolved; direction 171 pos / 51 mix
 145 opinion / 132 reported / 40 official. Off-season window thin by nature; richness ramps into camp.
 **Next — Stage C:** per-player slice by inheritance + thinness tripwire + raw-content retention.
 
-> earlier build
-**§2 News pipeline REWORK — team-centric collection (Stage A) — supersedes the v1 player-news collector.**
-After sparring + source research, the §2 news layer was redesigned as a **3-stage per-team pipeline**
-(**A collection** → **B weekly AI extraction** of scope-tagged claims → **C per-player slice** by
-inheritance); this ships Stage A. **Two commits.** (1) **Collection rework:** `fetchers/news.py` now
-collects per-NFL-team from **3 native RSS sources per team** — SB Nation (`/rss/index.xml`, grounded),
-FanSided (`/feed/`, player-flavored/noisier), official (`<team>.com/rss/news`, authoritative/PR) — all
-**96 feeds (32×3) validated live**. National desks dropped (league-level); **SI/FanNation ruled out** (no
-native per-team RSS — tested: 0 autodiscovery, all team paths 404). New `data_layer` **`team_news_raw`**
-entity (grain = one row per **article**; **stores feed-provided content** for the extraction — reverses
-v1's "no bodies"; feed-provided only, no scraping; append-only-of-new by `article_id`). Player resolution
-moved out of collection into Stages B/C (resolver **retained** — `build_index`/`resolve_players`/
-`_TEAM_ALIASES`). Per-feed isolation + backoff + per-team volume report (the Stage-C thinness-tripwire
-input) + resilience-floor flag. `source_type` per article for downstream source-weighting; `player_news`
-left as legacy. (2) **Docs closedown.** Verified live: **96/96 feeds, 32 teams, 5021 articles**; idempotent
-(0 dup titles; re-run adds only genuine feed churn); dead-feed isolation (run continues at 2/3); resolver
-`check` PASS; `published_at` 100%. **Design record:** value = *interpretation + salience* (facts come from
-Sleeper), trust = source diversity not fake corroboration. **Retention deferred to Stage C** (daily
-append-only now; will prune raw content >~4wk, keep derived claims). **Next — Stage B:** weekly per-team
-AI extraction → `team_news_dossier` of scope-tagged claims (reuse `ai/client.py`); then **Stage C** (player
-slice by inheritance + thinness tripwire + retention). After the pipeline: the queued **daily-collector
-reliability** + **§2 synthesis** builds (see Current build target).
-
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
@@ -199,6 +206,7 @@ reliability** + **§2 synthesis** builds (see Current build target).
     - §2 News pipeline REWORK — team-centric collection (Stage A), supersedes the v1 player-news collector — `fetchers/news.py` reworked to collect per-NFL-team from **3 native RSS sources/team** (SB Nation `/rss/index.xml` grounded + FanSided `/feed/` player-flavored/noisier + official `<team>.com/rss/news` authoritative/PR); all **96 feeds (32×3) validated live** (96/96 ok, 5021 articles). Nationals dropped (league-level); SI/FanNation ruled out (no native per-team RSS — 0 autodiscovery, all paths 404). New data_layer **`team_news_raw`** entity (grain = one row per **article**; **stores feed-provided content** for the extraction — reverses v1's headline-only rule; feed-provided only, no scraping; append-only-of-new by `article_id`, idempotent). Player resolution moved out of collection into Stages B/C (resolver retained: `build_index`/`resolve_players`/`_TEAM_ALIASES`). Per-feed isolation + backoff + per-team volume report (Stage-C thinness-tripwire input) + resilience-floor flag; `source_type` per article for weighting; `player_news` left as legacy. Verified: 96/96 feeds / 32 teams / 5021 articles, 0 dup titles, dead-feed isolation, resolver `check` PASS, `published_at` 100%. Stage A of the 3-stage pipeline (B = weekly AI claim-extraction → `team_news_dossier`; C = per-player slice + thinness tripwire + retention).
     - §2 News pipeline Stage B — weekly per-team AI news synthesis → `team_news_dossier` (the interpretation half; the project's 2nd AI-layer read after §7 dossiers) — new `application/ai/`: `news_prompt.py` (pure; situation/security schema + cluster-across-sources + attribution guardrails), `write_team_news_dossier.py` (windows the raw store `WINDOW_DAYS`=14/cap 60 → 1 Haiku call/team → validate → deterministic on-team id resolution; run-once-per-week, `--force`, `--team`), `check_team_news_dossier.py` (internal-consistency gate). `client.py` refactored (`_raw_call` shared seam + `generate_claims` array path; `generate_dossier` behavior-identical). New data_layer **`team_news_dossier`** (one growing file; grain = one claim row per (season,week,team); replace-by-(season,week,team), idempotent). Per claim: scope (player/position_group/unit) / subject / claim_type / **`basis`** (official/reported/opinion — opinion never laundered into fact) / attributed `note` / direction (positive/negative/neutral/**mixed**) / salience / cited `source_article_ids` + `source_types` (clustered; source diversity = trust). Skill-only (V1): player claims QB/RB/WR/TE resolved via a **team-restricted** index (gate caught + fixed a cross-team-id bug); all defensive news condensed into ONE `defense` unit note (game-script context; pre-banked for later). Verified live 2026 wk0: 32/32 teams, 317 claims, ~$0.46; gate PASS (coverage/schema/grounding/on-team-resolution/zero-signal); 168/186 player claims resolved. Next — Stage C (per-player slice by inheritance + thinness tripwire + raw-content retention).
     - §2 News pipeline Stage C — per-player slice by inheritance + thinness tripwire + raw-content retention (COMPLETES the 3-stage news pipeline A→B→C) — a **deterministic reshape** (no AI), so the gate is **hard**. New data_layer **`player_news_slice`** entity (`snapshots/news/player_news_slice.parquet`; grain = one inherited-claim row per (season,week,player,claim); write replace-by-(season,week)). `transforms/compute_player_news_slice.py`: each on-team skill player (whole NFL skill pool ~967, forward/league-agnostic) inherits his **own** resolved `player` claims + his **position_group** claims (subject normalized to his skill position, OR team-wide offensive context — `offense`/`offensive line`/coaching-scheme → all skill players; unmapped subjects dropped + reported as Stage-B drift) + his team's **unit** claims (`offense` + the condensed `defense` note) from `team_news_dossier`. Thinness tripwire as columns: `signal_tier` (rich=≥1 own / thin=only inherited / none=nothing) + `n_own_claims`/`n_inherited_claims`/`team_news_volume`; a player who inherits nothing gets ONE `is_empty` honest-zero row (like positional_depth's zero-count rows). `transforms/check_player_news_slice.py`: HARD gate — **independently recomputes** each player's expected inherited set from the dossier+registry (does NOT call the compute) and demands an exact multiset match incl. inheritance tag + provenance; + coverage/identity/thinness-honesty/zero-signal/retention-safety. **Retention:** `data_layer.prune_team_news_raw_content` + `fetchers/news.py prune [--dry-run]` (`RETENTION_DAYS=28` > the 14d synthesis window) nulls raw article `content` older than the cutoff, KEEPS the row + `article_id`/`title`/`url`/`published_at` + the derived claims (which cite `article_id`, never the text); idempotent. Verified live 2026 wk0: 967 players → 3058 rows (own 168 = the resolved player claims / pg 626 / unit 2264; tiers rich 160 / thin 807 / none 0); eyeballed a TE inheriting his own claim + team offense but NOT the WR-room claim + a team-wide o-line claim reaching all 4 positions; slice gate exit 0. Prune: dry-run 1243/5021 rows → live kept all 5021 rows (0 null id/url), nulled all old content, kept the 28d window (3748 with content), idempotent; both gates exit 0 post-prune. The §2 synthesis (QUEUED #2) now has its news input: a player's inherited `player_news_slice`. No UI (data + gate). Next — QUEUED #1 (Daily-collector reliability).
+    - Daily-collector reliability — shared `_http` resilience layer + collector registry + coverage gate (QUEUED #1) — separation of concerns: retry/backoff/throttle/per-item isolation now live ONCE in `fetchers/_http.py`, so every collector shares a consistent resilient fetch process. **3 commits.** (1) `_http.py`: `get`/`get_json` (bounded timeout + exponential-backoff-with-jitter retry on TRANSIENT failures — timeouts/conn-errors/5xx; a 4xx raises immediately) + `set_throttle` (process min-gap; the manager-activity fan-out raises it) + `isolate` (per-item catch+log+continue). All three HTTP callers migrated: `sleeper._get_json` → behaviour-identical thin wrapper (`set_throttle` re-exported); `news._get_feed` → `_http.get` + `_http.isolate`; **`leaguelogs._get` → `_http.get_json` (ADDS retry) + `snapshot()` per-item isolation** (ADDS it — the fix for the audit's ~7 transient-fail + "dynasty profiles drop first" days). (2) `fetchers/run.py`: declarative collector REGISTRY (leaguelogs + news — the banked daily series; NOT sleeper = on-demand) with cadence + coverage-shape per collector, + a `run <name>|--all|--list` dispatcher (uniform process → post-run freshness); the **meter stays external** (launchd → GitHub Actions calls this same dispatcher — nothing wasted). `fetchers/check_collectors.py`: network-free coverage/health gate — leaguelogs STRICT daily coverage (per-day distinct profiles vs max-seen full day), news RECENCY (append-only); HARD criterion is a recent window (default 7d, excl. today) so permanent powered-off gaps don't fail forever; `--today` monitoring; UTC-dated to match the collectors. (3) Docs. The **off-laptop host** (the ~8 powered-off days — a host problem retry can't fix) stays **deferred to the deployment decision** (GitHub Actions the lead: collects + publishes). Verified: network-free retry/4xx/isolate self-test (PASS); live no-regression on all 3 fetchers; isolation proof (2 forced-dead leaguelogs profiles → the 3 good ones collected + the run COMPLETED reporting "2/5 failed (isolated)" instead of aborting); gate reproduces the audit (leaguelogs full-span 28 complete / 65% / 72% any-data — matches the documented 63%/71%) + flags the real recent gap (07-05 partial → FAIL/exit 1; `--since 3` clean → PASS/exit 0). Next — QUEUED #2 (§2 ROS synthesis call).
 
 > not yet built
     >> backend
@@ -218,39 +226,32 @@ reliability** + **§2 synthesis** builds (see Current build target).
 > `position_group` claims + his team's `unit`/`defense` claims; + a **thinness tripwire** `signal_tier`
 > for law-2 confidence honesty; + **raw-content retention** — `news.py prune`, `RETENTION_DAYS=28`, nulls
 > old `team_news_raw.content` keeping row+link+claims). Deterministic reshape, **hard** round-trip gate
-> (exit 0). The §2 synthesis (QUEUED #2) now has its news input. **Scheduling handoff:** wire `news.py
-> prune` (and the weekly `write_team_news_dossier` + `compute_player_news_slice`) into the daily/weekly
-> jobs as part of QUEUED #1.
+> (exit 0). The §2 synthesis (QUEUED #2) now has its news input. **Scheduling handoff (now deferred with
+> the host):** QUEUED #1 built the `run.py` dispatcher + resilience layer, but wiring `news.py prune` +
+> the weekly `write_team_news_dossier`/`compute_player_news_slice` into the meter (launchd → GitHub
+> Actions) lands with the deployment/off-laptop-host decision.
 >
 > ---
 >
-> **⭐ NEXT ACTIVE BUILD — QUEUED #1: Daily-collector reliability — the shared
-> resilience layer + coverage gate (Phase 4 maintenance; harden the banked series *before* it's leaned
-> on).** The news pipeline is done, so the queued builds now resume in order. An audit of the LeagueLogs snapshot series (2026-05-31→07-10, 41 days) found it collecting at
-> only **63% complete / 71% any-data**: ~8 days the laptop was powered off at the 04:00 launchd fire
-> (skipped, no catch-up) + ~7 days a transient network error aborted the run (`leaguelogs._get` is a bare
-> `requests.get` with **no retry**; dynasty profiles, fetched last, drop first). The API serves only
-> "now" (no historical endpoint) → every missed day is **permanent**. Two fetchers now bank such an
-> un-backfillable series — `leaguelogs.py` (§4 market values) + `news.py` (§2 player news) — so this is
-> built **collector-agnostic**, not leaguelogs-only.
+> **✅ QUEUED #1 — Daily-collector reliability — DONE (2026-07-12).** Shipped the **portable** resilience
+> layer (nothing wasted by the later hosting call): **`fetchers/_http.py`** — one shared
+> retry/backoff/throttle/**isolation** path; all three HTTP callers routed through it (`sleeper` behaviour-
+> identical, `news`, and **`leaguelogs` gained the missing retry + per-item isolation** — the fix for the
+> audit's 63%/71% coverage). **`fetchers/run.py`** — a collector REGISTRY + `run <name>` dispatcher
+> (cadence declared per collector; the **meter stays external**). **`fetchers/check_collectors.py`** —
+> the coverage/health gate (leaguelogs strict daily coverage, news recency, `--today` monitoring;
+> reproduces the audit + flags recent gaps). See the most-recent build for the full record.
 >
-> **Build (portable / host-agnostic — nothing here is wasted by the later hosting call):** **(1)** one
-> shared **`fetchers/_http.py`** (timeout / backoff / retry / throttle) every fetcher calls — fold in
-> `sleeper._get_json` + `news._get_feed` (both already retry) and **fix `leaguelogs._get`**, + **per-item
-> isolation** so one dead profile/feed can't abort a run (news isolates feeds; leaguelogs doesn't isolate
-> profiles). **(2)** a **`check_*` coverage/health gate** (gate style — span / coverage % / missing /
-> partial days, non-zero on a gap) that **certifies a series as an official source**. **(3)** a
-> stale-or-partial-today **monitoring** warning. Full spec: `READ_BUILD_ORDER.md` → *Daily-collector
-> reliability*.
+> **Deferred — decide WITH web hosting (NOT done here):** the **off-laptop host** that closes the ~8
+> powered-off days (a host problem retry can't fix) + where the canonical parquet lives. A static web
+> deploy has no compute, so a scheduled runner — **GitHub Actions the lead** — both collects *and*
+> publishes the parquet, **calling the `run.py` dispatcher**: the collector host is the same decision as
+> Deployment. **Interim (cheap, still open — operator action):** install the written-but-unloaded
+> `com.fantasyai.news-snapshot` plist + multi-fire both launchd jobs so the laptop only needs to be awake
+> once. (Also still to wire into the meter: the weekly `write_team_news_dossier` + `compute_player_news_slice`
+> + daily `news.py prune`.)
 >
-> **Deferred — decide WITH web hosting (not this build):** the **off-laptop host** that closes the ~8
-> powered-off days (retry alone can't) + where the canonical parquet lives. A static web deploy has no
-> compute, so a scheduled runner — **GitHub Actions the lead** — both collects *and* publishes the
-> parquet: the collector host is the same decision as Deployment. **Interim (cheap, now):** install the
-> written-but-unloaded `com.fantasyai.news-snapshot` plist + multi-fire both launchd jobs so the laptop
-> only needs to be awake once.
->
-> **⭐ QUEUED #2 (resumes after the news pipeline + reliability): §2 ROS Outcome Shape — the AI SYNTHESIS
+> **⭐ NEXT ACTIVE BUILD — QUEUED #2: §2 ROS Outcome Shape — the AI SYNTHESIS
 > call (Phase 6, the interpretation half).** The §2 AI layer was decomposed (sparred with the PM) into
 > **aggregation** (the news layer — REBUILT as the 3-stage team-news pipeline, now **COMPLETE**) and
 > **interpretation** (this synthesis). The quantitative skeleton

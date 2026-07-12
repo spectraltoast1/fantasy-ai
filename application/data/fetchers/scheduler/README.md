@@ -19,6 +19,27 @@ time (DST-aware). If the Mac is asleep at the scheduled time, the job runs at ne
 (News is offset from leaguelogs so the two daily fetchers don't overlap. Daily to start —
 the cadence is tunable; bump it more frequent in-season by editing `StartCalendarInterval`.)
 
+## Reliability (the Daily-collector reliability build)
+
+Every fetcher's HTTP routes through the shared `fetchers/_http.py` (bounded timeout / backoff / retry /
+per-item isolation). Prefer the **dispatcher** as the run entrypoint — it runs a collection through the
+uniform process + a post-run freshness check, and is what a future GitHub Actions workflow will call:
+
+```sh
+python3 -m application.data.fetchers.run leaguelogs     # or: news | --all | --list
+```
+
+Certify coverage / monitor freshness (network-free — reads the persisted series, safe to run anytime):
+
+```sh
+python3 -m application.data.fetchers.check_collectors           # certify all (exit 0 iff recent coverage healthy)
+python3 -m application.data.fetchers.check_collectors --today   # is today collected + complete?
+```
+
+The plists still call each fetcher's own `snapshot` entrypoint directly; repointing them at `run` — and
+the **off-laptop host** that closes the powered-off days (a static deploy has no compute, so GitHub
+Actions is the lead: collect + publish) — lands with the **Deployment** decision.
+
 ## Install / update
 
 ```sh
@@ -60,6 +81,6 @@ rm ~/Library/LaunchAgents/$LABEL.plist
   so the `application` package resolves without an editable install. If the repo moves, update
   `WorkingDirectory` (and reload); it is hardcoded to this machine's checkout (`/Users/willdaniel/...`).
 - Logs are under `~/Library/Logs/fantasy-ai/` (outside the repo). Snapshots append to
-  `snapshots/leaguelogs/market_values.parquet` and `snapshots/news/player_news.parquet` (gitignored).
+  `snapshots/leaguelogs/market_values.parquet` and `snapshots/news/team_news_raw.parquet` (gitignored).
 - The **news** job needs `feedparser` installed in that Python (`pip install feedparser`); the
   collector is otherwise self-contained (public RSS, no API key).

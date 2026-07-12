@@ -2,7 +2,7 @@
 
 > Engineering context document for Claude Code. Describes the stack, folder structure, data layer design, and technical principles. Updated regularly as the project evolves.
 
-**Last reviewed:** 2026-07-11 (§2 news pipeline **COMPLETE — Stage C shipped**: per-player slice by inheritance → `player_news_slice` entity + `transforms/compute_player_news_slice.py` / `check_player_news_slice.py` (a deterministic reshape — no AI — so the gate is a HARD inheritance round-trip), + **raw-content retention** (`data_layer.prune_team_news_raw_content` + `fetchers/news.py prune`, `RETENTION_DAYS=28`). Stage B `team_news_dossier` + Stage A `team_news_raw` shipped earlier; the 3-stage pipeline A→B→C is now the whole news layer)
+**Last reviewed:** 2026-07-12 (**Daily-collector reliability shipped**: shared **`fetchers/_http.py`** resilience layer — one path for retry/backoff/throttle/per-item isolation that all three HTTP callers (`sleeper`/`news`/`leaguelogs`) route through (leaguelogs gained the missing retry + isolation) — + **`fetchers/run.py`** collector REGISTRY/dispatcher (cadence declared, meter external) + **`fetchers/check_collectors.py`** coverage/health gate. Off-laptop host deferred to Deployment. Prior: §2 news pipeline **COMPLETE — Stage C shipped**: per-player slice by inheritance → `player_news_slice` entity + `transforms/compute_player_news_slice.py` / `check_player_news_slice.py` (a deterministic reshape — no AI — so the gate is a HARD inheritance round-trip), + **raw-content retention** (`data_layer.prune_team_news_raw_content` + `fetchers/news.py prune`, `RETENTION_DAYS=28`). The 3-stage pipeline A→B→C is now the whole news layer)
 
 ---
 
@@ -26,7 +26,7 @@ Winning a redraft fantasy football championship is about more than just collecti
 - **Market values:** LeagueLogs API (keyed on sleeperPlayerId; QB/RB/WR/TE only; visible attribution required)
 - **Scheduling:** launchd (macOS) for daily fetchers
 - **Storage:** JSON (cache), parquet (snapshots), JSONL (advisor log - future)
-- **HTTP:** requests library
+- **HTTP:** requests library, wrapped by the shared **`fetchers/_http.py`** resilience layer (bounded timeout / exponential-backoff-with-jitter retry on transient failures / process throttle / per-item isolation) — every fetcher's network I/O routes through it (Daily-collector reliability)
 - **AI layer:** `anthropic` SDK (0.97.0), model `claude-haiku-4-5` — the project's first AI-layer code (`application/ai/`, §7 Manager Dossiers Phase B). Opt-in + API-key-gated (`config.ANTHROPIC_API_KEY`); the single Anthropic call is isolated behind one function (`ai/client.generate_dossier`) so it can swap to the Batch API later without touching callers. Synchronous today (see the AI-layer note below); parquet I/O still routes through `data_layer` — the LLM call is external, like a fetcher's HTTP.
 
 ---
@@ -173,10 +173,13 @@ fantasy-ai/
     ├── data/
         ├── data_layer.py           # ✅ built — centralized read/write module
     │   ├── fetchers/               # one Python script per source (tracked in git)
-    │   │   ├── nfl_stats.py        # ✅ built
-    │   │   ├── sleeper.py          # ✅ built
-    │   │   ├── leaguelogs.py       # ✅ built — daily market-value snapshots
-    │   │   ├── news.py             # ✅ built — daily TEAM-news RSS collector (§2 pipeline Stage A): 3 native sources/team → team_news_raw; also `prune` (Stage C retention: null content older than RETENTION_DAYS=28, keep row+link+claims) + the retained resolver (build_index/resolve_players, imported by Stages B/C)
+    │   │   ├── _http.py            # ✅ built — SHARED HTTP resilience layer (Daily-collector reliability): get/get_json (timeout + exponential-backoff-with-jitter retry on transient failures/5xx; a 4xx raises immediately) + set_throttle (process min-gap) + isolate (per-item catch/log/continue). ALL fetcher network I/O routes through it
+    │   │   ├── nfl_stats.py        # ✅ built (uses nflreadpy, not _http)
+    │   │   ├── sleeper.py          # ✅ built — on-demand Sleeper API; _get_json wraps _http (set_throttle re-exported for the manager-activity fan-out)
+    │   │   ├── leaguelogs.py       # ✅ built — daily market-value snapshots; _get → _http.get_json (ADDS retry) + snapshot() per-item isolation (ADDED — the reliability fix)
+    │   │   ├── news.py             # ✅ built — daily TEAM-news RSS collector (§2 pipeline Stage A): 3 native sources/team → team_news_raw; _get_feed → _http.get, snapshot() → _http.isolate; also `prune` (Stage C retention: null content older than RETENTION_DAYS=28, keep row+link+claims) + the retained resolver (build_index/resolve_players, imported by Stages B/C)
+    │   │   ├── run.py              # ✅ built — collector REGISTRY (leaguelogs + news = banked daily series; NOT sleeper = on-demand) + `run <name>|--all|--list` dispatcher; cadence declared per collector, the meter (launchd → GitHub Actions) calls this. Post-run freshness check
+    │   │   ├── check_collectors.py # ✅ built — coverage/health gate (network-free): leaguelogs STRICT daily coverage, news RECENCY, --today monitoring; hard-gates a recent window so permanent powered-off gaps don't fail forever
     │   │   └── scheduler/          #   tracked launchd plists + README for the daily snapshot jobs
     │   │       ├── com.fantasyai.leaguelogs-snapshot.plist
     │   │       ├── com.fantasyai.news-snapshot.plist
