@@ -18,6 +18,14 @@
 > - **New caveats:** custom-scoring dominance meets `_scoring`'s first-down/threshold-bonus rejection
 >   (~28% of custom leagues unscoreable — a roadmap number, not a corpus blocker); FAAB features apply
 >   only to the FAAB-league subset.
+>
+> **⚠️ Corrected (Session 0.6, 2026-07-13):** the "72% custom / pure `std` = 0" split above was **inflated
+> by a float32-tolerance bug** in `_scoring.scoring_profile` (a drifted standard PPR league was tagged
+> `custom`). True custom pool **1,765 not 2,045 (−13.7%)**; unscoreable rate **45.4% not 39.2%** (802
+> genuine, corrected denominator); matched-eligible **six seasons, not four** (2020:10 / 2021:19 were the
+> bug's "clean zero", total 261→320). The narrow-corpus decision stands; the split is now **TRAIN 2020–2023 ·
+> DEV 2024 · TEST 2025**. The bug was **live engine code** (§7 comparability), not just a corpus artefact —
+> see `SESSION_0_6_SCORING_TOLERANCE_FIX.md` + `STATUS.md`.
 
 ---
 

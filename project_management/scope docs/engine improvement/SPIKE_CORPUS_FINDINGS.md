@@ -1,5 +1,17 @@
 # Session 0 — Corpus Spike: Findings
 
+> ## ⚠️ Correction (Session 0.6, 2026-07-13) — do not silently trust the `custom`/`std` splits below
+> The classifier `_scoring.scoring_profile` compared weights at `_TOL = 1e-9`, but Sleeper serves them at
+> **float32** (a "0.1" arrives as `0.10000000149…`, drift ~1.5e-9), so **every float32-drifted standard
+> league was misclassified `custom`.** This inflated the `custom` counts and the "pure `std` = 0" claim in
+> the shape matrix (§D/§5). Measured against the persisted discovery, **280 leagues were wrongly `custom`**;
+> the true custom pool is **1,765, not 2,045 (−13.7%)**, and the unscoreable rate among *genuine* customs
+> is **45.4%, not 39.2%** (same 802 numerator, corrected denominator). This is *the* bug this doc's own
+> "suspiciously clean zero" (0 matched in 2020 **and** 2021) pointed at. Fixed in §0.6; corrected corpus
+> numbers live in `STATUS.md`. **The discovery totals (≥3,003 league-seasons, ~87% pass, ID resolution,
+> matchup completeness) are unaffected** — they don't depend on scoring classification. Left below as
+> written, per "mark corrected, don't rewrite."
+
 **Run:** 2026-07-13 · **Type:** throwaway de-risking spike (code deleted; only this doc merges)
 **Brief:** [`scope docs/SESSION_0_CORPUS_SPIKE.md`](../scope%20docs/SESSION_0_CORPUS_SPIKE.md) ·
 **Feeds:** [`scope docs/LEAGUE_CORPUS.md`](../scope%20docs/LEAGUE_CORPUS.md)
