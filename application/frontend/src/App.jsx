@@ -8,6 +8,8 @@ import Teams from './Teams.jsx';
 import TeamDetail from './TeamDetail.jsx';
 import Dossier from './Dossier.jsx';
 import League from './League.jsx';
+import Matchups from './Matchups.jsx';
+import MatchupDetail from './MatchupDetail.jsx';
 
 // Gridiron app shell. Owns the three pieces of global state the whole app reads:
 //   tab      — the active surface (league / matchups / teams / players)
@@ -60,6 +62,7 @@ export default function App() {
   const openPlayer = (id) => push({ type: 'player', id });
   const openTeam = (id) => push({ type: 'team', id });
   const openDossier = (id) => push({ type: 'dossier', id });
+  const openMatchup = (id) => push({ type: 'matchup', id });
   const back = () => setStack((s) => s.slice(0, -1));
 
   return (
@@ -81,6 +84,7 @@ export default function App() {
           onOpenPlayer={openPlayer}
           onOpenTeam={openTeam}
           onOpenDossier={openDossier}
+          onOpenMatchup={openMatchup}
           onBack={back}
         />
       </main>
@@ -90,7 +94,7 @@ export default function App() {
 
 // Routes tab/detail to a surface. Players is wired; the other three surfaces show the
 // coming-soon slot. Detail views render centered behind a "‹ Back" affordance.
-function Surface({ tab, detail, depth, asOfWeek, onOpenPlayer, onOpenTeam, onOpenDossier, onBack }) {
+function Surface({ tab, detail, depth, asOfWeek, onOpenPlayer, onOpenTeam, onOpenDossier, onOpenMatchup, onBack }) {
   const viewKey = tab + ':' + depth + (detail ? ':' + detail.type + ':' + detail.id : '');
 
   let content;
@@ -103,7 +107,7 @@ function Surface({ tab, detail, depth, asOfWeek, onOpenPlayer, onOpenTeam, onOpe
   } else if (detail?.type === 'team') {
     content = (
       <DetailShell onBack={onBack}>
-        <TeamDetail rosterId={detail.id} asOfWeek={asOfWeek} onOpenPlayer={onOpenPlayer} onOpenDossier={onOpenDossier} />
+        <TeamDetail rosterId={detail.id} asOfWeek={asOfWeek} onOpenPlayer={onOpenPlayer} onOpenDossier={onOpenDossier} onOpenMatchup={onOpenMatchup} />
       </DetailShell>
     );
   } else if (detail?.type === 'dossier') {
@@ -112,12 +116,20 @@ function Surface({ tab, detail, depth, asOfWeek, onOpenPlayer, onOpenTeam, onOpe
         <Dossier rosterId={detail.id} />
       </DetailShell>
     );
+  } else if (detail?.type === 'matchup') {
+    content = (
+      <DetailShell onBack={onBack}>
+        <MatchupDetail matchupId={detail.id} asOfWeek={asOfWeek} />
+      </DetailShell>
+    );
   } else if (tab === 'players') {
     content = <Players asOfWeek={asOfWeek} onOpenPlayer={onOpenPlayer} />;
   } else if (tab === 'teams') {
     content = <Teams asOfWeek={asOfWeek} onOpenTeam={onOpenTeam} />;
   } else if (tab === 'league') {
     content = <League asOfWeek={asOfWeek} onOpenTeam={onOpenTeam} />;
+  } else if (tab === 'matchups') {
+    content = <Matchups asOfWeek={asOfWeek} />;
   } else {
     content = <Placeholder tab={tab} />;
   }

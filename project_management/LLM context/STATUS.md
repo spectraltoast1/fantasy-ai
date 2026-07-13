@@ -1,6 +1,36 @@
 # STATUS
 
-**Last updated:** 2026-07-13 (**§0.6 — `_scoring` FLOAT32 TOLERANCE FIX (a LIVE engine bug the corpus caught)
+**Last updated:** 2026-07-13 (**GRIDIRON FRONT-END — MATCHUPS SLICE SHIPPED: the fifth and final
+`DATA_CONTRACT` surface (§4.3), completing the 5-surface contract (Players · Dossier · Teams · League ·
+Matchups).** As-of week N the Matchups tab shows week **N+1**'s head-to-head slate, fully *projected*
+(the app is a season replay — the pairing is known in advance, the scores are the future it's pretending
+not to know). New pairing-only **`schedule_{season}.parquet`** (`export_schedule.py` + `data_layer`
+schedule helpers: the weekly Sleeper matchup snapshots stacked, **`points` dropped** so no future result
+reaches the client) + `projection_consensus` wired into `public/data` + `db.js`. **Commit 1 — data seam +
+slate:** `queries.loadMatchups`/`loadMatchupDetail` off a shared `teamProjections()` — the frozen
+roster-as-of-N (same `arg_max` Team detail uses) set into its **optimal lineup** by the target week's
+projection centre; μ = Σ starter `center_ppr`, σ = √(Σ `band_ppr²`), win prob =
+**Φ((μA−μB)/√(σA²+σB²))**, mirroring `compute_bracket_sim.py`'s analytic core (ported
+`expandSlots`/`optimalLineup` + an erf `normalCdf`; the 10k Monte Carlo stays server-side — playoff odds
+already come from `bracket_odds`). `Matchups.jsx` slate: head-to-head cards, your game pinned +
+violet-washed, records + projected totals, a new **`WinProbBar`** mark (your side violet, opponent steel).
+**Commit 2 — matchup detail + web two-pane:** `MatchupDetail.jsx` — head-to-head win prob, each team's
+**Score Range** (Σ starters' 25–75 on a shared scale, overlap = upset room; reuses `RangeGauge`),
+per-starter range gauges, starters+bench (starters = the optimal projected lineup); the tab is a
+persistent two-pane (slate left, detail right, your game selected by default) and a `matchup` detail type
+in the App stack reuses `MatchupDetail`. **Commit 3 — integration:** the **this-week matchup bar** in Team
+detail (§4.5, no longer deferred — `loadTeamDetail.thisWeek` drills into the full detail), the new marks'
+styles, verify + docs. **Watch-game (§5) deferred honestly** — it needs playoff odds re-simulated per
+outcome (a server-side Monte Carlo the client can't run), consistent with the app's honest-gaps discipline.
+All data access through the `queries.js` seam; views stay pure renderers. Verified live 1280px (browser
+preview): wk4→**wk5** slate, 5 games, your game pinned; win prob/μ cross-checked against an independent
+bracket-sim-math recompute (my game **128.5/57% vs 124.4/43%** exact; one game ±1% from optimal-lineup
+tie-break σ); two-pane selection swaps the right pane; starter projections sum exactly to team totals
+(8 starters each); Team-detail this-week bar → matchup detail → Back chain; **season replay wk2 → wk3
+slate** (roster/schedule/odds all re-target N+1); `schedule.parquet` carries no `points`; console clean.
+**Next — the mobile-responsive pass** (both mockups ship a mobile layout; the app is Web-1280 today) **+
+the (backend-blocked) free-agent value read** that unblocks the Players `Available` filter + the League
+Waiver-Wire strip. — Prior (backend): **§0.6 — `_scoring` FLOAT32 TOLERANCE FIX (a LIVE engine bug the corpus caught)
 + corpus re-select.** `scoring_profile` compared weights at `_TOL=1e-9`, but Sleeper serves them at float32 (a
 `0.1` → `0.10000000149…`, drift ~1.5e-9), so **every drifted standard PPR league was misclassified `custom`** —
 which dropped clean leagues from §7 `is_comparable` AND was the real cause of §0.5's "clean zero" (0 matched in
