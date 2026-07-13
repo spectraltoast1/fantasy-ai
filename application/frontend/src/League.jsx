@@ -50,6 +50,7 @@ export default function League({ asOfWeek, onOpenTeam }) {
           <YourRace data={data} onOpenTeam={onOpenTeam} />
           <div className="lg-dash">
             <PlayoffPicture data={data} onOpenTeam={onOpenTeam} />
+            <PostureMap data={data} onOpenTeam={onOpenTeam} />
           </div>
         </Gate>
       )}
@@ -144,8 +145,66 @@ function PlayoffPicture({ data, onOpenTeam }) {
   );
 }
 
+// Posture Map — the luck-vs-performance quadrant (contract §4.2 + §5). X = standing
+// (playoff odds), Y = true record (all-play %, inverted so strong sits at top). The
+// diagonal is the "on pace" line: above it a roster performs above its standing (buy),
+// below it a roster is standing above its performance (sell). One dot per team, colored by
+// the same posture read as the standings; a dot drills to Team detail.
+function PostureMap({ data, onOpenTeam }) {
+  const dots = data.standings.filter((t) => t.playoffPct != null && t.posture);
+  return (
+    <div className="lg-panel">
+      <div className="lg-panel-head">
+        <span className="lg-panel-title">Posture Map</span>
+        <span className="lg-panel-note">playoff odds × true record</span>
+      </div>
+      <div className="lg-map-well">
+        <svg className="lg-map-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+          <polygon points="9,9 91,9 9,91" fill="color-mix(in srgb, var(--unlucky) 6%, transparent)" />
+          <polygon points="91,9 91,91 9,91" fill="color-mix(in srgb, var(--ridingluck) 5%, transparent)" />
+          <line x1="9" y1="91" x2="91" y2="9" stroke="var(--faint)" strokeWidth="1" strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />
+        </svg>
+        <div className="lg-map-onpace mono">ON PACE</div>
+        <div className="lg-map-corner tl mono" style={{ color: 'var(--unlucky)' }}>◤ UNLUCKY · buy</div>
+        <div className="lg-map-corner tr mono" style={{ color: 'var(--contender)' }}>CONTENDER ◥</div>
+        <div className="lg-map-corner bl mono" style={{ color: 'var(--rebuild)' }}>◣ REBUILD</div>
+        <div className="lg-map-corner br mono" style={{ color: 'var(--ridingluck)' }}>RIDING LUCK · sell ◢</div>
+        <div className="lg-map-axis mono">STANDING · PLAYOFF ODDS →</div>
+        {dots.map((t) => (
+          <div
+            key={t.rosterId}
+            className="lg-map-dot"
+            style={{ left: `${9 + (t.playoffPct / 100) * 82}%`, top: `${9 + ((100 - t.allPlayPct) / 100) * 82}%` }}
+            onClick={() => onOpenTeam?.(t.rosterId)}
+            title={`${t.name} · ${Math.round(t.playoffPct)}% odds · ${Math.round(t.allPlayPct)}% all-play`}
+          >
+            <span
+              className={`lg-map-pt ${t.isMe ? 'me' : ''}`}
+              style={{ background: t.posture.tone, boxShadow: `0 0 0 3px ${ring(t.posture.tone)}` }}
+            />
+            <span className="lg-map-short mono">{shortName(t.name)}</span>
+          </div>
+        ))}
+      </div>
+      <p className="lg-map-cap">
+        Off-diagonal is the read: <span style={{ color: 'var(--unlucky-l)' }}>top-left</span> wins less
+        than it should (buy), <span style={{ color: 'var(--ridingluck)' }}>bottom-right</span> wins more
+        than it should (sell).
+      </p>
+    </div>
+  );
+}
+
 // Posture chips tint at ~13% of the tone (README color roles).
 const chipBg = (tone) => `color-mix(in srgb, ${tone} 13%, transparent)`;
+// Dot ring — the tone at low alpha.
+const ring = (tone) => `color-mix(in srgb, ${tone} 18%, transparent)`;
+
+// A compact scatter label from a team name (drop a leading "Team ", first word, ≤6 chars).
+function shortName(name) {
+  const n = String(name).replace(/^team\s+/i, '').trim();
+  return (n.split(/\s+/)[0] || n).slice(0, 6).toUpperCase();
+}
 
 // Magic number → a manager-facing line from bracket_odds' magic_wins + remaining_games.
 function magicLine(magicWins, remainingGames) {

@@ -515,3 +515,31 @@ body {
 .lg-pp-line { display: flex; align-items: center; gap: 8px; margin: 7px 2px; }
 .lg-pp-line span:first-child, .lg-pp-line span:last-child { flex: 1; height: 1px; background: var(--border-2); }
 .lg-pp-line-label { font-size: 8.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted-2); font-weight: 700; }
+
+/* Posture Map */
+.lg-map-well {
+  position: relative; height: 412px; background: var(--map-well);
+  border: 1px solid var(--border); border-radius: 14px; overflow: hidden;
+}
+.lg-map-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.lg-map-onpace {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%) rotate(-45deg);
+  font-size: 9px; letter-spacing: 0.16em; color: var(--faint);
+}
+.lg-map-corner { position: absolute; font-size: 9.5px; letter-spacing: 0.06em; }
+.lg-map-corner.tl { left: 14px; top: 12px; }
+.lg-map-corner.tr { right: 14px; top: 12px; }
+.lg-map-corner.bl { left: 14px; bottom: 26px; }
+.lg-map-corner.br { right: 14px; bottom: 26px; }
+.lg-map-axis {
+  position: absolute; left: 0; right: 0; bottom: 8px; text-align: center;
+  font-size: 8px; letter-spacing: 0.14em; color: var(--faint);
+}
+.lg-map-dot {
+  position: absolute; transform: translate(-50%, -50%); cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+}
+.lg-map-pt { width: 13px; height: 13px; border-radius: 50%; }
+.lg-map-pt.me { outline: 2px solid var(--violet-light); outline-offset: 1px; }
+.lg-map-short { font-size: 8.5px; color: var(--text-3); white-space: nowrap; }
+.lg-map-cap { margin: 9px 0 0; font-size: 10px; color: var(--faint-2); line-height: 1.5; }
