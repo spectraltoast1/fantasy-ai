@@ -616,6 +616,66 @@ export async function loadWeeks() {
   return { weeks, latest: weeks.length ? weeks[weeks.length - 1] : null };
 }
 
+/**
+ * League chrome for the top-bar switcher — all derived from real config, none hardcoded:
+ *   - label: "10-tm · PPR · 1QB" from teams count + league_settings scoring + lineup_slots
+ *   - record: the logged-in user's W-L as of week N
+ *   - name/myOwner: the league name (not persisted by Sleeper's config fetch yet — falls
+ *     back) + the user's handle for the avatar
+ * @param {number} [asOfWeek] view as of week N; omit for the latest week
+ * @returns {Promise<{name: string|null, label: string, record: string|null, myOwner: string|null}>}
+ */
+export async function loadLeagueMeta(asOfWeek) {
+  const [teamRows, recRows, slotRows, meRows] = await Promise.all([
+    query(`SELECT count(*)::INT AS n FROM 'teams.parquet'`),
+    query(`SELECT value FROM 'league_settings.parquet' WHERE section = 'scoring' AND key = 'rec'`),
+    query(`SELECT slot, count, eligible FROM 'slots.parquet'`),
+    query(`SELECT roster_id, owner_name FROM 'teams.parquet' WHERE owner_name = '${MY_USERNAME}'`),
+  ]);
+
+  const teamCount = Number(teamRows[0]?.n ?? 0);
+
+  // Scoring label from the reception value (1 → PPR, 0.5 → Half, else Standard).
+  const rec = recRows.length ? Number(recRows[0].value) : null;
+  const scoring = rec === 1 ? 'PPR' : rec === 0.5 ? 'Half-PPR' : rec === 0 ? 'Std' : rec != null ? `${rec}-PPR` : '—';
+
+  // QB structure from the lineup slots: a QB-eligible flex (SUPERFLEX) reads as SF,
+  // else the count of dedicated QB slots (1QB / 2QB).
+  let qbSlots = 0;
+  let superflex = false;
+  for (const s of slotRows) {
+    const elig = String(s.eligible ?? '').toUpperCase();
+    const isQbOnly = elig === 'QB';
+    if (isQbOnly) qbSlots += Number(s.count);
+    else if (elig.split(',').includes('QB')) superflex = true;
+  }
+  const qb = superflex ? 'SF' : `${qbSlots || 1}QB`;
+
+  // The user's record as of week N (one W/L per team-week).
+  const myRosterId = meRows.length ? Number(meRows[0].roster_id) : null;
+  let record = null;
+  if (myRosterId != null) {
+    const rows = await query(`
+      WITH tw AS (
+        SELECT roster_id, week, any_value(matchup_result) AS result
+        FROM 'season.parquet'
+        WHERE ${weekCutoff(asOfWeek)}
+        GROUP BY roster_id, week
+      )
+      SELECT sum(result = 'W')::INT AS w, sum(result = 'L')::INT AS l
+      FROM tw WHERE roster_id = ${myRosterId}
+    `);
+    if (rows.length && rows[0].w != null) record = `${Number(rows[0].w)}-${Number(rows[0].l)}`;
+  }
+
+  return {
+    name: null,
+    label: `${teamCount}-tm · ${scoring} · ${qb}`,
+    record,
+    myOwner: meRows.length ? meRows[0].owner_name : null,
+  };
+}
+
 // Coefficient of variation (sample stddev / mean) of a numeric list.
 function cv(xs) {
   if (xs.length < 2) return 0;

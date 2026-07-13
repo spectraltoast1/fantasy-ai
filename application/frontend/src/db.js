@@ -28,6 +28,7 @@ async function initDB() {
   await registerParquet(db, '/data/season_2025.parquet', 'season.parquet');
   await registerParquet(db, '/data/teams_2025.parquet', 'teams.parquet');
   await registerParquet(db, '/data/lineup_slots_2025.parquet', 'slots.parquet');
+  await registerParquet(db, '/data/league_settings_2025.parquet', 'league_settings.parquet');
   await registerParquet(db, '/data/team_form_2025.parquet', 'team_form.parquet');
   await registerParquet(db, '/data/team_leakage_2025.parquet', 'team_leakage.parquet');
   await registerParquet(db, '/data/player_signal_2025.parquet', 'player_signal.parquet');
