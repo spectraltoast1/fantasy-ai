@@ -20,14 +20,17 @@ from collections import Counter
 from application.data import data_layer
 from application.data.corpus import _corpus
 
-# Declared train window + floor (Deliverable 2). Set from the ACHIEVED matched balance: only seasons
-# that clear the floor are declared trainable; thin/empty seasons are held out, and STATUS.md states the
-# split. The gate enforces that every declared-train season really clears the floor.
-#   Achieved matched-eligible supply: 2020=0, 2021=0, 2022≈21, 2023≈58, 2024≈65, 2025≈117.
-#   ⇒ Split: TRAIN = 2023-2024 (solid) · DEV = 2022 (thin) · TEST = 2025 (2026 analogue). 2020-21 have
-#   NO matched-shape leagues in this neighbourhood — they cannot be trained on, full stop.
-TRAIN_WINDOW = (2023, 2024)
-MATCHED_SEASON_FLOOR = 20             # explicit minimum matched league-seasons to call a season trainable
+# Declared train window + floors (Deliverable 2). Session 0.6 corrected the float32 bug that had zeroed
+# 2020-21, so the split is now the full six seasons:
+#   Split: TRAIN 2020-2023 · DEV 2024 · TEST 2025 (2026 analogue). 2020-21 are THIN (~8, ~16 selected),
+#   used via league-wise k-fold WITHIN the train seasons, not leaned on as a standalone season-wise dev.
+# Two floors — operationalising the standing instruction "a suspiciously clean zero is a bug":
+#   HARD floor  → a train season below it is unusable even pooled ⇒ the gate FAILS (this is exactly what
+#                 would have caught the 0.5 "0 matched in 2020 AND 2021" had it existed).
+#   SOLID floor → below it a season is flagged THIN (reported, k-folded), not failed.
+TRAIN_WINDOW = (2020, 2021, 2022, 2023)
+MATCHED_SEASON_HARD_FLOOR = 5
+MATCHED_SEASON_SOLID_FLOOR = 20
 SESSION0_PASS_RATE = 87.0
 
 _ok_count = {"n": 0}
@@ -80,12 +83,18 @@ def check() -> bool:
     # 2. season balance
     by_season = Counter(r["season"] for r in matched)
     print(f"  matched supply per season: {dict(sorted(by_season.items()))}")
-    thin = [s for s in TRAIN_WINDOW if by_season.get(s, 0) < MATCHED_SEASON_FLOOR]
-    if thin:
-        _fail(f"declared-train seasons below floor {MATCHED_SEASON_FLOOR}: "
-              f"{ {s: by_season.get(s,0) for s in thin} } — re-declare the train window or crawl more")
+    empty = [s for s in TRAIN_WINDOW if by_season.get(s, 0) < MATCHED_SEASON_HARD_FLOOR]
+    if empty:
+        _fail(f"declared-train seasons below HARD floor {MATCHED_SEASON_HARD_FLOOR} (unusable even "
+              f"pooled — a suspiciously clean low count, cf. the 0.5 float32 bug): "
+              f"{ {s: by_season.get(s,0) for s in empty} }")
     else:
-        _ok(f"every declared-train season {TRAIN_WINDOW} ≥ floor {MATCHED_SEASON_FLOOR}")
+        _ok(f"every declared-train season {TRAIN_WINDOW} ≥ hard floor {MATCHED_SEASON_HARD_FLOOR}")
+    thin = [s for s in TRAIN_WINDOW
+            if MATCHED_SEASON_HARD_FLOOR <= by_season.get(s, 0) < MATCHED_SEASON_SOLID_FLOOR]
+    if thin:
+        print(f"  ⓘ thin train seasons (< {MATCHED_SEASON_SOLID_FLOOR}, k-folded within train, not "
+              f"standalone): { {s: by_season.get(s, 0) for s in thin} }")
 
     # 3. filter honesty
     no_result = [r for r in m if not r["filter_result"]]
