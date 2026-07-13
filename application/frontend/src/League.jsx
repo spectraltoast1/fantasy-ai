@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { loadLeague } from './queries.js';
+import { loadLeague, loadPositionalTalent, POS } from './queries.js';
 import { Sparkline } from './charts.jsx';
 import { Gate, REGIME } from './readiness.jsx';
 
@@ -51,6 +51,7 @@ export default function League({ asOfWeek, onOpenTeam }) {
           <div className="lg-dash">
             <PlayoffPicture data={data} onOpenTeam={onOpenTeam} />
             <PostureMap data={data} onOpenTeam={onOpenTeam} />
+            <PositionalTalent onOpenTeam={onOpenTeam} />
           </div>
         </Gate>
       )}
@@ -191,6 +192,81 @@ function PostureMap({ data, onOpenTeam }) {
         than it should (buy), <span style={{ color: 'var(--ridingluck)' }}>bottom-right</span> wins more
         than it should (sell).
       </p>
+    </div>
+  );
+}
+
+// Positional Talent — per position, teams ranked by the Market VOR they hold there (a
+// surplus is trade capital, a gap is a target). Self-contained (its own read): Market VOR
+// is the current market and does not replay with the week. Cross-time POC today, flagged.
+// The Waiver Wire strip is deferred — it needs a free-agent pool entity (none in V1).
+function PositionalTalent({ onOpenTeam }) {
+  const [tal, setTal] = useState(null);
+  const [pos, setPos] = useState('RB');
+
+  useEffect(() => {
+    let live = true;
+    loadPositionalTalent()
+      .then((t) => live && setTal(t))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  const list = tal?.byPos[pos] ?? [];
+  const max = list.length ? Math.max(0.1, list[0].vor) : 1;
+
+  return (
+    <div className="lg-panel">
+      <div className="lg-panel-head">
+        <span className="lg-panel-title">Positional Talent</span>
+        <span className="lg-panel-note">market VOR by team</span>
+      </div>
+      <div className="lg-pt-toggle">
+        {POS.map((p) => (
+          <button key={p} className={pos === p ? 'active' : ''} onClick={() => setPos(p)}>
+            {p}
+          </button>
+        ))}
+      </div>
+      {tal == null ? (
+        <div className="gr-state">Loading…</div>
+      ) : (
+        <>
+          {list.map((x) => (
+            <div
+              key={x.rosterId}
+              className="lg-pt-row"
+              style={{ background: x.isMe ? 'var(--violet-wash)' : 'transparent' }}
+              onClick={() => onOpenTeam?.(x.rosterId)}
+            >
+              <span className="lg-pt-rank mono">{x.rank}</span>
+              <span className="lg-pt-name">
+                {x.name}
+                {x.isMe ? <span className="pl-you">YOU</span> : null}
+              </span>
+              <div className="lg-pt-bar-wrap">
+                <div className="lg-pt-bar">
+                  <div className="lg-pt-fill" style={{ width: `${Math.max(2, (x.vor / max) * 100)}%` }} />
+                </div>
+                <span className="lg-pt-val mono">{x.vor.toFixed(1)}</span>
+              </div>
+            </div>
+          ))}
+          {tal.isCrossTime ? (
+            <p className="lg-pt-poc">
+              Market VOR is the current market × this frozen roster — a cross-time POC, not a live read.
+            </p>
+          ) : null}
+          {/* Waiver Wire strip deferred: no free-agent pool entity in V1 (same block as the
+              Players "Available" filter). */}
+          <div className="lg-pt-waiver">
+            <div className="lg-pt-waiver-label gr-label">Waiver Wire</div>
+            <p>Best-available + THIN/STREAMABLE/DEEP needs the free-agent pool read (deferred in V1).</p>
+          </div>
+        </>
+      )}
     </div>
   );
 }

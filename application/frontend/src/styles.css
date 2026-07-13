@@ -543,3 +543,27 @@ body {
 .lg-map-pt.me { outline: 2px solid var(--violet-light); outline-offset: 1px; }
 .lg-map-short { font-size: 8.5px; color: var(--text-3); white-space: nowrap; }
 .lg-map-cap { margin: 9px 0 0; font-size: 10px; color: var(--faint-2); line-height: 1.5; }
+
+/* Positional Talent */
+.lg-pt-toggle { display: flex; gap: 7px; margin-bottom: 12px; }
+.lg-pt-toggle button {
+  padding: 6px 15px; border-radius: var(--r-pill); cursor: pointer;
+  background: var(--surface); border: 1px solid var(--border-2); color: var(--text-3);
+  font-family: var(--ui); font-size: 12px; font-weight: 800;
+}
+.lg-pt-toggle button.active { background: var(--violet); border-color: var(--violet); color: var(--on-violet); }
+.lg-pt-row {
+  display: grid; grid-template-columns: 18px 1fr 116px; gap: 10px; align-items: center;
+  padding: 9px 6px; border-bottom: 1px solid var(--border); cursor: pointer;
+}
+.lg-pt-row:hover { background: var(--surface); }
+.lg-pt-rank { font-size: 12px; font-weight: 800; color: var(--faint); text-align: center; }
+.lg-pt-name { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lg-pt-bar-wrap { display: flex; align-items: center; gap: 8px; }
+.lg-pt-bar { flex: 1; height: 6px; border-radius: var(--r-pill); background: var(--border); overflow: hidden; }
+.lg-pt-fill { height: 100%; border-radius: var(--r-pill); background: var(--muted); }
+.lg-pt-val { font-size: 12px; font-weight: 800; color: var(--text-2); width: 34px; text-align: right; }
+.lg-pt-poc { margin: 11px 0 0; font-size: 10.5px; color: var(--ridingluck-l); font-style: italic; line-height: 1.5; }
+.lg-pt-waiver { margin-top: 11px; border: 1px dashed var(--border-2); border-radius: 11px; padding: 11px 13px; }
+.lg-pt-waiver-label { color: var(--muted-2); margin-bottom: 3px; }
+.lg-pt-waiver p { margin: 0; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
