@@ -929,6 +929,36 @@ export async function loadStandings(asOfWeek) {
 }
 
 // ---------------------------------------------------------------------------
+// League tab — "whole league at a glance" (Gridiron surface #4).
+// ---------------------------------------------------------------------------
+
+/**
+ * The League surface's core data: the full standings (reused from loadStandings — each row
+ * already carries playoff %, all-play %, posture, seed, magic, odds series) plus the "me"
+ * row and the REAL playoff cut / team count from league_settings. One source feeds Your
+ * Race, the Playoff Picture, and the Posture Map.
+ * @param {number} [asOfWeek] view as of week N; omit for the latest week
+ * @returns {Promise<{standings: object[], me: object|null, playoffCut: number|null, nTeams: number}>}
+ */
+export async function loadLeague(asOfWeek) {
+  const [standings, cfgRows] = await Promise.all([
+    loadStandings(asOfWeek),
+    query(`
+      SELECT key, value FROM 'league_settings.parquet'
+      WHERE section = 'league' AND key IN ('playoff_teams', 'num_teams')
+    `),
+  ]);
+  const cfg = {};
+  for (const r of cfgRows) cfg[r.key] = Number(r.value);
+  return {
+    standings,
+    me: standings.find((s) => s.isMe) ?? null,
+    playoffCut: cfg.playoff_teams != null ? Math.round(cfg.playoff_teams) : null,
+    nTeams: cfg.num_teams != null ? Math.round(cfg.num_teams) : standings.length,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Team detail (drill-down from the standings) — stat blocks, positional depth,
 // roster with a PROD/MKT VOR toggle.
 // ---------------------------------------------------------------------------
