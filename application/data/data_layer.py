@@ -1219,3 +1219,50 @@ def read_manager_dossiers(season: int, owner_id: str | None = None) -> pl.DataFr
 
 def manager_dossiers_exist(season: int) -> bool:
     return _manager_dossiers_path(season).exists()
+
+
+# --- League Corpus (Session 0.5): discovery crawl + the selected league registry ---
+#
+# Two additive, cross-season entities under snapshots/corpus/ — NOT keyed by season (the corpus
+# spans 2020-2025 in one file each). corpus_discovery is the full classified BFS crawl (one row per
+# (league_id, season), free classification, no game data); corpus_manifest is the SELECTED league
+# registry the L0 keying sessions consume. Both written whole (overwrite) — the discovery crawl holds
+# the full deduped set in memory and rewrites it each checkpoint (the leaguelogs.snapshot() precedent).
+# Purely additive: no existing entity, path, or transform is touched here.
+
+def _corpus_discovery_path() -> Path:
+    return _SNAPSHOT_DIR / "corpus" / "corpus_discovery.parquet"
+
+
+def write_corpus_discovery(df: pl.DataFrame) -> None:
+    """Write the full deduped discovery crawl (one row per (league_id, season)); overwrite."""
+    path = _corpus_discovery_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
+
+def read_corpus_discovery() -> pl.DataFrame:
+    return pl.read_parquet(_corpus_discovery_path())
+
+
+def corpus_discovery_exists() -> bool:
+    return _corpus_discovery_path().exists()
+
+
+def _corpus_manifest_path() -> Path:
+    return _SNAPSHOT_DIR / "corpus" / "corpus_manifest.parquet"
+
+
+def write_corpus_manifest(df: pl.DataFrame) -> None:
+    """Write the selected league registry (one row per narrowed candidate); overwrite."""
+    path = _corpus_manifest_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
+
+def read_corpus_manifest() -> pl.DataFrame:
+    return pl.read_parquet(_corpus_manifest_path())
+
+
+def corpus_manifest_exists() -> bool:
+    return _corpus_manifest_path().exists()
