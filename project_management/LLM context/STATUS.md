@@ -181,6 +181,36 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**Gridiron front-end — League surface: Your Race + Playoff Picture + Posture Map + Positional Talent (3rd front-end slice; 3 commits).**
+The "whole league at a glance" surface (DATA_CONTRACT §4.2). Leans on the Teams-cluster `loadStandings` — ONE
+source of records/odds/posture across Teams and League. **(1) Your Race + Playoff Picture:** new
+`queries.loadLeague(asOfWeek)` composes `loadStandings` with the REAL playoff cut + team count from
+`league_settings` (`playoff_teams = 4`, not the prototype's 6). `League.jsx` renders the full-width Your Race
+band (playoff chance + posture chip, Seed N of 10, "top 4 advance", magic number via `magicLine` off
+`bracket_odds` magic_wins/remaining_games) and the 3-column dashboard, Playoff Picture in col 1 (teams by odds,
+YOU badge, magic sublines, posture-toned odds trendlines, a PLAYOFF LINE after seed 4). The this-week
+head-to-head + win% is **deferred honestly** to the Matchups slice (its win prob is an unsurfaced bracket-sim
+read) — a note, not a fake bar. **(2) Posture Map:** an SVG well (reusing the standings) — X = playoff odds,
+Y = all-play % inverted (the §5 shipped axis, not `true_rank`); quadrant tints + the dashed on-pace diagonal +
+posture-palette corner labels; one dot per team at (odds, all-play) colored by posture, my team ringed; a dot →
+Team detail. **(3) Positional Talent:** new `loadPositionalTalent()` sums each team's positive `market_vor` per
+position at the latest market snapshot, ranked per position; a QB/RB/WR/TE toggle over the bars, with the
+**cross-time POC note** (2026 market × 2025 roster — the locked decision). Not week-parameterized (the market is
+current, doesn't replay). The **Waiver Wire strip is deferred** — best-available + THIN/STREAMABLE/DEEP needs a
+free-agent pool entity (none in V1). `App.jsx` renders League for the league tab; **no db.js change** —
+bracket_odds / market_vor / league_settings were already registered. Seam discipline kept (all data access in
+`queries.js`; views are pure renderers). Verified live at 1280px: Your Race 87% / Riding luck / Seed 3 of 10 /
+top 4 advance / Clinch in 6 of next 11; Playoff Picture Bski 91% → 1% with the PLAYOFF LINE after seed 4;
+Posture Map dots placed + colored (Bski contender top-right, my Tet Lasso riding-luck), a dot → Team detail;
+Positional Talent RB/QB toggle re-ranks (QB: Won't you be my Naber 1.0 / Tet Lasso YOU 0.9 — matches the
+parquet); **week switcher replays to wk2** (Your Race 35%, Playoff Picture reshuffles, map dots move) while
+Positional Talent stays constant (current market — honest cross-time); Playoff-row + posture-dot → Team detail →
+Back; console clean on a fresh load (the mid-edit Fast-Refresh transients don't reproduce). **Next — Matchups
+slice (the last surface: the week's slate + head-to-head win prob + score-range bands, off `bracket_sim` +
+`projection_consensus`); plus the mobile-responsive pass + the free-agent value read (unblocks Available/
+waivers).**
+
+> earlier build
 **Corpus §0.5 — Discovery, Selection & the league registry (the offline-tuning asset; Improvement-Loop
 Track A, unblocks L0 keying).** Session 0's spike proved the corpus viable; §0.5 built it. **New additive
 `application/data/corpus/` package** (nothing existing changed — L0 does the keying) run as `python3 -m
@@ -242,34 +272,6 @@ console errors. **Next — League slice (Your Race / Playoff Picture / Posture M
 Talent, off `bracket_odds` + `true_rank` + `market_vor`), then Matchups; + the mobile-responsive pass + the free-agent
 value backend read (unblocks Available/waivers).**
 
-> earlier build
-**Gridiron front-end — Foundation + Players slice (first front-end surfacing of the gated reads; 3 commits).**
-Recreates the Claude-Design `Gridiron` handoff in the real React + Vite + DuckDB-WASM app per its
-`DATA_CONTRACT.md` (Web-first; new-shell-with-placeholders migration). **(1) Foundation:** `styles.css`
-rewritten to the Gridiron token set (violet brand accent + reserved 5-color posture palette, Archivo/IBM
-Plex Mono), a new top-bar shell (`App.jsx`) — brand + league switcher (real derived `10-tm · PPR · 1QB · 3-1`
-via new `queries.loadLeagueMeta` off teams/league_settings/lineup_slots, nothing hardcoded), centered
-segmented tabs with SVG glyphs (`icons.jsx`), the existing week selector reused, avatar; `Placeholder.jsx`
-coming-soon slot for League/Matchups/Teams. The old League/Team panels are retired from the shell (files
-kept, unimported). **(2) Players table:** `queries.loadPlayers(asOfWeek)` — ONE read joining `production_vor`
-(as-of slice → PROD VOR, default sort), `market_vor` (latest snapshot → MKT VOR + trade_gap, cross-time),
-`ros_synthesis` (latest week → bull/bear/situation grades, sparse), and season identity (name + NFL team),
-ALL on `sleeper_player_id`; `Players.jsx` renders a VOR-anchored sortable table (PROD/MKT/BULL/BEAR/SIT) +
-position filter + is_me YOU badges, wrapped in the point-in-time readiness `Gate`. Available/waiver filter
-DEFERRED (no free-agent VOR entity in V1). **(3) Player card:** shared `charts.jsx` (Sparkline/TrendLine/
-GradeBar/RangeGauge) + `queries.loadPlayerCard(sleeperId, asOfWeek)` → `PlayerCard.jsx`: Value·VOR
-(Production + Market weekly series + value/delta) with a BUY/HOLD/SELL lean off `trade_gap` **POC-gated**
-(is_cross_time — never a live call), Opportunity from `player_signal` (quality_rate/opp_pct/direction+
-reliability/recent-vs-expected + read), ROS Outcome Shape (`ros_synthesis` grades + prose notes + confidence,
-prior-season flagged); honest empty states where a read is absent. `db.js` registers production_vor/
-market_vor/ros_synthesis/league_settings (public/data symlinks added). **Seam discipline kept** — all new
-data access is in `queries.js`; views are pure renderers consuming plain objects. Verified live at 1280px
-(browser preview): real players sorted by PROD VOR (Josh Allen/McCaffrey…), MKT cross-time incl. negatives,
-QB filter + MKT re-sort, is_me badges, row→card→back; Player card full — Gibbs (honest ROS-empty) and Hurts
-(full ROS BULL 8 / BEAR 6 / SITUATION 6 + AI prose + MED confidence + prior-season flag); no console errors.
-**Next — Manager Dossier slice (trivial 1:1 to `manager_dossiers`), then Teams/Team-detail → League →
-Matchups; plus mobile-responsive pass + the free-agent value backend read that unblocks Available/waivers.**
-
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
@@ -323,6 +325,7 @@ Matchups; plus mobile-responsive pass + the free-agent value backend read that u
     - Manager Dossiers — removed the API-key gate (now an **included AI run**, not opt-in) — the §7 dossier run is cheap (~10 Haiku calls / ~$0.025 / once per season) and now ships as a standard product AI read using the app owner's key (in the gitignored `config.py`, never user-supplied). Dropped the `client.api_available()` LOCKED early-return in `write_manager_dossiers.run()` so the writer always executes; the **shared `client.api_available()` seam is untouched** and the other two AI writers (`write_team_news_dossier`, `write_ros_synthesis`) stay key-gated. Unrelated guards unchanged (run-once-per-season, zero-signal API skip). Docstring + `TECHNICAL_ARCHITECTURE.md`/`READ_BUILD_ORDER.md` reworded from "API-key-gated / key-gate clean exit". No key-storage change (key stays out of git). Docs-and-one-writer change; `check_manager_dossiers.py` gate unaffected.
     - Gridiron front-end — Foundation + Players slice (first front-end surfacing of the gated reads; 3 commits) — recreates the Claude-Design `Gridiron` handoff (`scope docs/`, `DATA_CONTRACT.md`) in the real React+Vite+DuckDB-WASM app, Web-first, new-shell-with-placeholders. (1) Gridiron design system (`styles.css` tokens — violet brand + reserved 5-color posture palette, Archivo/IBM Plex Mono) + 4-surface app chrome (`App.jsx`: brand + league switcher via new `queries.loadLeagueMeta` deriving `10-tm · PPR · 1QB · 3-1` from teams/league_settings/lineup_slots, segmented tabs with `icons.jsx` glyphs, week selector reused, `Placeholder.jsx` for League/Matchups/Teams; old League/Team panels retired from the shell). (2) Players table — `queries.loadPlayers(asOfWeek)` joins `production_vor` (PROD VOR, default sort) + `market_vor` (MKT VOR, cross-time) + `ros_synthesis` (bull/bear/situation grades, sparse) + season identity on `sleeper_player_id`; `Players.jsx` VOR-anchored sortable table + position filter + is_me badges + point-in-time `Gate`; Available/waiver DEFERRED (no FA-pool entity). (3) Player card — shared `charts.jsx` (Sparkline/TrendLine/GradeBar/RangeGauge) + `queries.loadPlayerCard()` → `PlayerCard.jsx`: Value·VOR series + BUY/HOLD/SELL lean off `trade_gap` (POC-gated cross-time), Opportunity from `player_signal`, ROS Outcome Shape from `ros_synthesis` (grades/notes/confidence, prior-season flagged); honest empty states. `db.js` registers production_vor/market_vor/ros_synthesis/league_settings (public/data symlinks added). All new data access through the `queries.js` seam. Verified live 1280px (browser preview): real players + sort/filter/is_me, full Player card (Gibbs ROS-empty; Hurts full ROS 8/6/6 + confidence + prior-season flag), no console errors. Next — Manager Dossier slice, then Teams/League/Matchups; + mobile pass + free-agent value read (unblocks Available/waivers) + roster-wide ros_synthesis batch.
     - Gridiron front-end — Teams cluster: Teams standings + Team detail + Manager Dossier (2nd front-end slice; 3 commits) — continues the `DATA_CONTRACT` build (§4.4/§4.5/§4.8). New pure `src/posture.js` = the §5 posture rule (`derivePosture`, `BAND=9`/`LEVEL_CUT=60`, `POSTURE_TONE`) in ONE home, reused by the Teams chips now + the League posture MAP later. (1) Teams standings — `queries.loadStandings()` assembles per team the real record + all-play "true record" (reusing the `loadTeamDetails` all-play loop) + `bracket_odds` playoff % (0–1 fraction ×100) with its weekly series for the trendline + the derived posture; `Teams.jsx` sorts by odds (rank · team+YOU · record · true rec · posture chip · playoff % · odds sparkline); `bracket_odds` registered in `db.js`. (2) Team detail — `loadTeamDetail()`: 4 stat blocks (record, all-play true rec, playoff %+seed, pts/wk), positional depth per QB/RB/WR/TE (`positional_depth` starter value + league spectrum + rank + SURPLUS/EVEN/GAP shape) via a new `DepthBar` mark, roster starters/bench with each player's Production+Market VOR weekly series behind a PROD/MKT toggle (MKT cross-time POC); `TeamDetail.jsx` + a Manager Dossier button; the this-week matchup bar deferred honestly to the Matchups slice (needs `bracket_sim`), not fabricated; `positional_depth` registered. (3) Manager Dossier — `loadManagerDossier()` reads the `manager_dossiers` row (already carries the feature counts, no 2nd fetch); `Dossier.jsx` = headline + 5 tendency fields + Signal-Depth footer (deep/moderate/thin → HIGH/MED/THIN + counts + confidence note) + provenance; `is_zero_signal` → honest "no intel"; `manager_dossiers` registered. `App.jsx` gains a detail nav-stack (push/pop) for correct multi-level Back (team → player, team → dossier); Teams rows drill in. All new data access through `queries.js`; views pure renderers. Verified live 1280px: standings + posture chips + trendlines, week switcher replays to wk2, team detail blocks/depth/roster toggle + player drill + Back, Bski dossier all 5 fields + MED badge, full Back chain; numbers match parquet; console clean. Next — League slice (Your Race/Playoff Picture/Posture MAP/Positional Talent off bracket_odds+true_rank+market_vor), then Matchups; + mobile-responsive pass + free-agent value read.
+    - Gridiron front-end — League surface: Your Race + Playoff Picture + Posture Map + Positional Talent (3rd front-end slice; 3 commits) — the "whole league at a glance" (DATA_CONTRACT §4.2). Leans on the Teams-cluster `loadStandings` (one source for records/odds/posture). (1) Your Race + Playoff Picture — new `queries.loadLeague(asOfWeek)` composes `loadStandings` with the REAL playoff cut + team count from `league_settings` (`playoff_teams=4`, not the prototype's 6); `League.jsx` renders the full-width Your Race band (playoff chance + posture chip, Seed N of 10, "top 4 advance", magic number via `magicLine` off bracket_odds magic_wins/remaining_games) and the 3-col dashboard, Playoff Picture in col 1 (teams by odds, YOU, magic sublines, posture-toned odds trendlines, PLAYOFF LINE after seed 4); the this-week head-to-head + win% deferred honestly to Matchups (unsurfaced bracket-sim win prob), a note not a fake bar. (2) Posture Map — an SVG well reusing the standings: X=playoff odds, Y=all-play % inverted (the §5 shipped axis, not `true_rank`), quadrant tints + dashed on-pace diagonal + posture-palette corner labels, one dot/team colored by posture (mine ringed), dot→Team detail. (3) Positional Talent — new `loadPositionalTalent()` sums each team's positive `market_vor` per position at the latest market snapshot, ranked per position; QB/RB/WR/TE toggle + bars + the cross-time POC note (2026 market × 2025 roster, the locked decision); not week-parameterized (market is current, doesn't replay); Waiver Wire strip deferred (no free-agent pool entity in V1). `App.jsx` renders League for the league tab; NO db.js change (bracket_odds/market_vor/league_settings already registered). Seam discipline kept (all data access in `queries.js`; views pure). Verified live 1280px: Your Race 87%/Riding luck/Seed 3 of 10/top 4/Clinch in 6 of next 11; Playoff Picture Bski 91%→1% with the line after seed 4; posture dots placed+colored (Bski contender, my Tet riding-luck), dot→Team detail; talent QB toggle re-ranks (Won't you be my Naber 1.0 / Tet Lasso YOU 0.9, matches parquet); week switcher replays to wk2 (Your Race 35%, picture reshuffles, dots move) while talent stays constant (current market — honest cross-time); Playoff-row + posture-dot → Team detail → Back; console clean on a fresh load. Next — Matchups slice (slate + win prob + score-range bands, off `bracket_sim` + `projection_consensus`); + mobile-responsive pass + free-agent value read.
 
 > not yet built
     >> backend
