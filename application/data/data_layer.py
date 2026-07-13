@@ -1292,3 +1292,51 @@ def read_corpus_manifest() -> pl.DataFrame:
 
 def corpus_manifest_exists() -> bool:
     return _corpus_manifest_path().exists()
+
+
+# --- League registry (Improvement-Loop L0 keying) ---
+# The single source of truth for "which leagues exist and how each is keyed", replacing the implicit
+# config.SLEEPER_LEAGUE_ID single-league assumption (audit S1.3 — league #2 silently overwriting #1).
+# One row per (league_id, season): its scoring_key + shape_key (the scopes derived analytics partition
+# on), whether it is mine (the served/live league vs a corpus backfill league), when it was onboarded,
+# and its pilot cohort. Built by shared/league_registry.py as a projection of the corpus manifest
+# unioned with the live config league; read by shared/league_resolver and by the scope-defaulting
+# derived read/write functions (`_active_league`). Written whole (overwrite) — small, rebuilt from source.
+
+_LEAGUES_COLS = ["league_id", "season", "scoring_key", "shape_key", "is_mine",
+                 "onboarded_at", "pilot_cohort"]
+
+
+def _leagues_path() -> Path:
+    return _SNAPSHOT_DIR / "leagues.parquet"
+
+
+def write_leagues(df: pl.DataFrame) -> None:
+    """Write the league registry (one row per (league_id, season)); overwrite. Enforces the schema order."""
+    path = _leagues_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.select(_LEAGUES_COLS).write_parquet(path)
+
+
+def read_leagues() -> pl.DataFrame:
+    return pl.read_parquet(_leagues_path())
+
+
+def leagues_exists() -> bool:
+    return _leagues_path().exists()
+
+
+def _active_league(season: int) -> tuple[str, str]:
+    """(league_id, scoring_key) for the is_mine league in `season` — the scope every derived read/write
+    defaults to when a caller passes no explicit league_id/scoring_key. Raises if the registry is missing
+    or has no is_mine row for the season (build it: `python3 -m application.shared.league_registry build`)."""
+    if not leagues_exists():
+        raise ValueError(
+            "leagues.parquet not found — run `python3 -m application.shared.league_registry build` "
+            "before reading/writing scoped derived entities."
+        )
+    df = read_leagues().filter(pl.col("is_mine") & (pl.col("season") == season))
+    if df.is_empty():
+        raise ValueError(f"No is_mine league for season {season} in leagues.parquet.")
+    r = df.row(0, named=True)
+    return str(r["league_id"]), str(r["scoring_key"])
