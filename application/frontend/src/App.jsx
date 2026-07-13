@@ -3,6 +3,7 @@ import { loadWeeks, loadLeagueMeta } from './queries.js';
 import { TAB_ICONS, IconChevronLeft } from './icons.jsx';
 import Placeholder from './Placeholder.jsx';
 import Players from './Players.jsx';
+import PlayerCard from './PlayerCard.jsx';
 
 // Gridiron app shell. Owns the three pieces of global state the whole app reads:
 //   tab      — the active surface (league / matchups / teams / players)
@@ -80,16 +81,9 @@ function Surface({ tab, detail, asOfWeek, onOpenPlayer, onBack }) {
 
   let content;
   if (detail?.type === 'player') {
-    // The Player card lands in the next slice; the detail shell + routing are wired now.
     content = (
       <DetailShell onBack={onBack}>
-        <div className="gr-placeholder">
-          <div className="gr-placeholder-title">Player card</div>
-          <span className="gr-placeholder-tag">Coming soon</span>
-          <p className="gr-placeholder-line">
-            Value·VOR trend, opportunity, and the ROS outcome shape land in the next slice.
-          </p>
-        </div>
+        <PlayerCard sleeperId={detail.id} asOfWeek={asOfWeek} />
       </DetailShell>
     );
   } else if (tab === 'players') {

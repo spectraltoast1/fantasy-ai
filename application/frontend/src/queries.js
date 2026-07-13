@@ -676,6 +676,163 @@ export async function loadPlayers(asOfWeek) {
   }));
 }
 
+// Trade lean thresholds (VOR units) on the Production−Market gap. Market ≫ Production →
+// SELL (market rich); Production ≫ Market → BUY (cheap on the market); else HOLD. Named
+// constant (a future league/user-config candidate). Gated cross-time today (see below).
+const TRADE_GAP_T = 0.25;
+
+/**
+ * The full player card for one player: Value·VOR (Production + Market weekly series with
+ * value/delta + a trade lean), Opportunity (the player_signal axes), and the ROS Outcome
+ * Shape (ros_synthesis grades/notes where they exist). All keyed by sleeper_player_id.
+ * @param {string} sleeperId
+ * @param {number} [asOfWeek] view as of week N; omit for the latest week
+ * @returns {Promise<object>} the assembled card, or { missing: true } if not rostered
+ */
+export async function loadPlayerCard(sleeperId, asOfWeek) {
+  const id = String(sleeperId).replace(/'/g, "''");
+  const prodCutoff = asOfWeek == null ? 'TRUE' : `as_of_week <= ${Number(asOfWeek)}`;
+
+  const [identRows, prodRows, mktRows, sigRows, rosRows, teamRows] = await Promise.all([
+    query(`
+      SELECT arg_max(player_display_name, week) AS name,
+             arg_max(team, week)                AS nfl_team,
+             arg_max(position, week)            AS position,
+             arg_max(roster_id, week)           AS roster_id
+      FROM 'season.parquet'
+      WHERE sleeper_player_id = '${id}' AND ${weekCutoff(asOfWeek)}
+    `),
+    query(`
+      SELECT as_of_week, vor, ros_value
+      FROM 'production_vor.parquet'
+      WHERE sleeper_player_id = '${id}' AND ${prodCutoff}
+      ORDER BY as_of_week
+    `),
+    query(`
+      SELECT snapshot_date, market_vor, trade_gap, is_cross_time
+      FROM 'market_vor.parquet'
+      WHERE sleeper_player_id = '${id}'
+      ORDER BY snapshot_date
+    `),
+    query(`
+      SELECT recent_ppg, expected_ppg, opp_g, opp_pct, td_share, eff_ratio, regression_risk,
+             read, quality_rate, luck, direction, reliability, point_correlation, security,
+             games, low_sample
+      FROM 'player_signal.parquet'
+      WHERE sleeper_player_id = '${id}' AND ${asOfSlice('player_signal.parquet', asOfWeek)}
+    `),
+    query(`
+      SELECT bull_grade, bull_note, bear_grade, bear_note, situation_grade, situation_note,
+             confidence, confidence_note, signal_tier, has_news, has_ros_anchor, anchor_is_prior_season
+      FROM 'ros_synthesis.parquet'
+      WHERE sleeper_player_id = '${id}'
+      QUALIFY row_number() OVER (PARTITION BY sleeper_player_id ORDER BY week DESC) = 1
+    `),
+    query(`SELECT roster_id, team_name, owner_name FROM 'teams.parquet'`),
+  ]);
+
+  const ident = identRows[0];
+  if (!ident && prodRows.length === 0) return { missing: true };
+
+  // Identity + roster status. production_vor is rostered-only, so status is always
+  // "on your roster" or "rostered by X" (no free-agent state in V1).
+  const rosterId = ident?.roster_id != null ? Number(ident.roster_id) : null;
+  const teamById = {};
+  let myRosterId = null;
+  for (const t of teamRows) {
+    teamById[Number(t.roster_id)] = t;
+    if (t.owner_name === MY_USERNAME) myRosterId = Number(t.roster_id);
+  }
+  const myTeam = teamById[rosterId];
+  const onYours = rosterId != null && rosterId === myRosterId;
+  const status = onYours
+    ? 'On your roster'
+    : myTeam
+      ? `Rostered · ${myTeam.team_name || myTeam.owner_name}`
+      : 'Rostered';
+
+  // Value·VOR series (oldest → newest) + value/delta.
+  const prodSeries = prodRows.map((r) => Number(r.vor));
+  const mktSeries = mktRows.map((r) => Number(r.market_vor));
+  const prod = seriesRead(prodSeries);
+  const mkt = seriesRead(mktSeries);
+
+  // Trade lean off the current Production−Market gap. CROSS-TIME today (2026 market ×
+  // 2025 roster) — surfaced as POC, never a confident live call (contract §6).
+  const last = mktRows.length ? mktRows[mktRows.length - 1] : null;
+  const gap = last?.trade_gap != null ? Number(last.trade_gap) : null;
+  const crossTime = Boolean(last?.is_cross_time);
+  let lean = null;
+  if (gap != null) {
+    if (gap > TRADE_GAP_T) lean = { call: 'SELL', why: 'Market values him above his production.' };
+    else if (gap < -TRADE_GAP_T) lean = { call: 'BUY', why: 'Production beats his current market price.' };
+    else lean = { call: 'HOLD', why: 'Market and production roughly agree.' };
+    lean.gap = gap;
+    lean.crossTime = crossTime;
+  }
+
+  // Opportunity axes (player_signal).
+  const s = sigRows[0];
+  const opportunity = s
+    ? {
+        qualityRate: num(s.quality_rate),
+        effRatio: num(s.eff_ratio),
+        volumePct: num(s.opp_pct),
+        oppG: num(s.opp_g),
+        trustDir: s.direction ?? null,
+        reliability: num(s.reliability),
+        pointCorr: num(s.point_correlation),
+        luck: num(s.luck),
+        recentPpg: num(s.recent_ppg),
+        expectedPpg: num(s.expected_ppg),
+        read: s.read ?? null,
+        security: s.security ?? null,
+        lowSample: Boolean(s.low_sample),
+      }
+    : null;
+
+  // ROS Outcome Shape (ros_synthesis) — sparse; null when no AI read exists.
+  const r = rosRows[0];
+  const ros = r
+    ? {
+        bull: num(r.bull_grade),
+        bear: num(r.bear_grade),
+        situation: num(r.situation_grade),
+        bullNote: r.bull_note,
+        bearNote: r.bear_note,
+        situationNote: r.situation_note,
+        confidence: r.confidence,
+        confidenceNote: r.confidence_note,
+        signalTier: r.signal_tier,
+        priorSeason: Boolean(r.anchor_is_prior_season),
+      }
+    : null;
+
+  return {
+    sleeperId,
+    name: ident?.name ?? sleeperId,
+    pos: ident?.position ?? null,
+    nflTeam: ident?.nfl_team ?? null,
+    status,
+    onYours,
+    prod,
+    mkt: { ...mkt, crossTime },
+    lean,
+    opportunity,
+    ros,
+  };
+}
+
+// Summarize a value series → current value, delta (last − first), direction.
+function seriesRead(series) {
+  if (!series.length) return { series: [], value: null, delta: null, up: true };
+  const value = series[series.length - 1];
+  const delta = value - series[0];
+  return { series, value, delta, up: delta >= 0 };
+}
+
+const num = (v) => (v == null ? null : Number(v));
+
 const round1 = (n) => Math.round(n * 10) / 10;
 
 // Season-replay week-selector seam. Two SQL fragments express "view the dashboard as

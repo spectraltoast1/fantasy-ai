@@ -261,3 +261,71 @@ body {
   background: var(--violet-wash); border: 1px solid var(--violet-border);
   color: var(--violet-light); font-size: 9px; font-weight: 700; letter-spacing: 0.08em;
 }
+
+/* ---- Player card ---------------------------------------------------------- */
+.pc-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 8px; }
+.pc-name { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -0.02em; }
+.pc-meta { display: flex; align-items: center; gap: 10px; margin-top: 5px; font-size: 12px; color: var(--muted); }
+.pc-pos { font-family: var(--mono); font-size: 12px; font-weight: 600; }
+.pc-status {
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.04em; color: var(--muted-2);
+  border: 1px solid var(--border-2); border-radius: var(--r-pill); padding: 4px 11px; white-space: nowrap;
+}
+.pc-status.mine { color: var(--violet-light); background: var(--violet-wash); border-color: var(--violet-border); }
+
+.pc-section {
+  margin-top: 14px; padding: 20px 22px;
+  background: var(--surface); border: 1px solid var(--border-2); border-radius: var(--r-card);
+}
+.pc-h3 { margin: 0 0 16px; font-family: var(--mono); font-size: 10px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+
+/* Value·VOR */
+.pc-vor { display: grid; grid-template-columns: 1fr 1fr auto; gap: 22px; align-items: center; }
+.trendline { display: flex; flex-direction: column; gap: 4px; }
+.trendline-label { margin-bottom: 2px; }
+.spark { display: block; }
+.trendline-vals { display: flex; align-items: baseline; gap: 10px; }
+.trendline-value { font-size: 22px; font-weight: 700; }
+.trendline-delta { font-size: 12px; font-weight: 600; }
+.pc-trade { display: flex; flex-direction: column; gap: 3px; max-width: 240px; padding-left: 22px; border-left: 1px solid var(--border); }
+.pc-trade-call { font-size: 18px; font-weight: 800; letter-spacing: 0.03em; }
+.pc-trade-why { font-size: 12px; color: var(--text-3); line-height: 1.4; }
+.pc-poc { font-size: 10.5px; color: var(--ridingluck-l); font-style: italic; margin-top: 2px; }
+
+/* Opportunity */
+.pc-axes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.pc-axis {
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 14px 16px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 11px;
+}
+.pc-axis-value { font-size: 20px; font-weight: 800; display: flex; align-items: baseline; gap: 6px; }
+.pc-axis-arrow { font-size: 15px; color: var(--muted); }
+.pc-axis-sub { font-family: var(--mono); font-size: 10px; letter-spacing: 0.04em; color: var(--muted-2); }
+.pc-companion { margin: 14px 0 0; font-size: 13px; color: var(--text-3); line-height: 1.55; }
+.pc-companion strong { color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
+.pc-read { color: var(--violet-light); font-family: var(--mono); font-size: 12px; }
+.pc-thin { color: var(--ridingluck-l); font-style: italic; }
+
+/* ROS Outcome Shape */
+.pc-grades { display: flex; flex-direction: column; gap: 16px; }
+.pc-grade-top { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 7px; }
+.pc-grade-num { font-size: 16px; font-weight: 700; }
+.pc-grade-den { font-size: 11px; color: var(--muted); font-weight: 500; }
+.grade-bar { height: 7px; border-radius: var(--r-pill); background: var(--surface-2); border: 1px solid var(--border); overflow: hidden; }
+.grade-bar-fill { height: 100%; border-radius: var(--r-pill); }
+.pc-grade-note { margin: 8px 0 0; font-size: 12.5px; color: var(--text-3); line-height: 1.5; }
+.pc-conf { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.pc-conf-tag {
+  font-family: var(--mono); font-size: 10px; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 3px 9px; border-radius: var(--r-pill); border: 1px solid var(--border-2); color: var(--muted);
+}
+.pc-conf-tag.c-high { color: var(--contender-l); border-color: var(--violet-border); }
+.pc-conf-tag.c-medium { color: var(--violet-light); border-color: var(--violet-border); }
+.pc-conf-tag.c-low { color: var(--ridingluck-l); border-color: var(--border-2); }
+.pc-conf-note { font-size: 12px; color: var(--muted); line-height: 1.4; }
+.pc-empty { color: var(--muted); font-size: 13px; line-height: 1.5; }
+
+/* Range gauge (shared primitive; consumed by Matchups later) */
+.range-gauge { position: relative; width: 100%; background: var(--surface-2); border-radius: var(--r-pill); }
+.range-gauge-band { position: absolute; top: 0; bottom: 0; border-radius: var(--r-pill); opacity: 0.5; }
+.range-gauge-tick { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--text); }
