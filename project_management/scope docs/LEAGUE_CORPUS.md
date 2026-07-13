@@ -1,8 +1,23 @@
 # The League Corpus — Spec
 
-**Created:** 2026-07-12 · **Status:** proposed (design only)
+**Created:** 2026-07-12 · **Status:** **VALIDATED (Session 0) → REGISTRY BUILT (Session 0.5, 2026-07-13)**
 **Companions:** [`IMPROVEMENT_LOOP.md`](./IMPROVEMENT_LOOP.md) · [`PILOT_2026.md`](./PILOT_2026.md) ·
+[`SESSION_0_5_CORPUS_SELECTION.md`](./SESSION_0_5_CORPUS_SELECTION.md) ·
+[`LLM context/SPIKE_CORPUS_FINDINGS.md`](../LLM%20context/SPIKE_CORPUS_FINDINGS.md) ·
 [`LLM context/712_BACKEND_AUDIT.md`](../LLM%20context/712_BACKEND_AUDIT.md)
+
+> **Session 0 (spike) verified the assumptions with real API responses; Session 0.5 built the selected
+> league registry (`corpus_manifest`).** What changed vs. this doc's original prose:
+> - **Discovery is not the constraint — selection is.** ≥3,003 foreign league-seasons found (a lower
+>   bound); ~87% pass the inclusion filter. Window **2020–2025** confirmed (projections reach 2019).
+> - **The neighbourhood is the near-inverse of the product** — 72% custom scoring (pure `std` = 0),
+>   superflex (1,667) > 1QB, dynasty > redraft, sizes 4→32. **⇒ Product decision: stay NARROW
+>   (PPR/half · 1QB · redraft); exotic leagues are a robustness *test* set, never a tuning input.**
+>   Pooling everything and tuning on it would import a distribution shift.
+> - **Stale player IDs: cleared** — 100% of skill players on a 2020 roster resolve to a `gsis_id`.
+> - **New caveats:** custom-scoring dominance meets `_scoring`'s first-down/threshold-bonus rejection
+>   (~28% of custom leagues unscoreable — a roadmap number, not a corpus blocker); FAAB features apply
+>   only to the FAAB-league subset.
 
 ---
 
@@ -38,9 +53,9 @@ returns a **full populated board** — `pts_ppr` 22.2 / 20.41 / 19.15 / 18.94 �
 **Historical projections exist back to at least 2021.** So the **entire read spine is backfillable**, not
 just the transaction-only reads.
 
-> **Open (2-minute check, worth ~20% more corpus):** probe **2020**. Your `nfl_stats` backfill already
-> covers **2020–2024 + 2025**, so if 2020 projections exist the corpus window is *exactly* the window you
-> already hold NFL stats for — six seasons, no extra fetching.
+> **RESOLVED (Session 0, 2026-07-13):** projections come back **to 2019** — full populated week-5 boards
+> every season 2019→2025. The corpus window is confirmed **2020–2025 (six seasons)**, exactly the window
+> the `nfl_stats` backfill already covers. See `LLM context/SPIKE_CORPUS_FINDINGS.md` §A.
 
 ---
 
