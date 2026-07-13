@@ -929,6 +929,77 @@ export async function loadStandings(asOfWeek) {
 }
 
 // ---------------------------------------------------------------------------
+// League tab — "whole league at a glance" (Gridiron surface #4).
+// ---------------------------------------------------------------------------
+
+/**
+ * The League surface's core data: the full standings (reused from loadStandings — each row
+ * already carries playoff %, all-play %, posture, seed, magic, odds series) plus the "me"
+ * row and the REAL playoff cut / team count from league_settings. One source feeds Your
+ * Race, the Playoff Picture, and the Posture Map.
+ * @param {number} [asOfWeek] view as of week N; omit for the latest week
+ * @returns {Promise<{standings: object[], me: object|null, playoffCut: number|null, nTeams: number}>}
+ */
+export async function loadLeague(asOfWeek) {
+  const [standings, cfgRows] = await Promise.all([
+    loadStandings(asOfWeek),
+    query(`
+      SELECT key, value FROM 'league_settings.parquet'
+      WHERE section = 'league' AND key IN ('playoff_teams', 'num_teams')
+    `),
+  ]);
+  const cfg = {};
+  for (const r of cfgRows) cfg[r.key] = Number(r.value);
+  return {
+    standings,
+    me: standings.find((s) => s.isMe) ?? null,
+    playoffCut: cfg.playoff_teams != null ? Math.round(cfg.playoff_teams) : null,
+    nTeams: cfg.num_teams != null ? Math.round(cfg.num_teams) : standings.length,
+  };
+}
+
+/**
+ * Positional Talent: per position (QB/RB/WR/TE), teams ranked by the Market VOR they hold
+ * there — the sum of each rostered player's positive `market_vor` at the latest market
+ * snapshot (a surplus is trade capital, a gap is a target). Cross-time by construction
+ * (2026 market × 2025 roster), flagged so the view marks it POC. Not week-parameterized:
+ * the market is current and does not replay with the week selector.
+ * @returns {Promise<{byPos: Object<string, object[]>, isCrossTime: boolean}>}
+ */
+export async function loadPositionalTalent() {
+  const rows = await query(`
+    WITH latest AS (
+      SELECT roster_id, position,
+             sum(greatest(market_vor, 0)) AS pos_vor,
+             bool_or(is_cross_time)        AS is_cross_time
+      FROM 'market_vor.parquet'
+      WHERE snapshot_date = (SELECT max(snapshot_date) FROM 'market_vor.parquet')
+        AND position IN ('QB','RB','WR','TE')
+      GROUP BY roster_id, position
+    )
+    SELECT l.roster_id, l.position, l.pos_vor, l.is_cross_time, t.team_name, t.owner_name
+    FROM latest l
+    LEFT JOIN 'teams.parquet' t USING (roster_id)
+  `);
+  const byPos = { QB: [], RB: [], WR: [], TE: [] };
+  let crossTime = false;
+  for (const r of rows) {
+    if (r.is_cross_time) crossTime = true;
+    (byPos[r.position] ??= []).push({
+      rosterId: Number(r.roster_id),
+      name: r.team_name || r.owner_name || `Team ${r.roster_id}`,
+      isMe: r.owner_name === MY_USERNAME,
+      vor: Number(r.pos_vor),
+    });
+  }
+  for (const pos of POS) {
+    (byPos[pos] ??= []).sort((a, b) => b.vor - a.vor);
+    byPos[pos].forEach((x, i) => (x.rank = i + 1));
+  }
+  return { byPos, isCrossTime: crossTime };
+}
+
+// ---------------------------------------------------------------------------
 // Team detail (drill-down from the standings) — stat blocks, positional depth,
 // roster with a PROD/MKT VOR toggle.
 // ---------------------------------------------------------------------------

@@ -2,7 +2,18 @@
 
 > Engineering context document for Claude Code. Describes the stack, folder structure, data layer design, and technical principles. Updated regularly as the project evolves.
 
-**Last reviewed:** 2026-07-13 (**Gridiron front-end — Teams cluster shipped** — the 2nd front-end slice
+**Last reviewed:** 2026-07-13 (**Gridiron front-end — League surface shipped** — the 3rd front-end slice
+(`DATA_CONTRACT` §4.2): **Your Race + Playoff Picture + Posture Map + Positional Talent.** New `League.jsx`
+(the "whole league at a glance" — a full-width Your Race band over a 3-column dashboard) leans on the
+Teams-cluster `loadStandings` (one source for records/odds/posture). New `queries.js` reads — `loadLeague`
+(standings + the real playoff cut / team count from `league_settings`, `playoff_teams=4`) and
+`loadPositionalTalent` (each team's summed positive `market_vor` per position at the latest snapshot, ranked;
+cross-time POC). The Posture Map reuses the standings (X = playoff odds, Y = all-play % inverted — the §5
+shipped axis, not `true_rank`) with the reserved posture palette for its quadrants/dots. **No db.js change** —
+bracket_odds / market_vor / league_settings were already registered. Deferred honestly: Your Race's this-week
+head-to-head + win% (needs `bracket_sim`, the Matchups slice) and the Positional-Talent Waiver Wire strip (needs
+a free-agent pool entity, none in V1). Seam discipline intact (all data access in `queries.js`; views pure).
+**Prior front-end — Teams cluster shipped** — the 2nd front-end slice
 against the `DATA_CONTRACT` (§4.4/§4.5/§4.8): **Teams standings + Team detail + Manager Dossier.** New pure
 **`src/posture.js`** = the contract §5 posture rule (`derivePosture`, `BAND=9`/`LEVEL_CUT=60`, `POSTURE_TONE`)
 in ONE home, reused by the Teams chips now and the League posture MAP later. New `queries.js` reads —
@@ -189,7 +200,7 @@ fantasy-ai/
 │   └── journal/
 └── application/
     ├── frontend/                   # production front-end — React + Vite + DuckDB-WASM (Node). Being recreated to the Gridiron design (Web-first); new-shell-with-placeholders migration
-    │   ├── src/                     #   App.jsx (Gridiron 4-surface shell: brand + league switcher, segmented tabs, week selector, detail routing via a push/pop nav-stack), Players.jsx + PlayerCard.jsx (Players surface + its detail — wired), Teams.jsx + TeamDetail.jsx + Dossier.jsx (Teams surface + team detail + manager dossier — wired), Placeholder.jsx (coming-soon slot for League/Matchups), icons.jsx (SVG glyphs), charts.jsx (Sparkline/TrendLine/GradeBar/RangeGauge/DepthBar), posture.js (the §5 posture rule — derivePosture/POSTURE_TONE), queries.js (data-access seam — loadLeagueMeta/loadPlayers/loadPlayerCard/loadStandings/loadTeamDetail/loadManagerDossier + prior team reads), db.js (DuckDB-WASM loader — registers production_vor/market_vor/ros_synthesis/bracket_odds/positional_depth/manager_dossiers + season/teams/slots/league_settings), readiness.jsx (per-panel gate), posColors.js, styles.css (Gridiron tokens). LeaguePanel.jsx/TeamPanel.jsx = retired from the shell (kept, unimported) until their data re-homes
+    │   ├── src/                     #   App.jsx (Gridiron 4-surface shell: brand + league switcher, segmented tabs, week selector, detail routing via a push/pop nav-stack), Players.jsx + PlayerCard.jsx (Players surface + its detail — wired), Teams.jsx + TeamDetail.jsx + Dossier.jsx (Teams surface + team detail + manager dossier — wired), League.jsx (League surface: Your Race band + Playoff Picture + Posture Map + Positional Talent — wired), Placeholder.jsx (coming-soon slot for Matchups), icons.jsx (SVG glyphs), charts.jsx (Sparkline/TrendLine/GradeBar/RangeGauge/DepthBar), posture.js (the §5 posture rule — derivePosture/POSTURE_TONE), queries.js (data-access seam — loadLeagueMeta/loadPlayers/loadPlayerCard/loadStandings/loadTeamDetail/loadManagerDossier/loadLeague/loadPositionalTalent + prior team reads), db.js (DuckDB-WASM loader — registers production_vor/market_vor/ros_synthesis/bracket_odds/positional_depth/manager_dossiers + season/teams/slots/league_settings), readiness.jsx (per-panel gate), posColors.js, styles.css (Gridiron tokens). LeaguePanel.jsx/TeamPanel.jsx = retired from the shell (kept, unimported) until their data re-homes
     │   └── public/data/             #   symlinks → season_2025 + teams_2025 + lineup_slots_2025 + league_settings_2025 + team_form_2025 + team_leakage_2025 + player_signal_2025 + production_vor_2025 + market_vor_2025 + ros_synthesis_2026 parquet (gitignored)
     ├── data/
         ├── data_layer.py           # ✅ built — centralized read/write module
