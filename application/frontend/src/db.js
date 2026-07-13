@@ -46,6 +46,11 @@ async function initDB() {
   await registerParquet(db, '/data/positional_depth_2025.parquet', 'positional_depth.parquet');
   // Manager Dossier: the AI headline + tendencies + signal-depth counts, one row per team.
   await registerParquet(db, '/data/manager_dossiers_2025.parquet', 'manager_dossiers.parquet');
+  // Matchups: projection_consensus (per-player p25/p50/p75 + center/band, tall over weeks 1-18 —
+  // the forward projections the slate + detail read) and the pairing-only schedule (week →
+  // matchup_id pairs; points dropped upstream so future results never reach the client).
+  await registerParquet(db, '/data/projection_consensus_2025.parquet', 'projection_consensus.parquet');
+  await registerParquet(db, '/data/schedule_2025.parquet', 'schedule.parquet');
   return db;
 }
 

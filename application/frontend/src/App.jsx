@@ -8,6 +8,7 @@ import Teams from './Teams.jsx';
 import TeamDetail from './TeamDetail.jsx';
 import Dossier from './Dossier.jsx';
 import League from './League.jsx';
+import Matchups from './Matchups.jsx';
 
 // Gridiron app shell. Owns the three pieces of global state the whole app reads:
 //   tab      — the active surface (league / matchups / teams / players)
@@ -118,6 +119,8 @@ function Surface({ tab, detail, depth, asOfWeek, onOpenPlayer, onOpenTeam, onOpe
     content = <Teams asOfWeek={asOfWeek} onOpenTeam={onOpenTeam} />;
   } else if (tab === 'league') {
     content = <League asOfWeek={asOfWeek} onOpenTeam={onOpenTeam} />;
+  } else if (tab === 'matchups') {
+    content = <Matchups asOfWeek={asOfWeek} />;
   } else {
     content = <Placeholder tab={tab} />;
   }

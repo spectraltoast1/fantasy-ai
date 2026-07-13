@@ -34,6 +34,10 @@
   --on-violet: #0e0b18;
   --violet-wash: rgba(139, 128, 249, 0.1);
 
+  /* Matchup opponent side — neutral steel (README color role; deliberately NOT posture) */
+  --steel: #5b6577;
+  --steel-l: #9aa3b5;
+
   /* Posture palette (RESERVED — posture + trend only) */
   --contender: #37d9a0;
   --contender-l: #5eead4;
@@ -567,3 +571,30 @@ body {
 .lg-pt-waiver { margin-top: 11px; border: 1px dashed var(--border-2); border-radius: 11px; padding: 11px 13px; }
 .lg-pt-waiver-label { color: var(--muted-2); margin-bottom: 3px; }
 .lg-pt-waiver p { margin: 0; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+
+/* ============================================================================
+   Matchups — the week's projected head-to-head slate (surface #2, §4.3). Your game
+   is violet-washed; the win-prob split bar uses your-side violet vs opponent steel.
+   ============================================================================ */
+.mu-slate { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; }
+.mu-card {
+  border: 1px solid var(--border); background: var(--panel); border-radius: var(--r-card);
+  padding: 15px 16px 16px;
+}
+.mu-card.mine { border-color: var(--violet-border); background: var(--violet-wash); }
+.mu-card-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 12px; }
+.mu-card-tag { color: var(--violet-light); }
+.mu-card-note { font-size: 9.5px; color: var(--faint); font-family: var(--mono); }
+.mu-teams { display: flex; flex-direction: column; gap: 9px; }
+.mu-team { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 12px; }
+.mu-team-id { min-width: 0; display: flex; align-items: center; gap: 7px; }
+.mu-team-name { font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mu-team.me .mu-team-name { color: var(--violet-light); }
+.mu-team-rec { font-size: 11px; color: var(--muted-2); }
+.mu-team-proj { font-size: 13px; font-weight: 700; color: var(--text-2); width: 48px; text-align: right; }
+.mu-team-wp { font-size: 15px; font-weight: 800; width: 44px; text-align: right; color: var(--text); }
+.mu-team.me .mu-team-wp { color: var(--violet); }
+.mu-winprob { margin-top: 13px; }
+.winprob-bar { display: flex; width: 100%; border-radius: var(--r-pill); overflow: hidden; background: var(--surface-2); }
+.winprob-seg { height: 100%; }
+.mu-empty { padding: 48px 24px; text-align: center; color: var(--muted); }

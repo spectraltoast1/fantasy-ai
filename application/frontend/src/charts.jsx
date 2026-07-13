@@ -70,8 +70,25 @@ export function DepthBar({ pos, height = 8, color = 'var(--violet)' }) {
   );
 }
 
-// A median tick inside a 25–75 band on a shared scale. Not consumed yet — built ahead
-// of the Matchups slice (per-starter range gauges), kept here so the mark is shared.
+// A two-team win-probability split bar. Your side is violet (README color role); a non-you side is
+// neutral steel — the favored side steel-light, the underdog steel-dark — so a game with no "you"
+// still reads. `teams` are the ordered sides, each with { winProb (0–100), isMe }.
+export function WinProbBar({ teams, height = 8 }) {
+  if (!teams || teams.length < 2 || teams[0].winProb == null) {
+    return <div className="winprob-bar" style={{ height }} aria-hidden="true" />;
+  }
+  const seg = (t) => (t.isMe ? 'var(--violet)' : t.winProb >= 50 ? 'var(--steel-l)' : 'var(--steel)');
+  return (
+    <div className="winprob-bar" style={{ height }} aria-hidden="true">
+      {teams.map((t, i) => (
+        <div key={i} className="winprob-seg" style={{ width: `${t.winProb}%`, background: seg(t) }} />
+      ))}
+    </div>
+  );
+}
+
+// A median tick inside a 25–75 band on a shared scale. Built for the Matchups slice — the team
+// Score Range and the per-starter range gauges (wider band = more volatile).
 export function RangeGauge({ lo, md, hi, min, max, height = 12, color = 'var(--violet)' }) {
   const span = (max - min) || 1;
   const pct = (v) => ((v - min) / span) * 100;

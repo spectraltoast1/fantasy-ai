@@ -324,6 +324,32 @@ def read_season_matchups(season: int, through_week: int = 18) -> pl.DataFrame:
     )
 
 
+# --- Schedule (derived front-end export) ---
+# The pairing-only slice of the weekly matchup snapshots — (week, roster_id, matchup_id), with the
+# `points` column deliberately DROPPED so actual results never reach the client. The Matchups surface
+# is a forward slate (as-of week N shows week N+1 pairings with *projected* totals); the pairings are
+# known in advance, but their scores are the future the season replay is pretending not to know.
+# Feeds queries.loadMatchups. Written by transforms/export_schedule.py.
+
+def _schedule_path(season: int) -> Path:
+    return _SNAPSHOT_DIR / "derived" / f"schedule_{season}.parquet"
+
+
+def write_schedule(df: pl.DataFrame, season: int) -> None:
+    """Write the pairing-only schedule for a season (overwrite)."""
+    path = _schedule_path(season)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
+
+def read_schedule(season: int) -> pl.DataFrame:
+    return pl.read_parquet(_schedule_path(season))
+
+
+def schedule_exists(season: int) -> bool:
+    return _schedule_path(season).exists()
+
+
 # --- Sleeper Transactions ---
 
 def _sleeper_transactions_path(season: int, week: int) -> Path:

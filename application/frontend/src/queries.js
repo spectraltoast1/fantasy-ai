@@ -1292,3 +1292,285 @@ function attachSpectrumPos(details, get, set) {
   const span = hi - lo;
   for (const d of Object.values(details)) set(d, span ? (get(d) - lo) / span : 0.5);
 }
+
+// ---------------------------------------------------------------------------
+// Matchups tab — the week's head-to-head slate + matchup detail (Gridiron surface #2, §4.3).
+// The app is a season replay: "this week" is the upcoming week N+1 (as-of N), shown fully
+// PROJECTED. A team's weekly score distribution mirrors compute_bracket_sim.py — μ = Σ optimal-
+// starter center_ppr, σ = √(Σ band_ppr²) — so the analytic win prob Φ((μA−μB)/√(σA²+σB²)) matches
+// the backend sim (its Monte Carlo only exists to roll μ/σ up into playoff odds, which we already
+// read from bracket_odds). Projections + pairings come from projection_consensus + the pairing-only
+// schedule (points dropped upstream, so the replay never sees a future result).
+// ---------------------------------------------------------------------------
+
+// Resolve N (as-of) → the upcoming target week N+1. asOfWeek is normally a number (App resolves the
+// latest via loadWeeks); null falls back to the latest played week here.
+async function targetWeekFor(asOfWeek) {
+  let n = asOfWeek == null ? null : Number(asOfWeek);
+  if (n == null) {
+    const r = await query(`SELECT max(week) AS w FROM 'season.parquet'`);
+    n = r.length && r[0].w != null ? Number(r[0].w) : null;
+  }
+  return n == null ? null : n + 1;
+}
+
+// Real W-L per team from the team-week results (weeks ≤ N). Mirrors loadStandings' record pass.
+function recordsByRoster(weekRows) {
+  const rec = {};
+  for (const r of weekRows) {
+    const x = (rec[Number(r.roster_id)] ??= { w: 0, l: 0 });
+    if (r.result === 'W') x.w++;
+    else if (r.result === 'L') x.l++;
+  }
+  return rec;
+}
+
+// Per-team projected lineup for a target week: the frozen roster-as-of-N (same arg_max definition
+// Team detail uses, so the two surfaces agree) set into its optimal lineup by that week's borrowed
+// projection centre. Shared by the slate and the detail so both read ONE definition of "who starts
+// and how much they score". Returns rosterId → { mu, sigma, starters, bench } — starters/bench
+// players carry their p25/p50/p75 for the range gauges.
+async function teamProjections(asOfWeek, targetWeek) {
+  const [rosterRows, projRows, slotRows, teamRows] = await Promise.all([
+    query(`
+      WITH latest AS (
+        SELECT sleeper_player_id,
+               arg_max(roster_id, week)           AS roster_id,
+               arg_max(player_display_name, week) AS name,
+               arg_max(position, week)            AS position,
+               arg_max(team, week)                AS nfl_team
+        FROM 'season.parquet'
+        WHERE position IN ('QB','RB','WR','TE') AND ${weekCutoff(asOfWeek)}
+        GROUP BY sleeper_player_id
+      )
+      SELECT * FROM latest WHERE roster_id IS NOT NULL
+    `),
+    query(`
+      SELECT sleeper_player_id, center_ppr, band_ppr, p25_ppr, p50_ppr, p75_ppr
+      FROM 'projection_consensus.parquet' WHERE week = ${Number(targetWeek)}
+    `),
+    query(`SELECT slot, count, eligible FROM 'slots.parquet'`),
+    query(`SELECT roster_id, team_name, owner_name FROM 'teams.parquet'`),
+  ]);
+
+  const projById = {};
+  for (const p of projRows) projById[p.sleeper_player_id] = p;
+  const slots = expandSlots(slotRows);
+
+  const byRoster = {};
+  for (const r of rosterRows) (byRoster[Number(r.roster_id)] ??= []).push(r);
+
+  const teams = {};
+  for (const t of teamRows) {
+    const rid = Number(t.roster_id);
+    const roster = byRoster[rid] ?? [];
+    // Attach the target-week projection to each rostered skill player (center == p50 = μ term;
+    // band = σ term). A rostered player with no projection that week contributes 0 / won't start.
+    const players = roster.map((p, i) => {
+      const pr = projById[p.sleeper_player_id];
+      return {
+        _i: i,
+        sleeperId: p.sleeper_player_id,
+        name: p.name,
+        position: p.position,
+        nflTeam: p.nfl_team ?? null,
+        pts: pr ? Number(pr.center_ppr) : 0,
+        band: pr ? Number(pr.band_ppr) : 0,
+        p25: pr ? Number(pr.p25_ppr) : null,
+        p50: pr ? Number(pr.p50_ppr) : null,
+        p75: pr ? Number(pr.p75_ppr) : null,
+        hasProj: Boolean(pr),
+      };
+    });
+    const { picks } = optimalLineup(players, slots);
+    const starterSet = new Set(picks.map((p) => p._i));
+    const bench = players.filter((p) => !starterSet.has(p._i)).sort((a, b) => b.pts - a.pts);
+    const mu = picks.reduce((s, p) => s + p.pts, 0);
+    const sigma = Math.sqrt(picks.reduce((s, p) => s + p.band * p.band, 0));
+    teams[rid] = {
+      rosterId: rid,
+      name: t.team_name || t.owner_name || `Team ${rid}`,
+      owner: t.owner_name ?? null,
+      isMe: t.owner_name === MY_USERNAME,
+      mu: round1(mu),
+      sigma,
+      starters: picks,
+      bench,
+    };
+  }
+  return teams;
+}
+
+// One matchup's two sides → [winProbA, winProbB] as 0–1 fractions (0.5 if both σ are 0).
+function matchupWinProbs(muA, sigA, muB, sigB) {
+  const denom = Math.sqrt(sigA * sigA + sigB * sigB);
+  const pa = denom > 0 ? normalCdf((muA - muB) / denom) : 0.5;
+  return [pa, 1 - pa];
+}
+
+/**
+ * The Matchups slate: the upcoming week's (as-of N → week N+1) head-to-head games, each with both
+ * teams' records, projected totals (optimal-lineup μ) and analytic win prob. Your game is flagged
+ * (`isMine`) and sorted first. Fully projected — the replay never reads the week's actual result.
+ * @param {number} [asOfWeek] view as of week N; omit for the latest week
+ * @returns {Promise<{targetWeek: number|null, games: object[], myGameId: number|null, empty: boolean}>}
+ */
+export async function loadMatchups(asOfWeek) {
+  const targetWeek = await targetWeekFor(asOfWeek);
+  const schedRows = targetWeek == null ? [] : await query(
+    `SELECT roster_id, matchup_id FROM 'schedule.parquet' WHERE week = ${targetWeek} ORDER BY matchup_id, roster_id`,
+  );
+  if (!schedRows.length) return { targetWeek, games: [], myGameId: null, empty: true };
+
+  const [teams, weekRows] = await Promise.all([
+    teamProjections(asOfWeek, targetWeek),
+    query(SQL_STANDINGS_WEEKS(asOfWeek)),
+  ]);
+  const rec = recordsByRoster(weekRows);
+
+  const byMatchup = {};
+  for (const s of schedRows) (byMatchup[Number(s.matchup_id)] ??= []).push(Number(s.roster_id));
+
+  const games = Object.entries(byMatchup).map(([mid, rids]) => {
+    const sides = rids.map((rid) => {
+      const t = teams[rid] ?? { rosterId: rid, name: `Team ${rid}`, owner: null, isMe: false, mu: 0, sigma: 0 };
+      const r = rec[rid] ?? { w: 0, l: 0 };
+      return { ...t, record: `${r.w}-${r.l}` };
+    });
+    let probs = sides.map(() => null);
+    if (sides.length === 2) probs = matchupWinProbs(sides[0].mu, sides[0].sigma, sides[1].mu, sides[1].sigma);
+    const out = sides.map((s, i) => ({
+      rosterId: s.rosterId,
+      name: s.name,
+      owner: s.owner,
+      isMe: s.isMe,
+      record: s.record,
+      proj: s.mu,
+      winProb: probs[i] == null ? null : Math.round(probs[i] * 100),
+    }));
+    // My team first, else higher win prob first.
+    out.sort((x, y) => Number(y.isMe) - Number(x.isMe) || (y.winProb ?? 0) - (x.winProb ?? 0));
+    return { matchupId: Number(mid), teams: out, isMine: out.some((t) => t.isMe) };
+  });
+
+  games.sort((a, b) => Number(b.isMine) - Number(a.isMine) || a.matchupId - b.matchupId);
+  return { targetWeek, games, myGameId: games.find((g) => g.isMine)?.matchupId ?? null, empty: false };
+}
+
+// Flatten a starter/bench player to the view shape (median tick + 25–75 range for the gauge).
+const matchupPlayerView = (p) => ({
+  sleeperId: p.sleeperId,
+  name: p.name,
+  pos: p.position,
+  nflTeam: p.nflTeam ?? null,
+  slot: p.slot ?? null,
+  proj: p.hasProj ? round1(p.pts) : null,
+  p25: p.p25,
+  p50: p.p50,
+  p75: p.p75,
+  hasProj: p.hasProj,
+});
+
+/**
+ * One matchup's full breakdown: head-to-head win prob, each team's Score Range (Σ starters'
+ * p25/p50/p75 — contract §4.3), per-starter range gauges (p25/p50/p75), and the starters+bench
+ * split (starters = the optimal projected lineup). Teams ordered with "you" first.
+ * @param {number} matchupId the game's matchup_id in the target week
+ * @param {number} [asOfWeek] view as of week N; omit for the latest week
+ * @returns {Promise<{matchupId: number, targetWeek: number, teams: object[]}|null>}
+ */
+export async function loadMatchupDetail(matchupId, asOfWeek) {
+  const mid = Number(matchupId);
+  const targetWeek = await targetWeekFor(asOfWeek);
+  if (targetWeek == null) return null;
+
+  const [teams, schedRows, weekRows] = await Promise.all([
+    teamProjections(asOfWeek, targetWeek),
+    query(`SELECT roster_id FROM 'schedule.parquet' WHERE week = ${targetWeek} AND matchup_id = ${mid} ORDER BY roster_id`),
+    query(SQL_STANDINGS_WEEKS(asOfWeek)),
+  ]);
+  const rids = schedRows.map((r) => Number(r.roster_id));
+  if (rids.length < 2 || !teams[rids[0]] || !teams[rids[1]]) return null;
+  const rec = recordsByRoster(weekRows);
+
+  const sides = rids.map((rid) => {
+    const t = teams[rid];
+    const r = rec[rid] ?? { w: 0, l: 0 };
+    // Team Score Range = sum of starters' quantiles (a starter without a projection falls back to
+    // its μ term so the band stays coherent).
+    const range = t.starters.reduce(
+      (acc, p) => ({
+        p25: acc.p25 + (p.p25 ?? p.pts),
+        p50: acc.p50 + (p.p50 ?? p.pts),
+        p75: acc.p75 + (p.p75 ?? p.pts),
+      }),
+      { p25: 0, p50: 0, p75: 0 },
+    );
+    return {
+      rosterId: rid,
+      name: t.name,
+      owner: t.owner,
+      isMe: t.isMe,
+      record: `${r.w}-${r.l}`,
+      proj: t.mu,
+      sigma: t.sigma,
+      range: { p25: round1(range.p25), p50: round1(range.p50), p75: round1(range.p75) },
+      starters: t.starters.map(matchupPlayerView),
+      bench: t.bench.map(matchupPlayerView),
+    };
+  });
+
+  const probs = matchupWinProbs(sides[0].proj, sides[0].sigma, sides[1].proj, sides[1].sigma);
+  sides.forEach((s, i) => (s.winProb = Math.round(probs[i] * 100)));
+  sides.sort((x, y) => Number(y.isMe) - Number(x.isMe) || y.winProb - x.winProb);
+
+  return { matchupId: mid, targetWeek, teams: sides };
+}
+
+// Optimal-lineup engine, ported from transforms/_analytics.py (expand_slots + optimal_lineup) so the
+// front-end projected lineup matches the backend sim. expandSlots: one entry per physical starting
+// slot (a FLEX count of 2 → two slots), most-constrained first so dedicated slots claim their stars
+// before flex slots draw from the pool.
+function expandSlots(slotRows) {
+  const slots = [];
+  for (const s of slotRows) {
+    const eligible = String(s.eligible).split(',');
+    for (let k = 0; k < Number(s.count); k++) slots.push({ slot: s.slot, eligible });
+  }
+  slots.sort((a, b) => a.eligible.length - b.eligible.length);
+  return slots;
+}
+
+// Greedy optimal lineup: fill the most-constrained slot first with the top-`pts` eligible player
+// still available. Each player carries a stable `_i` so usage is tracked across slots. Returns the
+// chosen picks (each tagged with its filled slot) and the total.
+function optimalLineup(players, slots) {
+  const used = new Set();
+  const picks = [];
+  let total = 0;
+  for (const slot of slots) {
+    let best = null;
+    for (const p of players) {
+      if (used.has(p._i) || !slot.eligible.includes(p.position)) continue;
+      if (best == null || p.pts > best.pts) best = p;
+    }
+    if (!best) continue;
+    total += best.pts;
+    used.add(best._i);
+    picks.push({ ...best, slot: slot.slot });
+  }
+  return { total, picks };
+}
+
+// Φ(z): the standard normal CDF via the Abramowitz–Stegun erf approximation (7.1.26; |ε| < 1.5e-7)
+// — mirrors compute_bracket_sim.py's math.erf so the analytic win prob matches the backend sim.
+function erf(x) {
+  const sign = x < 0 ? -1 : 1;
+  const ax = Math.abs(x);
+  const t = 1 / (1 + 0.3275911 * ax);
+  const y = 1 - (((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t) * Math.exp(-ax * ax);
+  return sign * y;
+}
+function normalCdf(z) {
+  return 0.5 * (1 + erf(z / Math.SQRT2));
+}
