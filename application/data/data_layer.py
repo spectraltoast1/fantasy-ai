@@ -779,55 +779,69 @@ def _as_of_slice(df: pl.DataFrame, as_of_week) -> pl.DataFrame:
         as_of_week = df["as_of_week"].max()
     return df.filter(pl.col("as_of_week") == as_of_week)
 
-def _team_form_path(season: int) -> Path:
-    return _SNAPSHOT_DIR / "derived" / f"team_form_{season}.parquet"
+def _league_dir(league_id) -> Path:
+    """Directory for a league-scoped derived entity — `derived/league/<league_id>/` (L0 keying)."""
+    return _SNAPSHOT_DIR / "derived" / "league" / str(league_id)
 
 
-def write_team_form(df: pl.DataFrame, season: int) -> None:
-    """Write the per-team trajectory (form) analytics for a season (overwrite).
+def _scoring_dir(scoring_key) -> Path:
+    """Directory for a scoring-scoped derived entity — `derived/scoring/<scoring_key>/` (L0 keying)."""
+    return _SNAPSHOT_DIR / "derived" / "scoring" / str(scoring_key)
+
+
+def _team_form_path(season: int, league_id) -> Path:
+    return _league_dir(league_id) / f"team_form_{season}.parquet"
+
+
+def write_team_form(df: pl.DataFrame, season: int, *, league_id=None) -> None:
+    """Write the per-team trajectory (form) analytics for a league season (overwrite).
 
     Output of transforms/compute_team_form.py: one row per roster_id carrying the
     recency-weighted scoring slope, direction read, recent record, league-relative
     spectrum position, and the per-week series (serialised JSON).
     """
-    path = _team_form_path(season)
+    league_id = league_id or _active_league(season)[0]
+    path = _team_form_path(season, league_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path)
 
 
-def read_team_form(season: int, as_of_week=None) -> pl.DataFrame:
+def read_team_form(season: int, *, league_id=None, as_of_week=None) -> pl.DataFrame:
     """Read the per-team form analytics for one as-of week (default = latest)."""
-    return _as_of_slice(pl.read_parquet(_team_form_path(season)), as_of_week)
+    league_id = league_id or _active_league(season)[0]
+    return _as_of_slice(pl.read_parquet(_team_form_path(season, league_id)), as_of_week)
 
 
-def _team_leakage_path(season: int) -> Path:
-    return _SNAPSHOT_DIR / "derived" / f"team_leakage_{season}.parquet"
+def _team_leakage_path(season: int, league_id) -> Path:
+    return _league_dir(league_id) / f"team_leakage_{season}.parquet"
 
 
-def write_team_leakage(df: pl.DataFrame, season: int) -> None:
-    """Write the per-team lineup-leakage analytics for a season (overwrite).
+def write_team_leakage(df: pl.DataFrame, season: int, *, league_id=None) -> None:
+    """Write the per-team lineup-leakage analytics for a league season (overwrite).
 
     Output of transforms/compute_team_leakage.py: one row per roster_id carrying
     lineup efficiency %, season points left, the coachable-vs-variance split,
     league-relative spectrum position, and the per-week leak + named fixes
     (serialised JSON).
     """
-    path = _team_leakage_path(season)
+    league_id = league_id or _active_league(season)[0]
+    path = _team_leakage_path(season, league_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path)
 
 
-def read_team_leakage(season: int, as_of_week=None) -> pl.DataFrame:
+def read_team_leakage(season: int, *, league_id=None, as_of_week=None) -> pl.DataFrame:
     """Read the per-team leakage analytics for one as-of week (default = latest)."""
-    return _as_of_slice(pl.read_parquet(_team_leakage_path(season)), as_of_week)
+    league_id = league_id or _active_league(season)[0]
+    return _as_of_slice(pl.read_parquet(_team_leakage_path(season, league_id)), as_of_week)
 
 
-def _player_signal_path(season: int) -> Path:
-    return _SNAPSHOT_DIR / "derived" / f"player_signal_{season}.parquet"
+def _player_signal_path(season: int, league_id) -> Path:
+    return _league_dir(league_id) / f"player_signal_{season}.parquet"
 
 
-def write_player_signal(df: pl.DataFrame, season: int) -> None:
-    """Write the per-player spike signal-quality read for a season (overwrite).
+def write_player_signal(df: pl.DataFrame, season: int, *, league_id=None) -> None:
+    """Write the per-player spike signal-quality read for a league season (overwrite).
 
     Output of transforms/compute_player_signal.py: one row per rostered skill player
     carrying the recent per-game production, the opportunity vs efficiency
@@ -836,22 +850,24 @@ def write_player_signal(df: pl.DataFrame, season: int) -> None:
     (serialised JSON). The first decision-critique engine slice ("is this production
     real, or noise?").
     """
-    path = _player_signal_path(season)
+    league_id = league_id or _active_league(season)[0]
+    path = _player_signal_path(season, league_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path)
 
 
-def read_player_signal(season: int, as_of_week=None) -> pl.DataFrame:
+def read_player_signal(season: int, *, league_id=None, as_of_week=None) -> pl.DataFrame:
     """Read the per-player signal-quality read for one as-of week (default = latest)."""
-    return _as_of_slice(pl.read_parquet(_player_signal_path(season)), as_of_week)
+    league_id = league_id or _active_league(season)[0]
+    return _as_of_slice(pl.read_parquet(_player_signal_path(season, league_id)), as_of_week)
 
 
-def _projection_consensus_path(season: int) -> Path:
-    return _SNAPSHOT_DIR / "derived" / f"projection_consensus_{season}.parquet"
+def _projection_consensus_path(season: int, scoring_key) -> Path:
+    return _scoring_dir(scoring_key) / f"projection_consensus_{season}.parquet"
 
 
-def write_projection_consensus(df: pl.DataFrame, season: int) -> None:
-    """Write the per-(week, player) projection consensus + spread band for a season (overwrite).
+def write_projection_consensus(df: pl.DataFrame, season: int, *, scoring_key=None) -> None:
+    """Write the per-(week, player) projection consensus + spread band for a scoring profile (overwrite).
 
     Output of transforms/compute_projection_consensus.py: one row per (week,
     sleeper_player_id) over the whole skill pool, carrying the borrowed consensus center
@@ -863,16 +879,19 @@ def write_projection_consensus(df: pl.DataFrame, season: int) -> None:
     Unlike the other derived analytics this is NOT tall over as_of_week: a projection for
     week W is a fixed forward statement, and its band uses only history from weeks < W —
     the as-of information is baked into the projected week, so the read is keyed on `week`
-    (like the projections entity it derives from), not on an as_of_week slice.
+    (like the projections entity it derives from), not on an as_of_week slice. Scoring-scoped: two
+    leagues on the same scoring profile share one file (audit S3.1), defaulting to the is_mine profile.
     """
-    path = _projection_consensus_path(season)
+    scoring_key = scoring_key or _active_league(season)[1]
+    path = _projection_consensus_path(season, scoring_key)
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path)
 
 
-def read_projection_consensus(season: int, week: int | None = None) -> pl.DataFrame:
-    """Read the projection consensus + spread for a season, optionally filtered to one week."""
-    df = pl.read_parquet(_projection_consensus_path(season))
+def read_projection_consensus(season: int, *, scoring_key=None, week: int | None = None) -> pl.DataFrame:
+    """Read the projection consensus + spread for a scoring profile, optionally filtered to one week."""
+    scoring_key = scoring_key or _active_league(season)[1]
+    df = pl.read_parquet(_projection_consensus_path(season, scoring_key))
     if week is not None:
         df = df.filter(pl.col("week") == week)
     return df
@@ -888,12 +907,12 @@ def read_projection_consensus(season: int, week: int | None = None) -> pl.DataFr
 # VOR here; Market VOR (LeagueLogs) + the trade gap are V4.
 
 
-def _production_vor_path(season: int) -> Path:
-    return _SNAPSHOT_DIR / "derived" / f"production_vor_{season}.parquet"
+def _production_vor_path(season: int, league_id) -> Path:
+    return _league_dir(league_id) / f"production_vor_{season}.parquet"
 
 
-def write_production_vor(df: pl.DataFrame, season: int) -> None:
-    """Write the per-(as_of_week, player) Production VOR read for a season (overwrite).
+def write_production_vor(df: pl.DataFrame, season: int, *, league_id=None) -> None:
+    """Write the per-(as_of_week, player) Production VOR read for a league season (overwrite).
 
     Output of transforms/compute_production_vor.py: one row per rostered skill player per
     as-of week, carrying the rest-of-season production value (sum of borrowed weekly
@@ -901,14 +920,16 @@ def write_production_vor(df: pl.DataFrame, season: int) -> None:
     normalise it, and the resulting vor (waiver = 0, negative = dead weight, ~1 = a top
     rosterable player at that pool). QB is its own pool; RB/WR/TE share one flex pool.
     """
-    path = _production_vor_path(season)
+    league_id = league_id or _active_league(season)[0]
+    path = _production_vor_path(season, league_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path)
 
 
-def read_production_vor(season: int, as_of_week=None) -> pl.DataFrame:
+def read_production_vor(season: int, *, league_id=None, as_of_week=None) -> pl.DataFrame:
     """Read the Production VOR read for one as-of week (default = latest)."""
-    return _as_of_slice(pl.read_parquet(_production_vor_path(season)), as_of_week)
+    league_id = league_id or _active_league(season)[0]
+    return _as_of_slice(pl.read_parquet(_production_vor_path(season, league_id)), as_of_week)
 
 
 # --- Market VOR ---
@@ -923,27 +944,30 @@ def read_production_vor(season: int, as_of_week=None) -> pl.DataFrame:
 # carries `is_cross_time` + `market_season`, so the gap is never silently fused across time.
 
 
-def _market_vor_path(season: int) -> Path:
-    return _SNAPSHOT_DIR / "derived" / f"market_vor_{season}.parquet"
+def _market_vor_path(season: int, league_id) -> Path:
+    return _league_dir(league_id) / f"market_vor_{season}.parquet"
 
 
-def write_market_vor(df: pl.DataFrame, season: int) -> None:
+def write_market_vor(df: pl.DataFrame, season: int, *, league_id=None) -> None:
     """Write the per-(snapshot_date, player) Market VOR read for a league season (overwrite)."""
-    path = _market_vor_path(season)
+    league_id = league_id or _active_league(season)[0]
+    path = _market_vor_path(season, league_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path)
 
 
-def read_market_vor(season: int, snapshot_date=None) -> pl.DataFrame:
+def read_market_vor(season: int, *, league_id=None, snapshot_date=None) -> pl.DataFrame:
     """Read the Market VOR read for one market snapshot (default = latest banked date)."""
-    df = pl.read_parquet(_market_vor_path(season))
+    league_id = league_id or _active_league(season)[0]
+    df = pl.read_parquet(_market_vor_path(season, league_id))
     if snapshot_date is None:
         return df.filter(pl.col("snapshot_date") == df["snapshot_date"].max())
     return df.filter(pl.col("snapshot_date") == pl.lit(snapshot_date).str.to_date())
 
 
-def market_vor_exists(season: int) -> bool:
-    return _market_vor_path(season).exists()
+def market_vor_exists(season: int, *, league_id=None) -> bool:
+    league_id = league_id or _active_league(season)[0]
+    return _market_vor_path(season, league_id).exists()
 
 
 # --- True Rank ---
@@ -955,26 +979,28 @@ def market_vor_exists(season: int) -> bool:
 # precursor the Phase-4 bracket-math Monte Carlo (§5 full) will sit on top of.
 
 
-def _true_rank_path(season: int) -> Path:
-    return _SNAPSHOT_DIR / "derived" / f"true_rank_{season}.parquet"
+def _true_rank_path(season: int, league_id) -> Path:
+    return _league_dir(league_id) / f"true_rank_{season}.parquet"
 
 
-def write_true_rank(df: pl.DataFrame, season: int) -> None:
-    """Write the per-(as_of_week, roster_id) True Rank read for a season (overwrite).
+def write_true_rank(df: pl.DataFrame, season: int, *, league_id=None) -> None:
+    """Write the per-(as_of_week, roster_id) True Rank read for a league season (overwrite).
 
     Output of transforms/compute_true_rank.py: one row per team per as-of week, carrying the
     optimal-lineup ROS strength (sum of the borrowed weekly projection centres over the
     remaining schedule for each optimal starter), the bench value behind it, the within-league
     rank (1 = strongest), and a league-relative 0–1 spectrum position. Record-independent.
     """
-    path = _true_rank_path(season)
+    league_id = league_id or _active_league(season)[0]
+    path = _true_rank_path(season, league_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path)
 
 
-def read_true_rank(season: int, as_of_week=None) -> pl.DataFrame:
+def read_true_rank(season: int, *, league_id=None, as_of_week=None) -> pl.DataFrame:
     """Read the True Rank read for one as-of week (default = latest)."""
-    return _as_of_slice(pl.read_parquet(_true_rank_path(season)), as_of_week)
+    league_id = league_id or _active_league(season)[0]
+    return _as_of_slice(pl.read_parquet(_true_rank_path(season, league_id)), as_of_week)
 
 
 # --- Positional Depth ---
@@ -985,12 +1011,12 @@ def read_true_rank(season: int, as_of_week=None) -> pl.DataFrame:
 # analytics, so it plugs into the same "As of" week selector. Closes the Phase-3 read set.
 
 
-def _positional_depth_path(season: int) -> Path:
-    return _SNAPSHOT_DIR / "derived" / f"positional_depth_{season}.parquet"
+def _positional_depth_path(season: int, league_id) -> Path:
+    return _league_dir(league_id) / f"positional_depth_{season}.parquet"
 
 
-def write_positional_depth(df: pl.DataFrame, season: int) -> None:
-    """Write the per-(as_of_week, roster_id, position) Positional Depth read for a season (overwrite).
+def write_positional_depth(df: pl.DataFrame, season: int, *, league_id=None) -> None:
+    """Write the per-(as_of_week, roster_id, position) Positional Depth read for a league season (overwrite).
 
     Output of transforms/compute_positional_depth.py: one row per team per position (QB/RB/WR/TE)
     per as-of week, carrying the position's rostered + starter ROS value, the surplus beyond the
@@ -998,14 +1024,16 @@ def write_positional_depth(df: pl.DataFrame, season: int) -> None:
     a league-relative 0–1 spectrum position within that position's cohort, and an advisory
     surplus/adequate/gap shape. A re-slice of Production VOR — borrows the value, builds no prior.
     """
-    path = _positional_depth_path(season)
+    league_id = league_id or _active_league(season)[0]
+    path = _positional_depth_path(season, league_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path)
 
 
-def read_positional_depth(season: int, as_of_week=None) -> pl.DataFrame:
+def read_positional_depth(season: int, *, league_id=None, as_of_week=None) -> pl.DataFrame:
     """Read the Positional Depth read for one as-of week (default = latest)."""
-    return _as_of_slice(pl.read_parquet(_positional_depth_path(season)), as_of_week)
+    league_id = league_id or _active_league(season)[0]
+    return _as_of_slice(pl.read_parquet(_positional_depth_path(season, league_id)), as_of_week)
 
 
 # --- Bracket Odds ---
@@ -1017,25 +1045,27 @@ def read_positional_depth(season: int, as_of_week=None) -> pl.DataFrame:
 # the other derived analytics, so it plugs into the same "As of" week selector.
 
 
-def _bracket_odds_path(season: int) -> Path:
-    return _SNAPSHOT_DIR / "derived" / f"bracket_odds_{season}.parquet"
+def _bracket_odds_path(season: int, league_id) -> Path:
+    return _league_dir(league_id) / f"bracket_odds_{season}.parquet"
 
 
-def write_bracket_odds(df: pl.DataFrame, season: int) -> None:
-    """Write the per-(as_of_week, roster_id) Bracket Odds read for a season (overwrite).
+def write_bracket_odds(df: pl.DataFrame, season: int, *, league_id=None) -> None:
+    """Write the per-(as_of_week, roster_id) Bracket Odds read for a league season (overwrite).
 
     Output of transforms/compute_bracket_sim.py: one row per team per as-of week, carrying the
     Monte Carlo playoff odds, projected regular-season wins, average final seed, magic number,
     and the current (as-of-N) wins/points-for the sim starts from.
     """
-    path = _bracket_odds_path(season)
+    league_id = league_id or _active_league(season)[0]
+    path = _bracket_odds_path(season, league_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path)
 
 
-def read_bracket_odds(season: int, as_of_week=None) -> pl.DataFrame:
+def read_bracket_odds(season: int, *, league_id=None, as_of_week=None) -> pl.DataFrame:
     """Read the Bracket Odds read for one as-of week (default = latest)."""
-    return _as_of_slice(pl.read_parquet(_bracket_odds_path(season)), as_of_week)
+    league_id = league_id or _active_league(season)[0]
+    return _as_of_slice(pl.read_parquet(_bracket_odds_path(season, league_id)), as_of_week)
 
 
 # --- ROS Outcome Shape ---
@@ -1142,20 +1172,22 @@ def ros_synthesis_exists(season: int) -> bool:
 # once-a-season fan-out. Consumed by compute_manager_features.py.
 
 
-def _manager_activity_path(season: int) -> Path:
-    return _SNAPSHOT_DIR / "sleeper" / str(season) / f"manager_activity_{season}.parquet"
+def _manager_activity_path(season: int, league_id) -> Path:
+    return _SNAPSHOT_DIR / "sleeper" / str(season) / "league" / str(league_id) / f"manager_activity_{season}.parquet"
 
 
-def write_manager_activity(df: pl.DataFrame, season: int, owner_id: str) -> None:
-    """Append one manager's complete activity slice to the season file (replace-by-owner_id).
+def write_manager_activity(df: pl.DataFrame, season: int, owner_id: str, *, league_id=None) -> None:
+    """Append one manager's complete activity slice to the league-season file (replace-by-owner_id).
 
     `df` is treated as the COMPLETE set of rows for `owner_id` (their league markers + txn
-    rows). If the season file exists, any existing rows for that owner_id are dropped first
+    rows). If the file exists, any existing rows for that owner_id are dropped first
     so re-fetching a manager replaces their slice rather than duplicating (and a stale
     no-longer-comparable league can't linger). Concat is diagonal so a schema tweak on a
-    later run doesn't break the append.
+    later run doesn't break the append. League-scoped (keyed on the *target* league whose
+    managers were fanned out), so the read-modify-write stays bounded to one league's file.
     """
-    path = _manager_activity_path(season)
+    league_id = league_id or _active_league(season)[0]
+    path = _manager_activity_path(season, league_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         existing = pl.read_parquet(path).filter(pl.col("owner_id") != owner_id)
@@ -1163,16 +1195,18 @@ def write_manager_activity(df: pl.DataFrame, season: int, owner_id: str) -> None
     df.write_parquet(path)
 
 
-def read_manager_activity(season: int, owner_id: str | None = None) -> pl.DataFrame:
-    """Read the cross-league manager activity for a season, optionally one manager."""
-    df = pl.read_parquet(_manager_activity_path(season))
+def read_manager_activity(season: int, owner_id: str | None = None, *, league_id=None) -> pl.DataFrame:
+    """Read the cross-league manager activity for a league season, optionally one manager."""
+    league_id = league_id or _active_league(season)[0]
+    df = pl.read_parquet(_manager_activity_path(season, league_id))
     if owner_id is not None:
         df = df.filter(pl.col("owner_id") == owner_id)
     return df
 
 
-def manager_activity_exists(season: int) -> bool:
-    return _manager_activity_path(season).exists()
+def manager_activity_exists(season: int, *, league_id=None) -> bool:
+    league_id = league_id or _active_league(season)[0]
+    return _manager_activity_path(season, league_id).exists()
 
 
 # --- Manager Features (cross-league behavioural profile, DECISION_READS.md §7) ---
@@ -1185,32 +1219,35 @@ def manager_activity_exists(season: int) -> bool:
 # so it lives in derived/ alongside the other compute_* outputs; overwrite per run.
 
 
-def _manager_features_path(season: int) -> Path:
-    return _SNAPSHOT_DIR / "derived" / f"manager_features_{season}.parquet"
+def _manager_features_path(season: int, league_id) -> Path:
+    return _league_dir(league_id) / f"manager_features_{season}.parquet"
 
 
-def write_manager_features(df: pl.DataFrame, season: int) -> None:
-    """Write the per-manager behavioural feature profile for a season (overwrite).
+def write_manager_features(df: pl.DataFrame, season: int, *, league_id=None) -> None:
+    """Write the per-manager behavioural feature profile for a league season (overwrite).
 
     Output of transforms/compute_manager_features.py: one row per league manager (owner_id),
     carrying the deterministic behavioural features + signal-depth counts + an is_primary flag
     (the primary user gets a blindspot-scoped dossier in Phase B).
     """
-    path = _manager_features_path(season)
+    league_id = league_id or _active_league(season)[0]
+    path = _manager_features_path(season, league_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path)
 
 
-def read_manager_features(season: int, owner_id: str | None = None) -> pl.DataFrame:
-    """Read the per-manager feature profile for a season, optionally one manager."""
-    df = pl.read_parquet(_manager_features_path(season))
+def read_manager_features(season: int, owner_id: str | None = None, *, league_id=None) -> pl.DataFrame:
+    """Read the per-manager feature profile for a league season, optionally one manager."""
+    league_id = league_id or _active_league(season)[0]
+    df = pl.read_parquet(_manager_features_path(season, league_id))
     if owner_id is not None:
         df = df.filter(pl.col("owner_id") == owner_id)
     return df
 
 
-def manager_features_exists(season: int) -> bool:
-    return _manager_features_path(season).exists()
+def manager_features_exists(season: int, *, league_id=None) -> bool:
+    league_id = league_id or _active_league(season)[0]
+    return _manager_features_path(season, league_id).exists()
 
 
 # --- Manager Dossiers (AI-written cross-league behavioural profiles, DECISION_READS.md §7) ---
@@ -1224,27 +1261,30 @@ def manager_features_exists(season: int) -> bool:
 # write_manager_dossiers.py; overwrite per run (run-once-per-season unless --force).
 
 
-def _manager_dossiers_path(season: int) -> Path:
-    return _SNAPSHOT_DIR / "derived" / f"manager_dossiers_{season}.parquet"
+def _manager_dossiers_path(season: int, league_id) -> Path:
+    return _league_dir(league_id) / f"manager_dossiers_{season}.parquet"
 
 
-def write_manager_dossiers(df: pl.DataFrame, season: int) -> None:
-    """Write the per-manager AI dossiers for a season (overwrite)."""
-    path = _manager_dossiers_path(season)
+def write_manager_dossiers(df: pl.DataFrame, season: int, *, league_id=None) -> None:
+    """Write the per-manager AI dossiers for a league season (overwrite)."""
+    league_id = league_id or _active_league(season)[0]
+    path = _manager_dossiers_path(season, league_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path)
 
 
-def read_manager_dossiers(season: int, owner_id: str | None = None) -> pl.DataFrame:
-    """Read the per-manager AI dossiers for a season, optionally one manager."""
-    df = pl.read_parquet(_manager_dossiers_path(season))
+def read_manager_dossiers(season: int, owner_id: str | None = None, *, league_id=None) -> pl.DataFrame:
+    """Read the per-manager AI dossiers for a league season, optionally one manager."""
+    league_id = league_id or _active_league(season)[0]
+    df = pl.read_parquet(_manager_dossiers_path(season, league_id))
     if owner_id is not None:
         df = df.filter(pl.col("owner_id") == owner_id)
     return df
 
 
-def manager_dossiers_exist(season: int) -> bool:
-    return _manager_dossiers_path(season).exists()
+def manager_dossiers_exist(season: int, *, league_id=None) -> bool:
+    league_id = league_id or _active_league(season)[0]
+    return _manager_dossiers_path(season, league_id).exists()
 
 
 # --- League Corpus (Session 0.5): discovery crawl + the selected league registry ---

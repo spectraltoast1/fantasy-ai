@@ -543,7 +543,7 @@ def fetch_manager_activity(league_id: str, season: int, *, only_username: str | 
                                  "adds_json": json.dumps(adds), "drops_json": json.dumps(drops)})
 
         df = pl.DataFrame(rows, schema=_MANAGER_ACTIVITY_SCHEMA)
-        data_layer.write_manager_activity(df, season, owner_id)
+        data_layer.write_manager_activity(df, season, owner_id, league_id=league_id)
         n_txn = df.filter(pl.col("kind") == "txn").height
         print(f"  {owner_name or owner_id}: {len(selected)} comparable league(s), "
               f"{n_txn} transaction(s) → manager_activity_{season}.parquet")

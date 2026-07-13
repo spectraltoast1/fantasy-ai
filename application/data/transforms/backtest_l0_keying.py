@@ -1,0 +1,137 @@
+"""
+Gate for the L0 keying migration (Improvement-Loop Session 1).
+
+L0 moved every league/scoring-scoped derived entity out of the flat `derived/{entity}_{season}.parquet`
+into scope-partitioned paths (`derived/league/<league_id>/…`, `derived/scoring/<scoring_key>/…`) so a
+second league can never overwrite the first (audit S1.3). This gate proves the move changed **nothing**
+about the numbers and that the isolation actually holds. Exit 0 iff every applicable check passes.
+
+  A — **Migration identity (needs the real snapshots).** For each re-keyed entity, frame-compare the
+      OLD flat parquet against the NEW keyed parquet for the is_mine league. Skipped per-entity when the
+      flat file is absent (already migrated / never built); FAILS if the flat exists but the keyed file
+      does not (migration not run yet). This is the "reproduce mine frame-for-frame" guarantee.
+  B — **Collision isolation (synthetic; runs anywhere).** Write two different frames under two league_ids
+      and confirm each reads back its own rows — league #2 provably cannot overwrite league #1.
+  C — **Registry / resolver smoke.** leagues.parquet resolves the is_mine (league_id, scoring_key), and
+      the resolver returns it registry-first (no network).
+
+Run: python3 -m application.data.transforms.backtest_l0_keying --season 2025
+Migrate first (re-run the deterministic transforms to the keyed paths) so A has both sides to compare.
+"""
+
+import argparse
+import shutil
+import sys
+
+import polars as pl
+
+from application.data import data_layer
+from application.shared import league_resolver
+
+_SNAP = data_layer._SNAPSHOT_DIR
+
+# entity -> (old flat parquet path, new keyed parquet path builder taking (lid, sk))
+_LEAGUE_ENTITIES = ["team_form", "team_leakage", "player_signal", "production_vor", "market_vor",
+                    "true_rank", "positional_depth", "bracket_odds", "manager_features", "manager_dossiers"]
+
+
+def _check(label, ok, results, extra=""):
+    results.append(ok)
+    print(f"    {label:58} {'PASS' if ok else 'FAIL'}{('  ' + extra) if extra else ''}")
+
+
+def _frame_eq(a: pl.DataFrame, b: pl.DataFrame) -> bool:
+    """Order-independent frame equality: same columns, and same rows sorted by all columns."""
+    if set(a.columns) != set(b.columns):
+        return False
+    cols = a.columns
+    return a.sort(cols).equals(b.select(cols).sort(cols))
+
+
+def _migration_pairs(season: int, lid: str, sk: str):
+    """(name, old_flat_path, new_keyed_path) for every re-keyed entity."""
+    d = _SNAP / "derived"
+    pairs = [(n, d / f"{n}_{season}.parquet", d / "league" / lid / f"{n}_{season}.parquet")
+             for n in _LEAGUE_ENTITIES]
+    pairs.append(("projection_consensus", d / f"projection_consensus_{season}.parquet",
+                  d / "scoring" / sk / f"projection_consensus_{season}.parquet"))
+    pairs.append(("manager_activity",
+                  _SNAP / "sleeper" / str(season) / f"manager_activity_{season}.parquet",
+                  _SNAP / "sleeper" / str(season) / "league" / lid / f"manager_activity_{season}.parquet"))
+    return pairs
+
+
+def _check_migration(season: int, lid: str, sk: str, results: list) -> None:
+    print("  A — migration identity (old flat parquet == new keyed parquet, is_mine league):")
+    any_compared = False
+    for name, old, new in _migration_pairs(season, lid, sk):
+        if not old.exists():
+            print(f"    {name:58} SKIP  (flat absent — migrated or never built)")
+            continue
+        if not new.exists():
+            _check(f"{name} keyed file present", False, results, "migration not run — keyed file missing")
+            continue
+        any_compared = True
+        a, b = pl.read_parquet(old), pl.read_parquet(new)
+        _check(f"{name} frame-equal (rows {a.height})", _frame_eq(a, b), results)
+    if not any_compared:
+        print("    (no flat files present — migration-identity check had nothing to compare)")
+
+
+def _check_collision(season: int, results: list) -> None:
+    print("  B — collision isolation (two leagues cannot overwrite each other):")
+    a_id, b_id = "__L0TEST_A__", "__L0TEST_B__"
+    fa = pl.DataFrame({"as_of_week": [4], "roster_id": [1], "sleeper_player_id": ["A"], "vor": [1.0]})
+    fb = pl.DataFrame({"as_of_week": [4], "roster_id": [1], "sleeper_player_id": ["B"], "vor": [2.0]})
+    try:
+        data_layer.write_production_vor(fa, season, league_id=a_id)
+        data_layer.write_production_vor(fb, season, league_id=b_id)  # must NOT touch A
+        ra = data_layer.read_production_vor(season, league_id=a_id, as_of_week="all")
+        rb = data_layer.read_production_vor(season, league_id=b_id, as_of_week="all")
+        pa = data_layer._production_vor_path(season, a_id)
+        pb = data_layer._production_vor_path(season, b_id)
+        _check("distinct paths per league_id", pa != pb, results)
+        _check("league A reads back its own rows (unclobbered)", ra.equals(fa), results,
+               f"got {ra['sleeper_player_id'].to_list()}")
+        _check("league B reads back its own rows", rb.equals(fb), results)
+    finally:
+        for lid in (a_id, b_id):
+            shutil.rmtree(data_layer._league_dir(lid), ignore_errors=True)
+
+
+def _check_registry(season: int, results: list) -> None:
+    print("  C — registry / resolver smoke:")
+    if not data_layer.leagues_exists():
+        _check("leagues.parquet exists", False, results,
+               "run `python3 -m application.shared.league_registry build`")
+        return
+    lid, sk = data_layer._active_league(season)
+    _check("_active_league returns (league_id, scoring_key)", bool(lid) and bool(sk), results, f"({lid}, {sk})")
+    _check("resolver.resolve_active == _active_league", league_resolver.resolve_active(season) == (lid, sk), results)
+    _check("resolver.resolve_league_id is registry-first (no network)",
+           league_resolver.resolve_league_id(season) == lid, results)
+
+
+def run(season: int) -> bool:
+    results: list = []
+    print(f"=== L0 keying gate: season={season} ===")
+    if data_layer.leagues_exists():
+        lid, sk = data_layer._active_league(season)
+        _check_migration(season, lid, sk, results)
+    else:
+        print("  A — migration identity: SKIP (no registry; build it, then re-run after migration)")
+    _check_collision(season, results)
+    _check_registry(season, results)
+
+    ok = all(results) and bool(results)
+    print()
+    print(f"  VERDICT: {'PASS' if ok else 'FAIL'} — the keyed layout reproduces mine frame-for-frame "
+          f"and isolates leagues.")
+    return ok
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Gate for the L0 keying migration.")
+    parser.add_argument("--season", type=int, default=2025)
+    args = parser.parse_args()
+    sys.exit(0 if run(args.season) else 1)
