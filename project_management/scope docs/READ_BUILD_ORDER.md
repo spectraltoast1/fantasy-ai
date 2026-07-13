@@ -84,8 +84,8 @@ with a paired `backtest_*.py` / `check_*.py`. **No UI yet on any of these** — 
 - **§7 Manager Dossiers (complete)** — Phase A: cross-league acquisition (`sleeper.py fetch-manager-activity`
   → `manager_activity`) + deterministic features (`compute_manager_features.py` → `manager_features`,
   gated by `backtest_manager_features.py`). Phase B: the AI layer — `application/ai/` writes one
-  API-key-gated Claude-Haiku dossier per manager (`write_manager_dossiers.py` → `manager_dossiers`,
-  gated by `check_manager_dossiers.py`).
+  Claude-Haiku dossier per manager (`write_manager_dossiers.py` → `manager_dossiers`, an included
+  AI run — ungated; gated by `check_manager_dossiers.py`).
 
 **Supporting substrate (built, underpins the reads):** `data_layer.py` (the single I/O seam); fetchers
 `nfl_stats.py` / `sleeper.py` / `leaguelogs.py` / `news.py` / `adp.py`, all routed through the shared
