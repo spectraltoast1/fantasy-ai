@@ -9,6 +9,7 @@
 // One exported function per panel; each returns view-ready objects.
 
 import { query } from './db.js';
+import { derivePosture } from './posture.js';
 
 export const POS = ['QB', 'RB', 'WR', 'TE'];
 
@@ -820,6 +821,291 @@ export async function loadPlayerCard(sleeperId, asOfWeek) {
     lean,
     opportunity,
     ros,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Teams tab — the standings table (Gridiron surface #3).
+// ---------------------------------------------------------------------------
+
+// One row per (team, week): total points + W/L, bounded to weeks ≤ N. Feeds both the
+// real record and the all-play ("true record") computation (score vs every other team
+// every week — the luck-neutral read the contract §4.4 keeps distinct from true_rank).
+const SQL_STANDINGS_WEEKS = (n) => `
+  SELECT roster_id, week,
+         any_value(roster_total_points) AS pts,
+         any_value(matchup_result)      AS result
+  FROM 'season.parquet'
+  WHERE ${weekCutoff(n)}
+  GROUP BY roster_id, week
+`;
+
+/**
+ * The Teams standings: every team with its real record, all-play "true record",
+ * playoff odds (+ the weekly odds series for the trendline) and derived posture.
+ * Sorted by playoff odds desc. bracket_odds is tall over as_of_week; playoff_odds is a
+ * 0–1 fraction (surfaced ×100). Posture is the shared §5 derivation (posture.js).
+ * @param {number} [asOfWeek] view as of week N; omit for the latest week
+ * @returns {Promise<object[]>} view-ready standings rows, best playoff odds first
+ */
+export async function loadStandings(asOfWeek) {
+  // All odds rows up to week N → per team, the weekly series + the current (latest) row.
+  const oddsCutoff = asOfWeek == null ? 'TRUE' : `as_of_week <= ${Number(asOfWeek)}`;
+  const [teamWeeks, oddsRows, teamRows] = await Promise.all([
+    query(SQL_STANDINGS_WEEKS(asOfWeek)),
+    query(`
+      SELECT as_of_week, roster_id, playoff_odds, avg_seed, magic_wins, remaining_games
+      FROM 'bracket_odds.parquet'
+      WHERE ${oddsCutoff}
+      ORDER BY roster_id, as_of_week
+    `),
+    query(`SELECT roster_id, team_name, owner_name FROM 'teams.parquet'`),
+  ]);
+
+  // Records + all-play, from the team-week scores (mirrors loadTeamDetails' all-play).
+  const byWeek = {};
+  const record = {};
+  for (const r of teamWeeks) {
+    const row = { rosterId: Number(r.roster_id), pts: Number(r.pts), result: r.result };
+    (byWeek[Number(r.week)] ??= []).push(row);
+    const rec = (record[row.rosterId] ??= { w: 0, l: 0 });
+    if (row.result === 'W') rec.w++;
+    else if (row.result === 'L') rec.l++;
+  }
+  const allPlay = {};
+  for (const rows of Object.values(byWeek)) {
+    for (const a of rows) {
+      const rec = (allPlay[a.rosterId] ??= { w: 0, l: 0 });
+      for (const b of rows) {
+        if (b.rosterId === a.rosterId) continue;
+        if (a.pts > b.pts) rec.w++;
+        else if (a.pts < b.pts) rec.l++;
+      }
+    }
+  }
+
+  // Odds: weekly playoff-odds series (×100) + the latest slice's current values.
+  const oddsByTeam = {};
+  for (const r of oddsRows) {
+    const rid = Number(r.roster_id);
+    (oddsByTeam[rid] ??= { series: [], last: null });
+    oddsByTeam[rid].series.push(Number(r.playoff_odds) * 100);
+    oddsByTeam[rid].last = r; // rows are ordered by as_of_week, so this ends as the latest
+  }
+
+  const nameOf = {};
+  for (const t of teamRows) nameOf[Number(t.roster_id)] = t;
+
+  const rows = Object.keys(allPlay).map(Number).map((rid) => {
+    const t = nameOf[rid];
+    const o = oddsByTeam[rid];
+    const ap = allPlay[rid];
+    const rec = record[rid] ?? { w: 0, l: 0 };
+    const playoffPct = o?.last ? Number(o.last.playoff_odds) * 100 : null;
+    const allPlayPct = ap.w + ap.l ? (ap.w / (ap.w + ap.l)) * 100 : 0;
+    return {
+      rosterId: rid,
+      name: t?.team_name || t?.owner_name || `Team ${rid}`,
+      owner: t?.owner_name ?? null,
+      isMe: t?.owner_name === MY_USERNAME,
+      wins: rec.w,
+      losses: rec.l,
+      allPlayW: ap.w,
+      allPlayL: ap.l,
+      playoffPct,
+      allPlayPct,
+      seed: o?.last?.avg_seed != null ? Math.round(Number(o.last.avg_seed)) : null,
+      magicWins: o?.last?.magic_wins != null ? Number(o.last.magic_wins) : null,
+      remainingGames: o?.last?.remaining_games != null ? Number(o.last.remaining_games) : null,
+      oddsSeries: o?.series ?? [],
+      posture: playoffPct != null ? derivePosture(playoffPct, allPlayPct) : null,
+    };
+  });
+
+  // Rank by playoff odds desc (nulls last), then all-play % as a tiebreak.
+  rows.sort((a, b) => (b.playoffPct ?? -1) - (a.playoffPct ?? -1) || b.allPlayPct - a.allPlayPct);
+  rows.forEach((r, i) => (r.rank = i + 1));
+  return rows;
+}
+
+// ---------------------------------------------------------------------------
+// Team detail (drill-down from the standings) — stat blocks, positional depth,
+// roster with a PROD/MKT VOR toggle.
+// ---------------------------------------------------------------------------
+
+// positional_depth `shape` → the display chip (contract §4.5).
+const SHAPE_LABEL = { surplus: 'SURPLUS', adequate: 'EVEN', gap: 'GAP' };
+
+/**
+ * Everything the Team-detail view needs for one roster: the 4 stat blocks (record,
+ * all-play "true record", playoff % + seed, points/week), positional depth per
+ * QB/RB/WR/TE (starter value, league-relative spectrum, rank, SURPLUS/EVEN/GAP shape),
+ * and the roster split into starters/bench with each player's Production + Market VOR
+ * weekly series (for the card's PROD/MKT toggle + trend sparkline). Keyed on
+ * sleeper_player_id; the roster is resolved as-of week N (latest week ≤ N).
+ * @param {number} rosterId
+ * @param {number} [asOfWeek] view as of week N; omit for the latest week
+ * @returns {Promise<object|null>} the assembled team, or null if the roster is unknown
+ */
+export async function loadTeamDetail(rosterId, asOfWeek) {
+  const rid = Number(rosterId);
+  const prodCutoff = asOfWeek == null ? 'TRUE' : `as_of_week <= ${Number(asOfWeek)}`;
+
+  const [teamWeeks, oddsRows, depthRows, rosterRows, prodRows, mktRows, teamRows] = await Promise.all([
+    query(SQL_STANDINGS_WEEKS(asOfWeek)),
+    query(`SELECT playoff_odds, avg_seed FROM 'bracket_odds.parquet'
+           WHERE roster_id = ${rid} AND ${asOfSlice('bracket_odds.parquet', asOfWeek)}`),
+    query(`SELECT roster_id, position, starter_value, surplus_value, marginal_vor, spectrum_pos, shape
+           FROM 'positional_depth.parquet' WHERE ${asOfSlice('positional_depth.parquet', asOfWeek)}`),
+    query(`
+      WITH latest AS (
+        SELECT sleeper_player_id,
+               arg_max(roster_id, week)           AS roster_id,
+               arg_max(is_starter, week)          AS is_starter,
+               arg_max(player_display_name, week) AS name,
+               arg_max(position, week)            AS position,
+               arg_max(team, week)                AS nfl_team
+        FROM 'season.parquet'
+        WHERE position IN ('QB','RB','WR','TE') AND ${weekCutoff(asOfWeek)}
+        GROUP BY sleeper_player_id
+      )
+      SELECT * FROM latest WHERE roster_id = ${rid}
+    `),
+    query(`SELECT sleeper_player_id, as_of_week, vor FROM 'production_vor.parquet'
+           WHERE roster_id = ${rid} AND ${prodCutoff} ORDER BY sleeper_player_id, as_of_week`),
+    query(`SELECT sleeper_player_id, snapshot_date, market_vor FROM 'market_vor.parquet'
+           WHERE roster_id = ${rid} ORDER BY sleeper_player_id, snapshot_date`),
+    query(`SELECT roster_id, team_name, owner_name FROM 'teams.parquet'`),
+  ]);
+
+  // Identity / "you".
+  const teamById = {};
+  let myRosterId = null;
+  for (const t of teamRows) {
+    teamById[Number(t.roster_id)] = t;
+    if (t.owner_name === MY_USERNAME) myRosterId = Number(t.roster_id);
+  }
+  const me = teamById[rid];
+  if (!me && rosterRows.length === 0) return null;
+
+  // Record + all-play "true record" + points-for, from the team-week scores.
+  const byWeek = {};
+  for (const r of teamWeeks) {
+    (byWeek[Number(r.week)] ??= []).push({ rosterId: Number(r.roster_id), pts: Number(r.pts), result: r.result });
+  }
+  let w = 0, l = 0, ptsFor = 0, games = 0;
+  const ap = { w: 0, l: 0 };
+  for (const rows of Object.values(byWeek)) {
+    const mine = rows.find((x) => x.rosterId === rid);
+    if (!mine) continue;
+    games++; ptsFor += mine.pts;
+    if (mine.result === 'W') w++; else if (mine.result === 'L') l++;
+    for (const b of rows) {
+      if (b.rosterId === rid) continue;
+      if (mine.pts > b.pts) ap.w++; else if (mine.pts < b.pts) ap.l++;
+    }
+  }
+
+  const odds = oddsRows[0];
+  const stats = {
+    record: `${w}-${l}`,
+    trueRec: `${ap.w}-${ap.l}`,
+    playoffPct: odds?.playoff_odds != null ? Number(odds.playoff_odds) * 100 : null,
+    seed: odds?.avg_seed != null ? Math.round(Number(odds.avg_seed)) : null,
+    ptsWk: games ? round1(ptsFor / games) : null,
+  };
+
+  // Positional depth per position, with league rank (by starter_value) and the shape chip.
+  const byPos = {};
+  for (const d of depthRows) (byPos[d.position] ??= []).push(d);
+  const depth = POS.map((pos) => {
+    const all = (byPos[pos] ?? []).slice().sort((a, b) => Number(b.starter_value) - Number(a.starter_value));
+    const idx = all.findIndex((d) => Number(d.roster_id) === rid);
+    if (idx < 0) return null;
+    const d = all[idx];
+    return {
+      position: pos,
+      starterValue: Number(d.starter_value),
+      surplusValue: Number(d.surplus_value),
+      marginalVor: Number(d.marginal_vor),
+      spectrumPos: Number(d.spectrum_pos),
+      shape: SHAPE_LABEL[d.shape] ?? d.shape,
+      rank: idx + 1,
+      nTeams: all.length,
+    };
+  }).filter(Boolean);
+
+  // Per-player VOR series, keyed by sleeper_player_id.
+  const prodById = {};
+  for (const r of prodRows) (prodById[r.sleeper_player_id] ??= []).push(Number(r.vor));
+  const mktById = {};
+  for (const r of mktRows) (mktById[r.sleeper_player_id] ??= []).push(Number(r.market_vor));
+
+  const players = rosterRows.map((p) => ({
+    sleeperId: p.sleeper_player_id,
+    name: p.name,
+    pos: p.position,
+    nflTeam: p.nfl_team ?? null,
+    isStarter: Boolean(p.is_starter),
+    prod: seriesRead(prodById[p.sleeper_player_id] ?? []),
+    mkt: seriesRead(mktById[p.sleeper_player_id] ?? []),
+  }));
+  const byValue = (a, b) => (b.prod.value ?? -Infinity) - (a.prod.value ?? -Infinity);
+  const starters = players.filter((p) => p.isStarter).sort(byValue);
+  const bench = players.filter((p) => !p.isStarter).sort(byValue);
+
+  return {
+    rosterId: rid,
+    name: me?.team_name || me?.owner_name || `Team ${rid}`,
+    owner: me?.owner_name ?? null,
+    onYours: rid === myRosterId,
+    stats,
+    depth,
+    roster: { starters, bench },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Manager Dossier (drill-down from team detail) — the cleanest 1:1 map (§4.8).
+// ---------------------------------------------------------------------------
+
+/**
+ * The Manager Dossier for one roster: the AI headline + five tendency fields, the signal
+ * depth footer (tier + league/season/move counts + confidence note), and provenance.
+ * Byte-identical to the manager_dossiers entity — the row already carries the feature
+ * counts, so no second read is needed. is_zero_signal drives the "no intel" state.
+ * @param {number} rosterId
+ * @returns {Promise<object>} the dossier, or { missing: true } if none exists
+ */
+export async function loadManagerDossier(rosterId) {
+  const rows = await query(`
+    SELECT owner_name, team_name, headline, waiver_faab, trade_tendency, positional_lean,
+           roster_construction, edge_or_blindspot, confidence_note, depth_tier,
+           n_leagues, n_seasons, n_transactions, is_zero_signal, model, generated_at
+    FROM 'manager_dossiers.parquet'
+    WHERE roster_id = ${Number(rosterId)}
+  `);
+  const d = rows[0];
+  if (!d) return { missing: true };
+  return {
+    owner: d.owner_name,
+    teamName: d.team_name || d.owner_name,
+    isZeroSignal: Boolean(d.is_zero_signal),
+    headline: d.headline,
+    tendencies: {
+      waiverFaab: d.waiver_faab,
+      tradeTendency: d.trade_tendency,
+      positionalLean: d.positional_lean,
+      rosterConstruction: d.roster_construction,
+      edgeOrBlindspot: d.edge_or_blindspot,
+    },
+    depthTier: d.depth_tier,
+    nLeagues: Number(d.n_leagues),
+    nSeasons: Number(d.n_seasons),
+    nTransactions: Number(d.n_transactions),
+    confidenceNote: d.confidence_note,
+    model: d.model,
+    generatedAt: d.generated_at,
   };
 }
 

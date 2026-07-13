@@ -57,6 +57,19 @@ export function GradeBar({ grade, color = 'var(--violet)' }) {
   );
 }
 
+// A league-relative depth bar: fill = the team's 0–1 spectrum position for a position
+// (min→0, max→1 across the league), with a median tick at 0.5. Longer fill = stronger.
+// Colored violet (a VOR value) — the reserved posture palette stays off non-posture reads.
+export function DepthBar({ pos, height = 8, color = 'var(--violet)' }) {
+  const p = Math.max(0, Math.min(1, pos == null ? 0 : pos));
+  return (
+    <div className="depth-bar" style={{ height }}>
+      <div className="depth-bar-fill" style={{ width: `${p * 100}%`, background: color }} />
+      <div className="depth-bar-tick" style={{ left: '50%' }} />
+    </div>
+  );
+}
+
 // A median tick inside a 25–75 band on a shared scale. Not consumed yet — built ahead
 // of the Matchups slice (per-starter range gauges), kept here so the mark is shared.
 export function RangeGauge({ lo, md, hi, min, max, height = 12, color = 'var(--violet)' }) {

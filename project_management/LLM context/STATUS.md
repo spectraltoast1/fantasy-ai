@@ -1,6 +1,31 @@
 # STATUS
 
-**Last updated:** 2026-07-13 (**GRIDIRON FRONT-END — FOUNDATION + PLAYERS SLICE SHIPPED: the first
+**Last updated:** 2026-07-13 (**GRIDIRON FRONT-END — TEAMS CLUSTER SHIPPED: Teams standings + Team
+detail + Manager Dossier, the 2nd front-end slice against the `DATA_CONTRACT` (§4.4 / §4.5 / §4.8).**
+**Commit 1** the **Teams standings** — `queries.loadStandings()`: per team the real record + **all-play
+"true record"** (score vs every team every week, luck-stripped) + `bracket_odds` playoff % (a 0–1 fraction
+×100) with its weekly series for the trendline + the shared **posture** read. New pure **`src/posture.js`**
+= the contract §5 rule (`BAND=9`, `LEVEL_CUT=60`, `POSTURE_TONE`) in ONE home — reused by the Teams chips
+now and the League posture MAP later. `Teams.jsx` renders the sortable standings (rank · team+YOU · record ·
+true rec · posture chip · playoff % · odds sparkline). **Commit 2** the **Team detail** —
+`loadTeamDetail()`: 4 stat blocks (record, all-play true rec, playoff %+seed, pts/wk), **positional depth**
+per QB/RB/WR/TE (`positional_depth` starter value + league-relative spectrum + rank + SURPLUS/EVEN/GAP shape)
+via a new `DepthBar` mark, and the roster split starters/bench with each player's **Production + Market VOR
+weekly series** behind a **PROD/MKT toggle** (MKT flagged cross-time POC); the **this-week matchup bar is
+deferred honestly** to the Matchups slice (needs `bracket_sim`), not fabricated. **Commit 3** the **Manager
+Dossier** — `loadManagerDossier()`: the cleanest 1:1 `manager_dossiers` map (headline + 5 tendency fields +
+a signal-depth footer, deep/moderate/thin → HIGH/MED/THIN, + provenance; `is_zero_signal` → honest "no
+intel"). `App.jsx` gains a **detail nav-stack** so multi-level drills (team → player, team → dossier) get a
+correct one-level "‹ Back"; `Teams` rows drill in; `db.js` registers bracket_odds / positional_depth /
+manager_dossiers (public/data symlinks added). All new data access through the `queries.js` seam; views are
+pure renderers. Verified live 1280px (browser preview): standings ranked by odds with correct posture chips
+(my team 87% odds × 61% all-play → Riding luck) + tone trendlines; week switcher **replays back to wk2**
+(records/odds/depth all change); team detail blocks + depth bars/chips/ranks + PROD⇄MKT toggle + roster
+player → card → Back returns to team detail; Bski dossier all 5 fields + MED badge + provenance; full Back
+chain pops one level each; numbers match the parquet; console clean. **Next — League slice (Your Race /
+Playoff Picture / Posture MAP reusing `posture.js` / Positional Talent, off `bracket_odds` + `true_rank` +
+`market_vor`), then Matchups; + the mobile-responsive pass + the free-agent value read (unblocks Available/
+waivers).** — Prior front-end: **GRIDIRON FRONT-END — FOUNDATION + PLAYERS SLICE SHIPPED: the first
 front-end surfacing of the gated backend reads.** Recreates the Claude-Design `Gridiron` handoff (in
 `scope docs/`, its `DATA_CONTRACT.md` mapping every visual → a backend entity) in the real React + Vite +
 DuckDB-WASM app — Web-first, new-shell-with-placeholders migration. **Commit 1** the violet/posture design
@@ -145,6 +170,38 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**Gridiron front-end — Teams cluster: Teams standings + Team detail + Manager Dossier (2nd front-end slice; 3 commits).**
+Continues the slice-by-slice build against `DATA_CONTRACT.md` (§4.4 / §4.5 / §4.8). **New shared `src/posture.js`**
+— the contract §5 posture derivation (`derivePosture(playoffOddsPct, allPlayPct)`, locked `BAND=9` / `LEVEL_CUT=60`,
+`POSTURE_TONE` map) in ONE pure home, so the Teams chips (now) and the League posture MAP (later) read the same
+rule. **(1) Teams standings:** `queries.loadStandings(asOfWeek)` — per team the real record + **all-play "true
+record"** (score vs every team every week, luck-stripped, reusing the `loadTeamDetails` all-play loop) + `bracket_odds`
+playoff % (a **0–1 fraction ×100**) with its weekly series for the trendline + the derived posture; `Teams.jsx`
+renders the standings sorted by odds (rank · team+YOU · record · true rec · posture chip · playoff % · odds sparkline).
+**(2) Team detail:** `loadTeamDetail(rosterId, asOfWeek)` — 4 stat blocks (record, all-play true rec, playoff %+seed,
+pts/wk), **positional depth** per QB/RB/WR/TE (`positional_depth`: starter value, league-relative spectrum, rank,
+SURPLUS/EVEN/GAP shape) via a new **`DepthBar`** mark (fill = spectrum, median tick), and the roster split
+starters/bench with each player's **Production + Market VOR weekly series** behind a **PROD/MKT VOR toggle**
+(MKT flagged cross-time POC); `TeamDetail.jsx` + a Manager Dossier button. The **this-week matchup bar is deferred
+honestly** to the Matchups slice (it needs `bracket_sim` win prob) — an in-place note, never fabricated. **(3) Manager
+Dossier:** `loadManagerDossier(rosterId)` — the cleanest 1:1 map; the `manager_dossiers` row already carries the
+feature counts (no 2nd fetch); `Dossier.jsx` = headline + the 5 tendency fields + a Signal-Depth footer
+(deep/moderate/thin → HIGH/MED/THIN badge + league/season/move counts + confidence note) + model/date provenance;
+`is_zero_signal` → the honest "no intel" state. `App.jsx` gains a **detail nav-stack** (push/pop) so multi-level
+drills (team → player, team → dossier) get a correct one-level "‹ Back"; tab-switch clears it. `db.js` registers
+bracket_odds / positional_depth / manager_dossiers (public/data symlinks added in main). **Seam discipline kept** —
+all new data access in `queries.js`; views are pure renderers. Verified live at 1280px (browser preview): standings
+ranked by odds with correct posture chips (Bski Contender 91% / my team Riding luck 87% odds × 61% all-play) + tone
+trendlines; **week switcher replays back to wk2** (records/odds/depth all shift, ranks reshuffle); team detail blocks
+(3-1, 22-14, 87% seed 3, 146.2), depth bars/chips/ranks, PROD⇄MKT toggle switches values + shows the POC note, roster
+player → Player card → Back returns to team detail (stack pops one level); Bski dossier all 5 fields + MED badge + `1
+league · 1 season · 24 moves` + `claude-haiku-4-5 · 2026-07-13`; full Back chain dossier → team → standings pops one
+level each. Numbers spot-checked against the parquet (odds 91/87/84%, my positional depth QB 294.7/RB 488.8/…); no
+console errors. **Next — League slice (Your Race / Playoff Picture / Posture MAP reusing `posture.js` / Positional
+Talent, off `bracket_odds` + `true_rank` + `market_vor`), then Matchups; + the mobile-responsive pass + the free-agent
+value backend read (unblocks Available/waivers).**
+
+> earlier build
 **Gridiron front-end — Foundation + Players slice (first front-end surfacing of the gated reads; 3 commits).**
 Recreates the Claude-Design `Gridiron` handoff in the real React + Vite + DuckDB-WASM app per its
 `DATA_CONTRACT.md` (Web-first; new-shell-with-placeholders migration). **(1) Foundation:** `styles.css`
@@ -212,39 +269,6 @@ priced (99.4%), 248 no-production rows null (law 2), gate exit 0; Production VOR
 0.944 QB / 0.955 FLEX). No UI (data + gate). **Next — front-end surfacing of the gated forward reads
 (Phase 4).**
 
-> earlier build
-**§2 ROS Synthesis — the per-player AI interpretation call (QUEUED #2; §2 read COMPLETE).** The last
-mile the ROS Outcome Shape skeleton deferred to Phase 6. The project's 3rd AI-layer read, reusing the
-`ai/client.py` isolation seam. **New `application/ai/` trio:** `ros_synthesis_prompt.py` (pure, editable
-prompt — `system_prompt()`/`user_prompt(ctx)` + `SYNTHESIS_KEYS` + the zero-signal fallback + the
-plain-language translations of the internal role signals); `write_ros_synthesis.py` (gathers a player's
-inputs → one `generate_dossier` Haiku call → validate → row); `check_ros_synthesis.py` (internal-
-consistency gate). **New `data_layer` `ros_synthesis` entity** (`snapshots/derived/ros_synthesis_
-{season}.parquet`; grain one row per (season, week, player); replace-by-(season,week,player) so a
-single-player re-run overwrites just his row — the per-player cache-friendly grain the on-demand runtime
-will use). Per player it **fuses** the quantitative anchor (`ros_outcome_shape`: caliber bucket + bull/
-bear band + security/trend), the situation news (`player_news_slice`), and Sleeper injury/depth facts
-into: **bull/bear/situation 1-10 grades (each with a prose note)** + **consolidated headlines** (each
-citing the article ids that back it) + a **confidence** flag. **Grade convention** (decided with the
-PM): all three 1-10 with 10 best, INDEPENDENT axes (no ordering) — bull = ceiling height (hard-anchored
-to a caliber bucket so elites hit 9-10 and the full range is used), bear = floor safety, situation =
-how smooth/settled. **Prose discipline:** notes are natural manager-facing language — the substrata
-(percentiles/tiers/projection points/trend flags) drive the grades but are BANNED from the prose;
-attributed news stays. **Graceful per-input degradation** with the gaps as first-class columns
-(`has_ros_anchor`/`has_news`/`anchor_is_prior_season`); a player with neither anchor nor news gets a
-hardcoded row, **API skipped**. **No-AI prompt iteration** (self-serve, no session, no key, no cost):
-`write_ros_synthesis.py --render` prints the exact assembled prompt; `--replay` runs a canned reply
-through validation. **Season/time-world honesty:** output keyed by the NEWS (season, week); the ros
-anchor is a by-id lookup from `--anchor-season`, flagged PRIOR-SEASON when it differs — never silently
-fused (the STATUS caveat). Gate checks coverage / schema / grounding / confidence honesty / data-flag
-honesty + a soft prose-leak scan. Verified live 2026 wk0: 16 players across all regimes (Chase bull 9 …
-Kraft/Rodriguez 3-4; ~$0.07), gate exit 0, guard tests (run-once superset / locked-key refusal /
-partial run calls the API only for the new player / zero-signal skips it) all clean; the persisted
-parquet carries every grade/note/confidence as its own column. **Deferred with deployment:** front-end
-wiring + the browser-triggered on-demand runtime (no server; the key is server-side; `news_content_hash`
-is the future staleness-cache seam) + validated same-season live fusion. **Next — front-end surfacing
-of the gated forward reads** (Phase 4).
-
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
@@ -296,6 +320,7 @@ of the gated forward reads** (Phase 4).
     - §4 Market VOR + Production−Market trade gap — the market-value twin of Production VOR (completes §4; the primary remaining backend read, and the un-backdatable POC piece built on CURRENT 2026 data). Per law 3 borrows the LeagueLogs market value + adds only the decision layer, reusing the shared engine (`_analytics.position_pools`, `compute_production_vor._pool_lines`/`_vor`/`_roster_as_of`, `round1`) — **no new VOR math**. **2 code commits + docs.** (1) New `data_layer` **`market_vor`** entity (`snapshots/derived/market_vor_{season}.parquet`; grain one row per (snapshot_date, rostered skill player); **tall over the market's `snapshot_date` axis** — the analog of Production VOR's `as_of_week`, banking the un-backdatable series; `read_market_vor(season, snapshot_date=None)` → latest banked day) + `compute_market_vor.py`: filters to the format-matched profile **`redraft-1qb-12t-ppr1`** (redraft/1QB/full-PPR — resolves the §4 open prereq flag; 12t-vs-our-10t a documented non-issue since the waiver line is from OUR roster/available split), joins **position from the Sleeper registry** (feed carries only `position_rank`), resolves the frozen-2025 roster (`_roster_as_of` at the freeze week), per pool sets waiver=best-available / top=best value → `market_vor=(value−waiver)/(top−waiver)`; QB pool + pooled flex line identical to Production VOR. The **Production−Market gap folded in**: joins the frozen Production VOR slice → `trade_gap=market_vor−production_vor` + `is_cross_time`/`market_season`/`production_as_of`/`has_production_vor` as **first-class columns** (the market is CURRENT 2026, rosters/production are 2025 → cross-time by construction, never fused — the `anchor_is_prior_season` precedent; POC/architecture validation, NOT a live trade call, until the season rolls to 2026). **Purely additive** — nothing in the front end or any existing transform reads it, so the current-vs-2025 split does NOT affect app functioning. (2) **Internal-consistency gate `check_market_vor.py`** (no answer key at the 2026-offseason freeze — the `backtest_manager_features`/`check_ros_synthesis` regime): recompute-match (persisted == shipped `compute()`) / VOR algebra (waiver≤top, reproduces (value−waiver)/spread within a spread-aware rounding tol, top≈1.0) / pool integrity (= Production VOR's pools) / profile+coverage (single profile, no picks, ≥95%) / gap honesty (all cross-time flagged; `trade_gap` null iff no production row else exactly market−production). Verified live 2026 offseason: **31 snapshots → 5270 rows**, 170/171 frozen roster priced (99.4%), 248 no-production rows null (law 2), gate exit 0; Production VOR gate unaffected (0.944/0.955). No UI (data + gate). Next — front-end surfacing of the gated forward reads (Phase 4).
     - Manager Dossiers — removed the API-key gate (now an **included AI run**, not opt-in) — the §7 dossier run is cheap (~10 Haiku calls / ~$0.025 / once per season) and now ships as a standard product AI read using the app owner's key (in the gitignored `config.py`, never user-supplied). Dropped the `client.api_available()` LOCKED early-return in `write_manager_dossiers.run()` so the writer always executes; the **shared `client.api_available()` seam is untouched** and the other two AI writers (`write_team_news_dossier`, `write_ros_synthesis`) stay key-gated. Unrelated guards unchanged (run-once-per-season, zero-signal API skip). Docstring + `TECHNICAL_ARCHITECTURE.md`/`READ_BUILD_ORDER.md` reworded from "API-key-gated / key-gate clean exit". No key-storage change (key stays out of git). Docs-and-one-writer change; `check_manager_dossiers.py` gate unaffected.
     - Gridiron front-end — Foundation + Players slice (first front-end surfacing of the gated reads; 3 commits) — recreates the Claude-Design `Gridiron` handoff (`scope docs/`, `DATA_CONTRACT.md`) in the real React+Vite+DuckDB-WASM app, Web-first, new-shell-with-placeholders. (1) Gridiron design system (`styles.css` tokens — violet brand + reserved 5-color posture palette, Archivo/IBM Plex Mono) + 4-surface app chrome (`App.jsx`: brand + league switcher via new `queries.loadLeagueMeta` deriving `10-tm · PPR · 1QB · 3-1` from teams/league_settings/lineup_slots, segmented tabs with `icons.jsx` glyphs, week selector reused, `Placeholder.jsx` for League/Matchups/Teams; old League/Team panels retired from the shell). (2) Players table — `queries.loadPlayers(asOfWeek)` joins `production_vor` (PROD VOR, default sort) + `market_vor` (MKT VOR, cross-time) + `ros_synthesis` (bull/bear/situation grades, sparse) + season identity on `sleeper_player_id`; `Players.jsx` VOR-anchored sortable table + position filter + is_me badges + point-in-time `Gate`; Available/waiver DEFERRED (no FA-pool entity). (3) Player card — shared `charts.jsx` (Sparkline/TrendLine/GradeBar/RangeGauge) + `queries.loadPlayerCard()` → `PlayerCard.jsx`: Value·VOR series + BUY/HOLD/SELL lean off `trade_gap` (POC-gated cross-time), Opportunity from `player_signal`, ROS Outcome Shape from `ros_synthesis` (grades/notes/confidence, prior-season flagged); honest empty states. `db.js` registers production_vor/market_vor/ros_synthesis/league_settings (public/data symlinks added). All new data access through the `queries.js` seam. Verified live 1280px (browser preview): real players + sort/filter/is_me, full Player card (Gibbs ROS-empty; Hurts full ROS 8/6/6 + confidence + prior-season flag), no console errors. Next — Manager Dossier slice, then Teams/League/Matchups; + mobile pass + free-agent value read (unblocks Available/waivers) + roster-wide ros_synthesis batch.
+    - Gridiron front-end — Teams cluster: Teams standings + Team detail + Manager Dossier (2nd front-end slice; 3 commits) — continues the `DATA_CONTRACT` build (§4.4/§4.5/§4.8). New pure `src/posture.js` = the §5 posture rule (`derivePosture`, `BAND=9`/`LEVEL_CUT=60`, `POSTURE_TONE`) in ONE home, reused by the Teams chips now + the League posture MAP later. (1) Teams standings — `queries.loadStandings()` assembles per team the real record + all-play "true record" (reusing the `loadTeamDetails` all-play loop) + `bracket_odds` playoff % (0–1 fraction ×100) with its weekly series for the trendline + the derived posture; `Teams.jsx` sorts by odds (rank · team+YOU · record · true rec · posture chip · playoff % · odds sparkline); `bracket_odds` registered in `db.js`. (2) Team detail — `loadTeamDetail()`: 4 stat blocks (record, all-play true rec, playoff %+seed, pts/wk), positional depth per QB/RB/WR/TE (`positional_depth` starter value + league spectrum + rank + SURPLUS/EVEN/GAP shape) via a new `DepthBar` mark, roster starters/bench with each player's Production+Market VOR weekly series behind a PROD/MKT toggle (MKT cross-time POC); `TeamDetail.jsx` + a Manager Dossier button; the this-week matchup bar deferred honestly to the Matchups slice (needs `bracket_sim`), not fabricated; `positional_depth` registered. (3) Manager Dossier — `loadManagerDossier()` reads the `manager_dossiers` row (already carries the feature counts, no 2nd fetch); `Dossier.jsx` = headline + 5 tendency fields + Signal-Depth footer (deep/moderate/thin → HIGH/MED/THIN + counts + confidence note) + provenance; `is_zero_signal` → honest "no intel"; `manager_dossiers` registered. `App.jsx` gains a detail nav-stack (push/pop) for correct multi-level Back (team → player, team → dossier); Teams rows drill in. All new data access through `queries.js`; views pure renderers. Verified live 1280px: standings + posture chips + trendlines, week switcher replays to wk2, team detail blocks/depth/roster toggle + player drill + Back, Bski dossier all 5 fields + MED badge, full Back chain; numbers match parquet; console clean. Next — League slice (Your Race/Playoff Picture/Posture MAP/Positional Talent off bracket_odds+true_rank+market_vor), then Matchups; + mobile-responsive pass + free-agent value read.
 
 > not yet built
     >> backend

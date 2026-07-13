@@ -38,6 +38,14 @@ async function initDB() {
   await registerParquet(db, '/data/production_vor_2025.parquet', 'production_vor.parquet');
   await registerParquet(db, '/data/market_vor_2025.parquet', 'market_vor.parquet');
   await registerParquet(db, '/data/ros_synthesis_2026.parquet', 'ros_synthesis.parquet');
+  // Teams standings: bracket_odds (playoff odds, tall over as_of_week — the standings
+  // playoff % + trendline; also all-play "true record" computed off season above).
+  await registerParquet(db, '/data/bracket_odds_2025.parquet', 'bracket_odds.parquet');
+  // Team detail: positional_depth (per team/position starter value + league spectrum +
+  // surplus/adequate/gap shape, tall over as_of_week).
+  await registerParquet(db, '/data/positional_depth_2025.parquet', 'positional_depth.parquet');
+  // Manager Dossier: the AI headline + tendencies + signal-depth counts, one row per team.
+  await registerParquet(db, '/data/manager_dossiers_2025.parquet', 'manager_dossiers.parquet');
   return db;
 }
 
