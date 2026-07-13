@@ -2,10 +2,10 @@
 Manager Dossiers — the AI dossier writer (DECISION_READS.md §7 Phase B).
 
 Reads the deterministic `manager_features` (Phase A) and writes one qualitative dossier per manager
-to `derived/manager_dossiers_{season}`. Opt-in and API-key-gated; synchronous sequential Haiku calls
+to `derived/manager_dossiers_{season}`. An included AI run: synchronous sequential Haiku calls
 (`client.generate_dossier` is the swap point for a Batch path later). A zero-comparable-league
-manager skips the AI (a hardcoded "no intel" dossier); the whole read is skipped cleanly when no key
-is configured; a re-run is a no-op unless `--force` (run once per season).
+manager skips the AI (a hardcoded "no intel" dossier); a re-run is a no-op unless `--force`
+(run once per season).
 
 Usage:
     python3 -m application.ai.write_manager_dossiers --season 2025 [--force] [--model claude-haiku-4-5]
@@ -83,10 +83,6 @@ def compute(season: int, *, model: str = client.DEFAULT_MODEL) -> pl.DataFrame:
 
 
 def run(season: int, *, force: bool = False, model: str = client.DEFAULT_MODEL) -> None:
-    if not client.api_available():
-        print("Manager dossiers: LOCKED — set a real config.ANTHROPIC_API_KEY to enable this opt-in "
-              "AI read. Nothing written.")
-        return
     if data_layer.manager_dossiers_exist(season) and not force:
         print(f"Manager dossiers for {season} already exist — run once per season. "
               f"Use --force to regenerate.")
