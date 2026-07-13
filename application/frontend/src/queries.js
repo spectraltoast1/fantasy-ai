@@ -591,6 +591,248 @@ export async function loadTeams() {
   return { teams, myRosterId };
 }
 
+// ---------------------------------------------------------------------------
+// Players tab — the VOR-anchored player table (Gridiron surface #1).
+// ---------------------------------------------------------------------------
+
+// One row per rostered skill player, assembling the four reads that feed the table.
+// The join key is sleeper_player_id everywhere (the one identity all entities share):
+//   - production_vor: the as-of-week slice → PROD VOR (the anchor + default sort). 2025.
+//   - market_vor: the latest market snapshot → MKT VOR + trade_gap. Cross-time (2026
+//     market × 2025 roster) — carried with is_cross_time so the UI can flag it (POC).
+//   - ros_synthesis: latest week per player → BULL/BEAR/SIT 1-10 grades. Sparse today
+//     (only players with an AI run); LEFT JOIN so the rest still list, grades null.
+//   - season identity: player name + NFL team, from the latest week <= N.
+// production_vor is the anchor (LEFT JOINs hang off it) so the table is exactly the
+// rostered skill players priced at week N.
+const SQL_PLAYERS = (n) => `
+  WITH ident AS (
+    SELECT sleeper_player_id,
+           arg_max(player_display_name, week) AS name,
+           arg_max(team, week)                AS nfl_team,
+           arg_max(position, week)            AS position
+    FROM 'season.parquet'
+    WHERE position IN ('QB','RB','WR','TE') AND ${weekCutoff(n)}
+    GROUP BY sleeper_player_id
+  ),
+  pv AS (
+    SELECT sleeper_player_id, roster_id, position, vor, ros_value
+    FROM 'production_vor.parquet'
+    WHERE ${asOfSlice('production_vor.parquet', n)}
+  ),
+  mv AS (
+    SELECT sleeper_player_id, market_vor, trade_gap, is_cross_time
+    FROM 'market_vor.parquet'
+    WHERE snapshot_date = (SELECT max(snapshot_date) FROM 'market_vor.parquet')
+  ),
+  rs AS (
+    SELECT sleeper_player_id, bull_grade, bear_grade, situation_grade
+    FROM 'ros_synthesis.parquet'
+    QUALIFY row_number() OVER (PARTITION BY sleeper_player_id ORDER BY week DESC) = 1
+  )
+  SELECT pv.sleeper_player_id            AS sleeper_id,
+         coalesce(ident.name, pv.sleeper_player_id) AS name,
+         coalesce(ident.position, pv.position)      AS position,
+         ident.nfl_team,
+         pv.roster_id,
+         pv.vor                          AS prod_vor,
+         mv.market_vor                   AS mkt_vor,
+         mv.trade_gap,
+         mv.is_cross_time,
+         rs.bull_grade, rs.bear_grade, rs.situation_grade,
+         t.team_name, t.owner_name
+  FROM pv
+  LEFT JOIN ident USING (sleeper_player_id)
+  LEFT JOIN mv    ON mv.sleeper_player_id = pv.sleeper_player_id
+  LEFT JOIN rs    ON rs.sleeper_player_id = pv.sleeper_player_id
+  LEFT JOIN 'teams.parquet' t ON t.roster_id = pv.roster_id
+  ORDER BY pv.vor DESC
+`;
+
+/**
+ * The Players table: every rostered skill player priced by Production VOR (2025), with
+ * Market VOR (cross-time), and ROS Synthesis bull/bear/situation grades where they exist.
+ * Filtering/sorting stay in the view — this returns the full assembled set once.
+ * @param {number} [asOfWeek] view as of week N; omit for the latest week
+ * @returns {Promise<object[]>} view-ready player rows, highest PROD VOR first
+ */
+export async function loadPlayers(asOfWeek) {
+  const rows = await query(SQL_PLAYERS(asOfWeek));
+  return rows.map((r) => ({
+    sleeperId: r.sleeper_id,
+    name: r.name,
+    pos: r.position,
+    nflTeam: r.nfl_team ?? null,
+    rosterId: Number(r.roster_id),
+    teamName: r.team_name || r.owner_name || null,
+    isMe: r.owner_name === MY_USERNAME,
+    prodVor: r.prod_vor != null ? Number(r.prod_vor) : null,
+    mktVor: r.mkt_vor != null ? Number(r.mkt_vor) : null,
+    tradeGap: r.trade_gap != null ? Number(r.trade_gap) : null,
+    mktCrossTime: Boolean(r.is_cross_time),
+    bull: r.bull_grade != null ? Number(r.bull_grade) : null,
+    bear: r.bear_grade != null ? Number(r.bear_grade) : null,
+    sit: r.situation_grade != null ? Number(r.situation_grade) : null,
+  }));
+}
+
+// Trade lean thresholds (VOR units) on the Production−Market gap. Market ≫ Production →
+// SELL (market rich); Production ≫ Market → BUY (cheap on the market); else HOLD. Named
+// constant (a future league/user-config candidate). Gated cross-time today (see below).
+const TRADE_GAP_T = 0.25;
+
+/**
+ * The full player card for one player: Value·VOR (Production + Market weekly series with
+ * value/delta + a trade lean), Opportunity (the player_signal axes), and the ROS Outcome
+ * Shape (ros_synthesis grades/notes where they exist). All keyed by sleeper_player_id.
+ * @param {string} sleeperId
+ * @param {number} [asOfWeek] view as of week N; omit for the latest week
+ * @returns {Promise<object>} the assembled card, or { missing: true } if not rostered
+ */
+export async function loadPlayerCard(sleeperId, asOfWeek) {
+  const id = String(sleeperId).replace(/'/g, "''");
+  const prodCutoff = asOfWeek == null ? 'TRUE' : `as_of_week <= ${Number(asOfWeek)}`;
+
+  const [identRows, prodRows, mktRows, sigRows, rosRows, teamRows] = await Promise.all([
+    query(`
+      SELECT arg_max(player_display_name, week) AS name,
+             arg_max(team, week)                AS nfl_team,
+             arg_max(position, week)            AS position,
+             arg_max(roster_id, week)           AS roster_id
+      FROM 'season.parquet'
+      WHERE sleeper_player_id = '${id}' AND ${weekCutoff(asOfWeek)}
+    `),
+    query(`
+      SELECT as_of_week, vor, ros_value
+      FROM 'production_vor.parquet'
+      WHERE sleeper_player_id = '${id}' AND ${prodCutoff}
+      ORDER BY as_of_week
+    `),
+    query(`
+      SELECT snapshot_date, market_vor, trade_gap, is_cross_time
+      FROM 'market_vor.parquet'
+      WHERE sleeper_player_id = '${id}'
+      ORDER BY snapshot_date
+    `),
+    query(`
+      SELECT recent_ppg, expected_ppg, opp_g, opp_pct, td_share, eff_ratio, regression_risk,
+             read, quality_rate, luck, direction, reliability, point_correlation, security,
+             games, low_sample
+      FROM 'player_signal.parquet'
+      WHERE sleeper_player_id = '${id}' AND ${asOfSlice('player_signal.parquet', asOfWeek)}
+    `),
+    query(`
+      SELECT bull_grade, bull_note, bear_grade, bear_note, situation_grade, situation_note,
+             confidence, confidence_note, signal_tier, has_news, has_ros_anchor, anchor_is_prior_season
+      FROM 'ros_synthesis.parquet'
+      WHERE sleeper_player_id = '${id}'
+      QUALIFY row_number() OVER (PARTITION BY sleeper_player_id ORDER BY week DESC) = 1
+    `),
+    query(`SELECT roster_id, team_name, owner_name FROM 'teams.parquet'`),
+  ]);
+
+  const ident = identRows[0];
+  if (!ident && prodRows.length === 0) return { missing: true };
+
+  // Identity + roster status. production_vor is rostered-only, so status is always
+  // "on your roster" or "rostered by X" (no free-agent state in V1).
+  const rosterId = ident?.roster_id != null ? Number(ident.roster_id) : null;
+  const teamById = {};
+  let myRosterId = null;
+  for (const t of teamRows) {
+    teamById[Number(t.roster_id)] = t;
+    if (t.owner_name === MY_USERNAME) myRosterId = Number(t.roster_id);
+  }
+  const myTeam = teamById[rosterId];
+  const onYours = rosterId != null && rosterId === myRosterId;
+  const status = onYours
+    ? 'On your roster'
+    : myTeam
+      ? `Rostered · ${myTeam.team_name || myTeam.owner_name}`
+      : 'Rostered';
+
+  // Value·VOR series (oldest → newest) + value/delta.
+  const prodSeries = prodRows.map((r) => Number(r.vor));
+  const mktSeries = mktRows.map((r) => Number(r.market_vor));
+  const prod = seriesRead(prodSeries);
+  const mkt = seriesRead(mktSeries);
+
+  // Trade lean off the current Production−Market gap. CROSS-TIME today (2026 market ×
+  // 2025 roster) — surfaced as POC, never a confident live call (contract §6).
+  const last = mktRows.length ? mktRows[mktRows.length - 1] : null;
+  const gap = last?.trade_gap != null ? Number(last.trade_gap) : null;
+  const crossTime = Boolean(last?.is_cross_time);
+  let lean = null;
+  if (gap != null) {
+    if (gap > TRADE_GAP_T) lean = { call: 'SELL', why: 'Market values him above his production.' };
+    else if (gap < -TRADE_GAP_T) lean = { call: 'BUY', why: 'Production beats his current market price.' };
+    else lean = { call: 'HOLD', why: 'Market and production roughly agree.' };
+    lean.gap = gap;
+    lean.crossTime = crossTime;
+  }
+
+  // Opportunity axes (player_signal).
+  const s = sigRows[0];
+  const opportunity = s
+    ? {
+        qualityRate: num(s.quality_rate),
+        effRatio: num(s.eff_ratio),
+        volumePct: num(s.opp_pct),
+        oppG: num(s.opp_g),
+        trustDir: s.direction ?? null,
+        reliability: num(s.reliability),
+        pointCorr: num(s.point_correlation),
+        luck: num(s.luck),
+        recentPpg: num(s.recent_ppg),
+        expectedPpg: num(s.expected_ppg),
+        read: s.read ?? null,
+        security: s.security ?? null,
+        lowSample: Boolean(s.low_sample),
+      }
+    : null;
+
+  // ROS Outcome Shape (ros_synthesis) — sparse; null when no AI read exists.
+  const r = rosRows[0];
+  const ros = r
+    ? {
+        bull: num(r.bull_grade),
+        bear: num(r.bear_grade),
+        situation: num(r.situation_grade),
+        bullNote: r.bull_note,
+        bearNote: r.bear_note,
+        situationNote: r.situation_note,
+        confidence: r.confidence,
+        confidenceNote: r.confidence_note,
+        signalTier: r.signal_tier,
+        priorSeason: Boolean(r.anchor_is_prior_season),
+      }
+    : null;
+
+  return {
+    sleeperId,
+    name: ident?.name ?? sleeperId,
+    pos: ident?.position ?? null,
+    nflTeam: ident?.nfl_team ?? null,
+    status,
+    onYours,
+    prod,
+    mkt: { ...mkt, crossTime },
+    lean,
+    opportunity,
+    ros,
+  };
+}
+
+// Summarize a value series → current value, delta (last − first), direction.
+function seriesRead(series) {
+  if (!series.length) return { series: [], value: null, delta: null, up: true };
+  const value = series[series.length - 1];
+  const delta = value - series[0];
+  return { series, value, delta, up: delta >= 0 };
+}
+
+const num = (v) => (v == null ? null : Number(v));
+
 const round1 = (n) => Math.round(n * 10) / 10;
 
 // Season-replay week-selector seam. Two SQL fragments express "view the dashboard as
@@ -614,6 +856,66 @@ export async function loadWeeks() {
   const rows = await query(`SELECT DISTINCT week FROM 'season.parquet' ORDER BY week`);
   const weeks = rows.map((r) => Number(r.week));
   return { weeks, latest: weeks.length ? weeks[weeks.length - 1] : null };
+}
+
+/**
+ * League chrome for the top-bar switcher — all derived from real config, none hardcoded:
+ *   - label: "10-tm · PPR · 1QB" from teams count + league_settings scoring + lineup_slots
+ *   - record: the logged-in user's W-L as of week N
+ *   - name/myOwner: the league name (not persisted by Sleeper's config fetch yet — falls
+ *     back) + the user's handle for the avatar
+ * @param {number} [asOfWeek] view as of week N; omit for the latest week
+ * @returns {Promise<{name: string|null, label: string, record: string|null, myOwner: string|null}>}
+ */
+export async function loadLeagueMeta(asOfWeek) {
+  const [teamRows, recRows, slotRows, meRows] = await Promise.all([
+    query(`SELECT count(*)::INT AS n FROM 'teams.parquet'`),
+    query(`SELECT value FROM 'league_settings.parquet' WHERE section = 'scoring' AND key = 'rec'`),
+    query(`SELECT slot, count, eligible FROM 'slots.parquet'`),
+    query(`SELECT roster_id, owner_name FROM 'teams.parquet' WHERE owner_name = '${MY_USERNAME}'`),
+  ]);
+
+  const teamCount = Number(teamRows[0]?.n ?? 0);
+
+  // Scoring label from the reception value (1 → PPR, 0.5 → Half, else Standard).
+  const rec = recRows.length ? Number(recRows[0].value) : null;
+  const scoring = rec === 1 ? 'PPR' : rec === 0.5 ? 'Half-PPR' : rec === 0 ? 'Std' : rec != null ? `${rec}-PPR` : '—';
+
+  // QB structure from the lineup slots: a QB-eligible flex (SUPERFLEX) reads as SF,
+  // else the count of dedicated QB slots (1QB / 2QB).
+  let qbSlots = 0;
+  let superflex = false;
+  for (const s of slotRows) {
+    const elig = String(s.eligible ?? '').toUpperCase();
+    const isQbOnly = elig === 'QB';
+    if (isQbOnly) qbSlots += Number(s.count);
+    else if (elig.split(',').includes('QB')) superflex = true;
+  }
+  const qb = superflex ? 'SF' : `${qbSlots || 1}QB`;
+
+  // The user's record as of week N (one W/L per team-week).
+  const myRosterId = meRows.length ? Number(meRows[0].roster_id) : null;
+  let record = null;
+  if (myRosterId != null) {
+    const rows = await query(`
+      WITH tw AS (
+        SELECT roster_id, week, any_value(matchup_result) AS result
+        FROM 'season.parquet'
+        WHERE ${weekCutoff(asOfWeek)}
+        GROUP BY roster_id, week
+      )
+      SELECT sum(result = 'W')::INT AS w, sum(result = 'L')::INT AS l
+      FROM tw WHERE roster_id = ${myRosterId}
+    `);
+    if (rows.length && rows[0].w != null) record = `${Number(rows[0].w)}-${Number(rows[0].l)}`;
+  }
+
+  return {
+    name: null,
+    label: `${teamCount}-tm · ${scoring} · ${qb}`,
+    record,
+    myOwner: meRows.length ? meRows[0].owner_name : null,
+  };
 }
 
 // Coefficient of variation (sample stddev / mean) of a numeric list.

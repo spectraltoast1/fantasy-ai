@@ -1,26 +1,32 @@
 import React, { useEffect, useState } from 'react';
-import LeaguePanel from './LeaguePanel.jsx';
-import TeamPanel from './TeamPanel.jsx';
-import { loadWeeks } from './queries.js';
+import { loadWeeks, loadLeagueMeta } from './queries.js';
+import { TAB_ICONS, IconChevronLeft } from './icons.jsx';
+import Placeholder from './Placeholder.jsx';
+import Players from './Players.jsx';
+import PlayerCard from './PlayerCard.jsx';
 
-// App shell: owns the top-level tab and the active as-of week, and renders the active
-// panel. Each panel owns its own data loading (via queries.js), so this stays a thin
-// navigation frame — but the week selector lives here, in the shell, so one active week
-// applies across League + Team and stays editable from every tab (Season-replay).
+// Gridiron app shell. Owns the three pieces of global state the whole app reads:
+//   tab      — the active surface (league / matchups / teams / players)
+//   detail   — the active drill-down ({ type, id } | null); "‹ Back" clears it
+//   asOfWeek — the season-replay week (default latest; travels back only)
+// Surfaces stay pure renderers and load their own data through queries.js. During the
+// migration only Players is wired; League/Matchups/Teams show the coming-soon slot.
 const TABS = [
   { id: 'league', label: 'League' },
-  { id: 'team', label: 'Team' },
+  { id: 'matchups', label: 'Matchups' },
+  { id: 'teams', label: 'Teams' },
+  { id: 'players', label: 'Players' },
 ];
 
 export default function App() {
-  const [tab, setTab] = useState('league');
-  // The Season-replay week dimension: which week N the whole dashboard reads "as of".
-  // weekList = the selectable weeks (1..latest); asOfWeek = the active one, defaulting
-  // to the latest (the current week — a live app opens here, today week 4). null until
-  // the week list loads, which means "latest" to queries.js, so reads work meanwhile.
+  const [tab, setTab] = useState('players');
+  const [detail, setDetail] = useState(null);
   const [weekList, setWeekList] = useState(null);
   const [asOfWeek, setAsOfWeek] = useState(null);
+  const [league, setLeague] = useState(null);
 
+  // The week list drives the selector; latest is the live default. null asOfWeek means
+  // "latest" to queries.js, so reads work before this resolves.
   useEffect(() => {
     loadWeeks()
       .then(({ weeks, latest }) => {
@@ -30,37 +36,146 @@ export default function App() {
       .catch((e) => console.error('Could not load weeks', e));
   }, []);
 
-  return (
-    <div className="app-shell">
-      <nav className="topnav">
-        <div className="topnav-inner">
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              className={`topnav-tab ${tab === t.id ? 'active' : ''}`}
-              onClick={() => setTab(t.id)}
-            >
-              {t.label}
-            </button>
-          ))}
-          <WeekSelector weeks={weekList} value={asOfWeek} onChange={setAsOfWeek} />
-        </div>
-      </nav>
+  // League chrome (name/meta/record) is real data — derived from teams + league_settings,
+  // and the record follows the active week.
+  useEffect(() => {
+    loadLeagueMeta(asOfWeek)
+      .then(setLeague)
+      .catch((e) => console.error('Could not load league meta', e));
+  }, [asOfWeek]);
 
-      {tab === 'league' && <LeaguePanel asOfWeek={asOfWeek} />}
-      {tab === 'team' && <TeamPanel asOfWeek={asOfWeek} />}
+  const goTab = (id) => {
+    setTab(id);
+    setDetail(null);
+  };
+  const openPlayer = (id) => setDetail({ type: 'player', id });
+  const back = () => setDetail(null);
+
+  return (
+    <div className="gr-frame">
+      <TopBar
+        tab={tab}
+        onTab={goTab}
+        weeks={weekList}
+        asOfWeek={asOfWeek}
+        onWeek={setAsOfWeek}
+        league={league}
+      />
+      <main className="gr-main">
+        <Surface
+          tab={tab}
+          detail={detail}
+          asOfWeek={asOfWeek}
+          onOpenPlayer={openPlayer}
+          onBack={back}
+        />
+      </main>
     </div>
   );
 }
 
-// The global week selector. A dropdown over weeks 1..latest that sets the dashboard's
-// active as-of week; it only travels back (the data only goes up to the latest week).
-// Hidden until the week list loads.
-function WeekSelector({ weeks, value, onChange }) {
+// Routes tab/detail to a surface. Players is wired; the other three surfaces show the
+// coming-soon slot. Detail views render centered behind a "‹ Back" affordance.
+function Surface({ tab, detail, asOfWeek, onOpenPlayer, onBack }) {
+  const viewKey = tab + (detail ? ':' + detail.type + ':' + detail.id : '');
+
+  let content;
+  if (detail?.type === 'player') {
+    content = (
+      <DetailShell onBack={onBack}>
+        <PlayerCard sleeperId={detail.id} asOfWeek={asOfWeek} />
+      </DetailShell>
+    );
+  } else if (tab === 'players') {
+    content = <Players asOfWeek={asOfWeek} onOpenPlayer={onOpenPlayer} />;
+  } else {
+    content = <Placeholder tab={tab} />;
+  }
+
+  return (
+    <div key={viewKey} className="gr-view">
+      {content}
+    </div>
+  );
+}
+
+// Centered detail container with a back affordance. Shared by every drill-down.
+function DetailShell({ onBack, children }) {
+  return (
+    <div className="gr-detail">
+      <button className="gr-back" onClick={onBack}>
+        <IconChevronLeft size={15} /> Back
+      </button>
+      {children}
+    </div>
+  );
+}
+
+function TopBar({ tab, onTab, weeks, asOfWeek, onWeek, league }) {
+  return (
+    <header className="gr-topbar">
+      <div className="gr-topbar-left">
+        <div className="gr-brand">
+          <span className="gr-brand-mark">G</span>
+          Gridiron
+        </div>
+        <LeagueSwitcher league={league} />
+      </div>
+
+      <nav className="gr-tabs">
+        {TABS.map((t) => {
+          const Icon = TAB_ICONS[t.id];
+          return (
+            <button
+              key={t.id}
+              className={`gr-tab ${tab === t.id ? 'active' : ''}`}
+              onClick={() => onTab(t.id)}
+            >
+              <span className="gr-tab-icon">
+                <Icon size={16} />
+              </span>
+              {t.label}
+            </button>
+          );
+        })}
+      </nav>
+
+      <div className="gr-topbar-right">
+        <WeekSwitcher weeks={weeks} value={asOfWeek} onChange={onWeek} />
+        <div className="gr-avatar" title={league?.myOwner ?? 'You'}>
+          {(league?.myOwner ?? 'Y').slice(0, 1).toUpperCase()}
+        </div>
+      </div>
+    </header>
+  );
+}
+
+// League name isn't persisted by Sleeper's config fetch yet, so the switcher leads with
+// the derived format label (team count · scoring · QB structure) + the user's record —
+// all real, none hardcoded. (Follow-up: persist the league name to fill the name line.)
+function LeagueSwitcher({ league }) {
+  return (
+    <div className="gr-league">
+      <span className="gr-league-name">{league?.name ?? 'My League'}</span>
+      <span className="gr-league-meta">
+        {league?.label ?? '—'}
+        {league?.record ? (
+          <>
+            {' · '}
+            <span className="rec">{league.record}</span>
+          </>
+        ) : null}
+      </span>
+    </div>
+  );
+}
+
+// The global week selector (season replay). Travels back only; hidden until weeks load.
+function WeekSwitcher({ weeks, value, onChange }) {
   if (!weeks || weeks.length === 0 || value == null) return null;
   return (
-    <label className="week-switch">
-      <span className="week-switch-label">As of</span>
+    <label className="gr-week">
+      <span className="gr-week-label">As of</span>
       <select value={value} onChange={(e) => onChange(Number(e.target.value))}>
         {weeks.map((w) => (
           <option key={w} value={w}>
