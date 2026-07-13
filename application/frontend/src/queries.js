@@ -928,6 +928,143 @@ export async function loadStandings(asOfWeek) {
   return rows;
 }
 
+// ---------------------------------------------------------------------------
+// Team detail (drill-down from the standings) — stat blocks, positional depth,
+// roster with a PROD/MKT VOR toggle.
+// ---------------------------------------------------------------------------
+
+// positional_depth `shape` → the display chip (contract §4.5).
+const SHAPE_LABEL = { surplus: 'SURPLUS', adequate: 'EVEN', gap: 'GAP' };
+
+/**
+ * Everything the Team-detail view needs for one roster: the 4 stat blocks (record,
+ * all-play "true record", playoff % + seed, points/week), positional depth per
+ * QB/RB/WR/TE (starter value, league-relative spectrum, rank, SURPLUS/EVEN/GAP shape),
+ * and the roster split into starters/bench with each player's Production + Market VOR
+ * weekly series (for the card's PROD/MKT toggle + trend sparkline). Keyed on
+ * sleeper_player_id; the roster is resolved as-of week N (latest week ≤ N).
+ * @param {number} rosterId
+ * @param {number} [asOfWeek] view as of week N; omit for the latest week
+ * @returns {Promise<object|null>} the assembled team, or null if the roster is unknown
+ */
+export async function loadTeamDetail(rosterId, asOfWeek) {
+  const rid = Number(rosterId);
+  const prodCutoff = asOfWeek == null ? 'TRUE' : `as_of_week <= ${Number(asOfWeek)}`;
+
+  const [teamWeeks, oddsRows, depthRows, rosterRows, prodRows, mktRows, teamRows] = await Promise.all([
+    query(SQL_STANDINGS_WEEKS(asOfWeek)),
+    query(`SELECT playoff_odds, avg_seed FROM 'bracket_odds.parquet'
+           WHERE roster_id = ${rid} AND ${asOfSlice('bracket_odds.parquet', asOfWeek)}`),
+    query(`SELECT roster_id, position, starter_value, surplus_value, marginal_vor, spectrum_pos, shape
+           FROM 'positional_depth.parquet' WHERE ${asOfSlice('positional_depth.parquet', asOfWeek)}`),
+    query(`
+      WITH latest AS (
+        SELECT sleeper_player_id,
+               arg_max(roster_id, week)           AS roster_id,
+               arg_max(is_starter, week)          AS is_starter,
+               arg_max(player_display_name, week) AS name,
+               arg_max(position, week)            AS position,
+               arg_max(team, week)                AS nfl_team
+        FROM 'season.parquet'
+        WHERE position IN ('QB','RB','WR','TE') AND ${weekCutoff(asOfWeek)}
+        GROUP BY sleeper_player_id
+      )
+      SELECT * FROM latest WHERE roster_id = ${rid}
+    `),
+    query(`SELECT sleeper_player_id, as_of_week, vor FROM 'production_vor.parquet'
+           WHERE roster_id = ${rid} AND ${prodCutoff} ORDER BY sleeper_player_id, as_of_week`),
+    query(`SELECT sleeper_player_id, snapshot_date, market_vor FROM 'market_vor.parquet'
+           WHERE roster_id = ${rid} ORDER BY sleeper_player_id, snapshot_date`),
+    query(`SELECT roster_id, team_name, owner_name FROM 'teams.parquet'`),
+  ]);
+
+  // Identity / "you".
+  const teamById = {};
+  let myRosterId = null;
+  for (const t of teamRows) {
+    teamById[Number(t.roster_id)] = t;
+    if (t.owner_name === MY_USERNAME) myRosterId = Number(t.roster_id);
+  }
+  const me = teamById[rid];
+  if (!me && rosterRows.length === 0) return null;
+
+  // Record + all-play "true record" + points-for, from the team-week scores.
+  const byWeek = {};
+  for (const r of teamWeeks) {
+    (byWeek[Number(r.week)] ??= []).push({ rosterId: Number(r.roster_id), pts: Number(r.pts), result: r.result });
+  }
+  let w = 0, l = 0, ptsFor = 0, games = 0;
+  const ap = { w: 0, l: 0 };
+  for (const rows of Object.values(byWeek)) {
+    const mine = rows.find((x) => x.rosterId === rid);
+    if (!mine) continue;
+    games++; ptsFor += mine.pts;
+    if (mine.result === 'W') w++; else if (mine.result === 'L') l++;
+    for (const b of rows) {
+      if (b.rosterId === rid) continue;
+      if (mine.pts > b.pts) ap.w++; else if (mine.pts < b.pts) ap.l++;
+    }
+  }
+
+  const odds = oddsRows[0];
+  const stats = {
+    record: `${w}-${l}`,
+    trueRec: `${ap.w}-${ap.l}`,
+    playoffPct: odds?.playoff_odds != null ? Number(odds.playoff_odds) * 100 : null,
+    seed: odds?.avg_seed != null ? Math.round(Number(odds.avg_seed)) : null,
+    ptsWk: games ? round1(ptsFor / games) : null,
+  };
+
+  // Positional depth per position, with league rank (by starter_value) and the shape chip.
+  const byPos = {};
+  for (const d of depthRows) (byPos[d.position] ??= []).push(d);
+  const depth = POS.map((pos) => {
+    const all = (byPos[pos] ?? []).slice().sort((a, b) => Number(b.starter_value) - Number(a.starter_value));
+    const idx = all.findIndex((d) => Number(d.roster_id) === rid);
+    if (idx < 0) return null;
+    const d = all[idx];
+    return {
+      position: pos,
+      starterValue: Number(d.starter_value),
+      surplusValue: Number(d.surplus_value),
+      marginalVor: Number(d.marginal_vor),
+      spectrumPos: Number(d.spectrum_pos),
+      shape: SHAPE_LABEL[d.shape] ?? d.shape,
+      rank: idx + 1,
+      nTeams: all.length,
+    };
+  }).filter(Boolean);
+
+  // Per-player VOR series, keyed by sleeper_player_id.
+  const prodById = {};
+  for (const r of prodRows) (prodById[r.sleeper_player_id] ??= []).push(Number(r.vor));
+  const mktById = {};
+  for (const r of mktRows) (mktById[r.sleeper_player_id] ??= []).push(Number(r.market_vor));
+
+  const players = rosterRows.map((p) => ({
+    sleeperId: p.sleeper_player_id,
+    name: p.name,
+    pos: p.position,
+    nflTeam: p.nfl_team ?? null,
+    isStarter: Boolean(p.is_starter),
+    prod: seriesRead(prodById[p.sleeper_player_id] ?? []),
+    mkt: seriesRead(mktById[p.sleeper_player_id] ?? []),
+  }));
+  const byValue = (a, b) => (b.prod.value ?? -Infinity) - (a.prod.value ?? -Infinity);
+  const starters = players.filter((p) => p.isStarter).sort(byValue);
+  const bench = players.filter((p) => !p.isStarter).sort(byValue);
+
+  return {
+    rosterId: rid,
+    name: me?.team_name || me?.owner_name || `Team ${rid}`,
+    owner: me?.owner_name ?? null,
+    onYours: rid === myRosterId,
+    stats,
+    depth,
+    roster: { starters, bench },
+  };
+}
+
 // Summarize a value series → current value, delta (last − first), direction.
 function seriesRead(series) {
   if (!series.length) return { series: [], value: null, delta: null, up: true };

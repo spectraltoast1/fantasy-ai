@@ -41,6 +41,9 @@ async function initDB() {
   // Teams standings: bracket_odds (playoff odds, tall over as_of_week — the standings
   // playoff % + trendline; also all-play "true record" computed off season above).
   await registerParquet(db, '/data/bracket_odds_2025.parquet', 'bracket_odds.parquet');
+  // Team detail: positional_depth (per team/position starter value + league spectrum +
+  // surplus/adequate/gap shape, tall over as_of_week).
+  await registerParquet(db, '/data/positional_depth_2025.parquet', 'positional_depth.parquet');
   return db;
 }
 

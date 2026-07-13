@@ -5,6 +5,7 @@ import Placeholder from './Placeholder.jsx';
 import Players from './Players.jsx';
 import PlayerCard from './PlayerCard.jsx';
 import Teams from './Teams.jsx';
+import TeamDetail from './TeamDetail.jsx';
 
 // Gridiron app shell. Owns the three pieces of global state the whole app reads:
 //   tab      — the active surface (league / matchups / teams / players)
@@ -21,7 +22,11 @@ const TABS = [
 
 export default function App() {
   const [tab, setTab] = useState('players');
-  const [detail, setDetail] = useState(null);
+  // Drill-downs form a stack so multi-level paths (team → player, team → dossier) get a
+  // correct "‹ Back" that pops one level. Switching tabs clears it. The top is the active
+  // detail; empty stack = the tab's own surface.
+  const [stack, setStack] = useState([]);
+  const detail = stack.length ? stack[stack.length - 1] : null;
   const [weekList, setWeekList] = useState(null);
   const [asOfWeek, setAsOfWeek] = useState(null);
   const [league, setLeague] = useState(null);
@@ -47,10 +52,13 @@ export default function App() {
 
   const goTab = (id) => {
     setTab(id);
-    setDetail(null);
+    setStack([]);
   };
-  const openPlayer = (id) => setDetail({ type: 'player', id });
-  const back = () => setDetail(null);
+  const push = (d) => setStack((s) => [...s, d]);
+  const openPlayer = (id) => push({ type: 'player', id });
+  const openTeam = (id) => push({ type: 'team', id });
+  const openDossier = (id) => push({ type: 'dossier', id });
+  const back = () => setStack((s) => s.slice(0, -1));
 
   return (
     <div className="gr-frame">
@@ -66,8 +74,11 @@ export default function App() {
         <Surface
           tab={tab}
           detail={detail}
+          depth={stack.length}
           asOfWeek={asOfWeek}
           onOpenPlayer={openPlayer}
+          onOpenTeam={openTeam}
+          onOpenDossier={openDossier}
           onBack={back}
         />
       </main>
@@ -77,8 +88,8 @@ export default function App() {
 
 // Routes tab/detail to a surface. Players is wired; the other three surfaces show the
 // coming-soon slot. Detail views render centered behind a "‹ Back" affordance.
-function Surface({ tab, detail, asOfWeek, onOpenPlayer, onBack }) {
-  const viewKey = tab + (detail ? ':' + detail.type + ':' + detail.id : '');
+function Surface({ tab, detail, depth, asOfWeek, onOpenPlayer, onOpenTeam, onOpenDossier, onBack }) {
+  const viewKey = tab + ':' + depth + (detail ? ':' + detail.type + ':' + detail.id : '');
 
   let content;
   if (detail?.type === 'player') {
@@ -87,10 +98,24 @@ function Surface({ tab, detail, asOfWeek, onOpenPlayer, onBack }) {
         <PlayerCard sleeperId={detail.id} asOfWeek={asOfWeek} />
       </DetailShell>
     );
+  } else if (detail?.type === 'team') {
+    content = (
+      <DetailShell onBack={onBack}>
+        <TeamDetail rosterId={detail.id} asOfWeek={asOfWeek} onOpenPlayer={onOpenPlayer} onOpenDossier={onOpenDossier} />
+      </DetailShell>
+    );
+  } else if (detail?.type === 'dossier') {
+    // The Manager Dossier screen lands in the next commit; route through the coming-soon slot
+    // until then so the button is wired end to end.
+    content = (
+      <DetailShell onBack={onBack}>
+        <Placeholder tab="teams" />
+      </DetailShell>
+    );
   } else if (tab === 'players') {
     content = <Players asOfWeek={asOfWeek} onOpenPlayer={onOpenPlayer} />;
   } else if (tab === 'teams') {
-    content = <Teams asOfWeek={asOfWeek} />;
+    content = <Teams asOfWeek={asOfWeek} onOpenTeam={onOpenTeam} />;
   } else {
     content = <Placeholder tab={tab} />;
   }
