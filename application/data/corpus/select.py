@@ -217,6 +217,14 @@ def _preselect_generalization(disc_rows, mine):
 def run(id_threshold, verbose):
     _http.set_throttle(0.1)
     disc = data_layer.read_corpus_discovery()
+    # Re-classify scoring_profile from the persisted raw scoring_settings_json (the source of truth)
+    # via the fixed classifier — discovery's stored `scoring_profile` column was written by the crawl
+    # under the float32-tolerance bug (Session 0.6), so trusting it would re-import the misclassification.
+    disc = disc.with_columns(
+        pl.col("scoring_settings_json")
+        .map_elements(lambda j: _scoring.scoring_profile(json.loads(j)), return_dtype=pl.Utf8)
+        .alias("scoring_profile")
+    )
     disc_rows = disc.to_dicts()
     pos_by_id, gsis_ids = _position_maps()
     mine = _mine_ids(disc)

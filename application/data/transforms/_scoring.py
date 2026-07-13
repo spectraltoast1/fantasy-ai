@@ -50,7 +50,12 @@ _STANDARD = {
     "rec_yd": 0.1, "rec_td": 6.0,
 }
 _REC_TO_PROFILE = {1.0: "ppr", 0.5: "half", 0.0: "std"}
-_TOL = 1e-9
+# Real-world weight-precision guard. Sleeper serves scoring weights at float32 — a "0.1" comes back as
+# 0.10000000149… (drift ~1.5e-9) — so any epsilon must sit ABOVE that drift and BELOW the smallest REAL
+# deviation (a genuine custom weight like rush_yd=0.11 differs by 0.01, seven orders of magnitude up).
+# 1e-6 does both; the old 1e-9 sat below the drift and misclassified every float32-drifted standard
+# league as "custom" (Session 0.6). The classifier itself uses _weights_match (rounding) to state intent.
+_TOL = 1e-6
 
 # --- Custom-scoring recompute engine ---------------------------------------------------------------
 
@@ -90,6 +95,13 @@ def _nonzero(v) -> bool:
     return v is not None and abs(float(v)) > _TOL
 
 
+def _weights_match(value, std) -> bool:
+    """True iff a served weight equals the standard at real-world precision. Sleeper weights are 2-4
+    decimals by construction, so rounding is semantically exact for every real league and immune to the
+    float32 drift that a bare epsilon has to dodge — it states the intent (Session 0.6)."""
+    return round(float(value), 4) == round(float(std), 4)
+
+
 def scoring_profile(scoring: dict) -> str:
     """Classify the league's scoring as "ppr" | "half" | "std" | "custom".
 
@@ -100,7 +112,7 @@ def scoring_profile(scoring: dict) -> str:
     if rec not in _REC_TO_PROFILE:
         return "custom"
     for key, std in _STANDARD.items():
-        if abs(float(scoring.get(key, std)) - std) > _TOL:
+        if not _weights_match(scoring.get(key, std), std):
             return "custom"
     for key, value in scoring.items():
         # Offensive reception/rush/pass bonuses (incl. TE premium = bonus_rec_te) and first-down

@@ -117,6 +117,24 @@ def run(season: int) -> bool:
     print(f"    QB centers rise under 6-pt pass TD: {qb_gain:.1%} of QBs           {'PASS' if qb_ok else 'FAIL'}")
     results.extend([same_schema, nonempty, qb_ok])
 
+    # --- E: classifier float32-drift guards (Session 0.6 — network-free) ---
+    # Sleeper serves weights at float32, so a standard PPR league arrives drifted ~1.5e-9. The classifier
+    # must see through the drift (the fix) WITHOUT loosening enough to swallow a genuinely custom league
+    # (the guard — a real custom weight deviates by 0.01, seven orders of magnitude above the drift).
+    print("  E — classifier float32-drift guards:")
+    _f32 = {"rec": 1.0, "rush_yd": 0.10000000149011612, "rec_yd": 0.10000000149011612,
+            "pass_yd": 0.03999999910593033, "pass_td": 4.0, "rush_td": 6.0, "rec_td": 6.0}
+    guards = [
+        ("float32-drifted PPR  => ppr   (the fix)", scoring_profile(_f32), "ppr"),
+        ("float32-drifted half => half  (the fix)", scoring_profile({**_f32, "rec": 0.5}), "half"),
+        ("genuine custom rush_yd=0.11 => custom (guard)", scoring_profile({**_f32, "rush_yd": 0.11}), "custom"),
+        ("TE-premium bonus_rec_te=0.5 => custom (guard)", scoring_profile({**_f32, "bonus_rec_te": 0.5}), "custom"),
+    ]
+    for label, got, want in guards:
+        g_ok = got == want
+        results.append(g_ok)
+        print(f"    {label:54} got={got:7} {'PASS' if g_ok else 'FAIL'}")
+
     ok = all(results)
     print()
     print(f"  VERDICT: {'PASS' if ok else 'FAIL'} — custom-scoring recompute reconciles to the canned "

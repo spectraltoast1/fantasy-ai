@@ -105,10 +105,14 @@ the corpus is viable — see `LLM context/SPIKE_CORPUS_FINDINGS.md`. **Session 0
 inclusion filter + scoreability on a bounded pool → the stratified **league registry**
 `corpus_manifest.parquet`, 319 rows: matched 179 / generalization 58 / mine 2 / excluded 80), and
 `check_corpus.py` (internal-consistency gate). **Narrow-corpus decision:** only the `matched` stratum
-(PPR/half·1qb·redraft·10-14t) tunes/gates; exotic leagues are a `never_tune` robustness set. **Split: TRAIN
-2023-24 · DEV 2022 · TEST 2025** (2020-21 have no matched leagues). **Next: L0 keying** (`league_id` +
-`scoring_key`, partition derived parquet by league, split `ros_outcome_shape`) — keys against this manifest;
-then Session 4 harvest → L2 ledger backfill (`IMPROVEMENT_LOOP.md`, `LEAGUE_CORPUS.md`).
+(PPR/half·1qb·redraft·10-14t) tunes/gates; exotic leagues are a `never_tune` robustness set. **Session 0.6**
+fixed a `_scoring` **float32-tolerance bug** the corpus caught (a drifted standard PPR league was misclassified
+`custom` — a LIVE §7 bug + the cause of 0.5's "0 matched in 2020-21"); re-selected the corpus offline. Corrected:
+manifest **365 rows** (matched **221**, six seasons), split **TRAIN 2020-2023 · DEV 2024 · TEST 2025** (2020-21
+thin, k-folded within train); unscoreable **45.4%/1,765**. No-regression proven; §7 comparability on the real
+league unchanged (thin friend-group is genuine). See `engine improvement/SESSION_0_6_SCORING_TOLERANCE_FIX.md`.
+**Next: L0 keying** (`league_id` + `scoring_key`, partition derived parquet by league, split `ros_outcome_shape`)
+— keys against the corrected manifest; then Session 4 harvest → L2 ledger backfill.
 
 ## Built — Frontend
 
