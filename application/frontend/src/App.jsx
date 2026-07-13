@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { loadWeeks, loadLeagueMeta } from './queries.js';
-import { TAB_ICONS } from './icons.jsx';
+import { TAB_ICONS, IconChevronLeft } from './icons.jsx';
 import Placeholder from './Placeholder.jsx';
+import Players from './Players.jsx';
 
 // Gridiron app shell. Owns the three pieces of global state the whole app reads:
 //   tab      — the active surface (league / matchups / teams / players)
@@ -17,7 +18,7 @@ const TABS = [
 ];
 
 export default function App() {
-  const [tab, setTab] = useState('league');
+  const [tab, setTab] = useState('players');
   const [detail, setDetail] = useState(null);
   const [weekList, setWeekList] = useState(null);
   const [asOfWeek, setAsOfWeek] = useState(null);
@@ -46,6 +47,8 @@ export default function App() {
     setTab(id);
     setDetail(null);
   };
+  const openPlayer = (id) => setDetail({ type: 'player', id });
+  const back = () => setDetail(null);
 
   return (
     <div className="gr-frame">
@@ -58,18 +61,58 @@ export default function App() {
         league={league}
       />
       <main className="gr-main">
-        <Surface tab={tab} detail={detail} asOfWeek={asOfWeek} />
+        <Surface
+          tab={tab}
+          detail={detail}
+          asOfWeek={asOfWeek}
+          onOpenPlayer={openPlayer}
+          onBack={back}
+        />
       </main>
     </div>
   );
 }
 
-// Routes tab/detail to a surface. Detail views (Player card etc.) arrive in later slices;
-// for now every surface is the coming-soon placeholder.
-function Surface({ tab, detail, asOfWeek }) {
+// Routes tab/detail to a surface. Players is wired; the other three surfaces show the
+// coming-soon slot. Detail views render centered behind a "‹ Back" affordance.
+function Surface({ tab, detail, asOfWeek, onOpenPlayer, onBack }) {
+  const viewKey = tab + (detail ? ':' + detail.type + ':' + detail.id : '');
+
+  let content;
+  if (detail?.type === 'player') {
+    // The Player card lands in the next slice; the detail shell + routing are wired now.
+    content = (
+      <DetailShell onBack={onBack}>
+        <div className="gr-placeholder">
+          <div className="gr-placeholder-title">Player card</div>
+          <span className="gr-placeholder-tag">Coming soon</span>
+          <p className="gr-placeholder-line">
+            Value·VOR trend, opportunity, and the ROS outcome shape land in the next slice.
+          </p>
+        </div>
+      </DetailShell>
+    );
+  } else if (tab === 'players') {
+    content = <Players asOfWeek={asOfWeek} onOpenPlayer={onOpenPlayer} />;
+  } else {
+    content = <Placeholder tab={tab} />;
+  }
+
   return (
-    <div key={tab + (detail ? ':' + detail.type : '')} className="gr-view">
-      <Placeholder tab={tab} />
+    <div key={viewKey} className="gr-view">
+      {content}
+    </div>
+  );
+}
+
+// Centered detail container with a back affordance. Shared by every drill-down.
+function DetailShell({ onBack, children }) {
+  return (
+    <div className="gr-detail">
+      <button className="gr-back" onClick={onBack}>
+        <IconChevronLeft size={15} /> Back
+      </button>
+      {children}
     </div>
   );
 }

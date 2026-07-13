@@ -591,6 +591,91 @@ export async function loadTeams() {
   return { teams, myRosterId };
 }
 
+// ---------------------------------------------------------------------------
+// Players tab — the VOR-anchored player table (Gridiron surface #1).
+// ---------------------------------------------------------------------------
+
+// One row per rostered skill player, assembling the four reads that feed the table.
+// The join key is sleeper_player_id everywhere (the one identity all entities share):
+//   - production_vor: the as-of-week slice → PROD VOR (the anchor + default sort). 2025.
+//   - market_vor: the latest market snapshot → MKT VOR + trade_gap. Cross-time (2026
+//     market × 2025 roster) — carried with is_cross_time so the UI can flag it (POC).
+//   - ros_synthesis: latest week per player → BULL/BEAR/SIT 1-10 grades. Sparse today
+//     (only players with an AI run); LEFT JOIN so the rest still list, grades null.
+//   - season identity: player name + NFL team, from the latest week <= N.
+// production_vor is the anchor (LEFT JOINs hang off it) so the table is exactly the
+// rostered skill players priced at week N.
+const SQL_PLAYERS = (n) => `
+  WITH ident AS (
+    SELECT sleeper_player_id,
+           arg_max(player_display_name, week) AS name,
+           arg_max(team, week)                AS nfl_team,
+           arg_max(position, week)            AS position
+    FROM 'season.parquet'
+    WHERE position IN ('QB','RB','WR','TE') AND ${weekCutoff(n)}
+    GROUP BY sleeper_player_id
+  ),
+  pv AS (
+    SELECT sleeper_player_id, roster_id, position, vor, ros_value
+    FROM 'production_vor.parquet'
+    WHERE ${asOfSlice('production_vor.parquet', n)}
+  ),
+  mv AS (
+    SELECT sleeper_player_id, market_vor, trade_gap, is_cross_time
+    FROM 'market_vor.parquet'
+    WHERE snapshot_date = (SELECT max(snapshot_date) FROM 'market_vor.parquet')
+  ),
+  rs AS (
+    SELECT sleeper_player_id, bull_grade, bear_grade, situation_grade
+    FROM 'ros_synthesis.parquet'
+    QUALIFY row_number() OVER (PARTITION BY sleeper_player_id ORDER BY week DESC) = 1
+  )
+  SELECT pv.sleeper_player_id            AS sleeper_id,
+         coalesce(ident.name, pv.sleeper_player_id) AS name,
+         coalesce(ident.position, pv.position)      AS position,
+         ident.nfl_team,
+         pv.roster_id,
+         pv.vor                          AS prod_vor,
+         mv.market_vor                   AS mkt_vor,
+         mv.trade_gap,
+         mv.is_cross_time,
+         rs.bull_grade, rs.bear_grade, rs.situation_grade,
+         t.team_name, t.owner_name
+  FROM pv
+  LEFT JOIN ident USING (sleeper_player_id)
+  LEFT JOIN mv    ON mv.sleeper_player_id = pv.sleeper_player_id
+  LEFT JOIN rs    ON rs.sleeper_player_id = pv.sleeper_player_id
+  LEFT JOIN 'teams.parquet' t ON t.roster_id = pv.roster_id
+  ORDER BY pv.vor DESC
+`;
+
+/**
+ * The Players table: every rostered skill player priced by Production VOR (2025), with
+ * Market VOR (cross-time), and ROS Synthesis bull/bear/situation grades where they exist.
+ * Filtering/sorting stay in the view — this returns the full assembled set once.
+ * @param {number} [asOfWeek] view as of week N; omit for the latest week
+ * @returns {Promise<object[]>} view-ready player rows, highest PROD VOR first
+ */
+export async function loadPlayers(asOfWeek) {
+  const rows = await query(SQL_PLAYERS(asOfWeek));
+  return rows.map((r) => ({
+    sleeperId: r.sleeper_id,
+    name: r.name,
+    pos: r.position,
+    nflTeam: r.nfl_team ?? null,
+    rosterId: Number(r.roster_id),
+    teamName: r.team_name || r.owner_name || null,
+    isMe: r.owner_name === MY_USERNAME,
+    prodVor: r.prod_vor != null ? Number(r.prod_vor) : null,
+    mktVor: r.mkt_vor != null ? Number(r.mkt_vor) : null,
+    tradeGap: r.trade_gap != null ? Number(r.trade_gap) : null,
+    mktCrossTime: Boolean(r.is_cross_time),
+    bull: r.bull_grade != null ? Number(r.bull_grade) : null,
+    bear: r.bear_grade != null ? Number(r.bear_grade) : null,
+    sit: r.situation_grade != null ? Number(r.situation_grade) : null,
+  }));
+}
+
 const round1 = (n) => Math.round(n * 10) / 10;
 
 // Season-replay week-selector seam. Two SQL fragments express "view the dashboard as

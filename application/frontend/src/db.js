@@ -32,6 +32,12 @@ async function initDB() {
   await registerParquet(db, '/data/team_form_2025.parquet', 'team_form.parquet');
   await registerParquet(db, '/data/team_leakage_2025.parquet', 'team_leakage.parquet');
   await registerParquet(db, '/data/player_signal_2025.parquet', 'player_signal.parquet');
+  // Gridiron player reads: Production VOR (2025 frozen roster), Market VOR (cross-time
+  // 2026 market), and ROS Synthesis (the AI 1-10 grades; sparse — keyed on the 2026
+  // news world, hence _2026). All join to the others on sleeper_player_id.
+  await registerParquet(db, '/data/production_vor_2025.parquet', 'production_vor.parquet');
+  await registerParquet(db, '/data/market_vor_2025.parquet', 'market_vor.parquet');
+  await registerParquet(db, '/data/ros_synthesis_2026.parquet', 'ros_synthesis.parquet');
   return db;
 }
 
