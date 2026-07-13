@@ -99,19 +99,46 @@ A corpus of 10 leagues that fills this matrix is worth more than 30 that are all
 
 ---
 
-## Prioritise **seasons × leagues** — not league count
+## The unit is the **league-SEASON** · harvest by **manager**, not by league
 
-> **The one place your instinct could mislead you.** Leagues in the *same* NFL season are **not
-> independent**: they share the same underlying player performances.
+> **Leagues churn. A five-season continuous league is uncommon — do not go looking for one.**
 
-| Read family | What extra **leagues** (same season) buy | What extra **seasons** buy |
+The corpus row is a **`(league_id, season)` pair**. A league that existed only in 2023 is a perfectly
+good corpus row: 10–12 team-seasons, ~75 matchups, a dozen managers' transaction histories, one roster
+shape. **Nothing downstream needs continuity** — season-wise splits, league-wise splits, and every
+team-level read work fine on disjoint leagues. **§7 explicitly *wants* different leagues** (cross-league
+comparability is its entire premise).
+
+So `previous_league_id` chaining is a **nice-to-have, not the spine.**
+
+**The durable entity is the manager.** Leagues die; people don't. And `_manager_leagues(owner_id, season,
+seasons_back)` — already built — returns *every league a manager played, per season*. One manager active
+since 2021 hands you five league-seasons across five possibly-different leagues. **That's better than
+chaining**, because people play in different formats, so the crawl *naturally* diversifies scoring and
+roster shape.
+
+**Discovery is abundant.** Depth-1 alone — ten leaguemates × ~2–4 leagues each × 5 seasons — is on the
+order of 100+ league-seasons before you recurse. **Discovery is not the constraint; quality filtering is
+(see Risks).**
+
+### Still true: spread across **NFL seasons**, not just league count
+
+The independence axis that matters is the **NFL season** — leagues in the *same* season share the same
+underlying player performances.
+
+| Read family | Extra **leagues, same NFL season** | Extra **NFL seasons** |
 |---|---|---|
 | §1 signal · §2 band · §3 consensus — **player-level** | **≈ nothing.** Same player-weeks, re-used. Only *scoring-variant coverage*. | **everything** |
 | §5 true rank / bracket · §6 depth — **team-level** | real, but **correlated** (shared NFL season; different rosters + schedules) | more, and cleaner |
 | §7 manager features — **behavioural** | **the most** — genuinely independent people | some |
 
-**⇒ 8 leagues × 6 seasons ≫ 20 leagues × 1 season**, for far less crawling. Sleeper keeps the history;
-seasons are nearly free once you have the league. **Depth of history beats breadth of leagues.**
+**⇒ Target a roughly even spread of league-seasons across 2021–2025**, rather than piling them all into
+2025. 50 league-seasons at 10/10/10/10/10 ≫ 50 all in one year.
+
+> **Expect a recency skew anyway.** Sleeper adoption grew across the window, so 2021–22 leagues are both
+> rarer *and* likelier to be dead or incomplete. You will probably end up with a fat 2023–25 and a thin
+> 2021–22. That's fine — still transformative versus n=1 — but plan for a lopsided split rather than
+> being surprised by one.
 
 ---
 
@@ -162,9 +189,45 @@ outright.
 
 ---
 
+## ⚠️ The inclusion filter — **the binding constraint**
+
+> **Dead leagues are the *best* corpus material. Half-dead ones will silently poison it.**
+
+A league that folded after 2022 is **fully resolved** — no ambiguity, no partial season, nobody using
+it. Ideal. **Do not skip defunct leagues; prefer them.**
+
+But leagues also die **mid-season**: managers stop setting lineups, teams go inactive, the commissioner
+bails in week 9. A team fielding an empty lineup in week 10 wrecks `optimal_lineup`, wrecks the matchup
+outcome, wrecks `true_rank` and `team_leakage` — **and throws no error.** It is the same silent-failure
+class as the stale-player-ID risk, and it is why the corpus needs a gate, not just a crawler.
+
+**Every league-season must pass before it enters the corpus:**
+
+| Check | Reject if | Protects |
+|---|---|---|
+| **Season complete** | any regular-season week missing matchups, or all-zero points | everything |
+| **No abandonment** | any team with ≥3 weeks of empty/zero `starters` after week 2 | §5 · §6 · leakage |
+| **Roster integrity** | `len(rosters) != settings.num_teams`; teams far under a full roster | VOR pools |
+| **Transactions present** | zero transactions all season → **exclude from §7 only**, keep for §5/§6 | §7 |
+| **ID resolution** | skill-player resolution below threshold | the join — *see the stale-ID risk* |
+
+**This filter — not discovery — is what sizes the corpus.** The crawl will likely surface 100+
+league-seasons; the open question is what fraction survive. **Nobody knows that number yet, and
+everything downstream is sized by it.** It is probe H of
+[`SESSION_0_CORPUS_SPIKE.md`](./SESSION_0_CORPUS_SPIKE.md) and the single most important output of that
+session.
+
+---
+
 ## Risks
 
-1. **The corpus is what finally trips the O(n²) write** (710 audit #2, the acknowledged migration
+1. **Stale player IDs (the silent one).** The corpus joins Sleeper rosters from e.g. 2021 to nflreadpy
+   stats from 2021 through `player_id_map.parquet` and the Sleeper registry — **both built from
+   current-state data.** A player who retired in 2022 may not resolve to a position or a `gsis_id`. If a
+   meaningful share of old rosters can't map, `join_nfl_sleeper_weekly` dumps them into `remainders` and
+   **every league-scoped read silently loses roster mass.** No error. Just wrong. May require a
+   historical-ID reconciliation step before any of the corpus is trustworthy. **Probe F.**
+2. **The corpus is what finally trips the O(n²) write** (710 audit #2, the acknowledged migration
    trigger). 50–100 league-seasons written incrementally into one file is exactly the pathological case.
    **Mitigation is free and you're doing it anyway: partition derived parquet by `league_id`** (L0 keying
    gives you this). Don't hand-optimise the writers; just don't put 100 league-seasons in one file.
