@@ -423,3 +423,46 @@ body {
 .td-prow-trend { min-width: 150px; }
 .td-prow-trend .trendline { flex-direction: row; align-items: center; justify-content: flex-end; gap: 12px; }
 .td-prow-trend .trendline-value { font-size: 15px; }
+
+/* ---- Manager Dossier ------------------------------------------------------ */
+.dos { max-width: 640px; }
+.dos-head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+.dos-glyph {
+  display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px;
+  border-radius: var(--r-ctl); background: var(--violet-wash); border: 1px solid var(--violet-border); color: var(--violet-light);
+}
+.dos-kicker { display: block; margin-bottom: 3px; }
+.dos-name { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.02em; }
+.dos-headline {
+  margin: 0 0 20px; font-size: 17px; font-weight: 700; line-height: 1.45; color: var(--text);
+  padding-left: 14px; border-left: 3px solid var(--violet);
+}
+.dos-fields { display: flex; flex-direction: column; gap: 16px; }
+.dos-field {
+  padding: 16px 18px; background: var(--surface); border: 1px solid var(--border-2); border-radius: var(--r-card);
+}
+.dos-field-label { display: block; margin-bottom: 7px; color: var(--muted); }
+.dos-field-text { margin: 0; font-size: 13.5px; color: var(--text-2); line-height: 1.55; }
+
+.dos-footer { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
+.dos-depth { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.dos-badge {
+  padding: 3px 10px; border-radius: var(--r-pill); border: 1px solid var(--border-2);
+  font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: 0.08em; color: var(--muted);
+}
+.dos-badge.tier-deep { color: var(--contender-l); border-color: var(--violet-border); }
+.dos-badge.tier-moderate { color: var(--violet-light); border-color: var(--violet-border); }
+.dos-badge.tier-thin { color: var(--ridingluck-l); border-color: var(--border-2); }
+.dos-counts { font-size: 11px; color: var(--muted-2); letter-spacing: 0.03em; }
+.dos-note { margin: 10px 0 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.dos-prov { margin: 8px 0 0; font-size: 10px; color: var(--faint); letter-spacing: 0.04em; }
+
+.dos-zero {
+  padding: 22px; background: var(--surface); border: 1px solid var(--border-2); border-radius: var(--r-card);
+}
+.dos-zero-tag {
+  display: inline-block; margin-bottom: 10px; padding: 3px 10px; border-radius: var(--r-pill);
+  font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: 0.08em;
+  color: var(--muted); border: 1px solid var(--border-2);
+}
+.dos-zero p { margin: 0; font-size: 13px; color: var(--text-3); line-height: 1.55; }

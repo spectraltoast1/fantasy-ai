@@ -1065,6 +1065,50 @@ export async function loadTeamDetail(rosterId, asOfWeek) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Manager Dossier (drill-down from team detail) — the cleanest 1:1 map (§4.8).
+// ---------------------------------------------------------------------------
+
+/**
+ * The Manager Dossier for one roster: the AI headline + five tendency fields, the signal
+ * depth footer (tier + league/season/move counts + confidence note), and provenance.
+ * Byte-identical to the manager_dossiers entity — the row already carries the feature
+ * counts, so no second read is needed. is_zero_signal drives the "no intel" state.
+ * @param {number} rosterId
+ * @returns {Promise<object>} the dossier, or { missing: true } if none exists
+ */
+export async function loadManagerDossier(rosterId) {
+  const rows = await query(`
+    SELECT owner_name, team_name, headline, waiver_faab, trade_tendency, positional_lean,
+           roster_construction, edge_or_blindspot, confidence_note, depth_tier,
+           n_leagues, n_seasons, n_transactions, is_zero_signal, model, generated_at
+    FROM 'manager_dossiers.parquet'
+    WHERE roster_id = ${Number(rosterId)}
+  `);
+  const d = rows[0];
+  if (!d) return { missing: true };
+  return {
+    owner: d.owner_name,
+    teamName: d.team_name || d.owner_name,
+    isZeroSignal: Boolean(d.is_zero_signal),
+    headline: d.headline,
+    tendencies: {
+      waiverFaab: d.waiver_faab,
+      tradeTendency: d.trade_tendency,
+      positionalLean: d.positional_lean,
+      rosterConstruction: d.roster_construction,
+      edgeOrBlindspot: d.edge_or_blindspot,
+    },
+    depthTier: d.depth_tier,
+    nLeagues: Number(d.n_leagues),
+    nSeasons: Number(d.n_seasons),
+    nTransactions: Number(d.n_transactions),
+    confidenceNote: d.confidence_note,
+    model: d.model,
+    generatedAt: d.generated_at,
+  };
+}
+
 // Summarize a value series → current value, delta (last − first), direction.
 function seriesRead(series) {
   if (!series.length) return { series: [], value: null, delta: null, up: true };

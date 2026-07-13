@@ -6,6 +6,7 @@ import Players from './Players.jsx';
 import PlayerCard from './PlayerCard.jsx';
 import Teams from './Teams.jsx';
 import TeamDetail from './TeamDetail.jsx';
+import Dossier from './Dossier.jsx';
 
 // Gridiron app shell. Owns the three pieces of global state the whole app reads:
 //   tab      — the active surface (league / matchups / teams / players)
@@ -105,11 +106,9 @@ function Surface({ tab, detail, depth, asOfWeek, onOpenPlayer, onOpenTeam, onOpe
       </DetailShell>
     );
   } else if (detail?.type === 'dossier') {
-    // The Manager Dossier screen lands in the next commit; route through the coming-soon slot
-    // until then so the button is wired end to end.
     content = (
       <DetailShell onBack={onBack}>
-        <Placeholder tab="teams" />
+        <Dossier rosterId={detail.id} />
       </DetailShell>
     );
   } else if (tab === 'players') {

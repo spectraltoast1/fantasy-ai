@@ -44,6 +44,8 @@ async function initDB() {
   // Team detail: positional_depth (per team/position starter value + league spectrum +
   // surplus/adequate/gap shape, tall over as_of_week).
   await registerParquet(db, '/data/positional_depth_2025.parquet', 'positional_depth.parquet');
+  // Manager Dossier: the AI headline + tendencies + signal-depth counts, one row per team.
+  await registerParquet(db, '/data/manager_dossiers_2025.parquet', 'manager_dossiers.parquet');
   return db;
 }
 
