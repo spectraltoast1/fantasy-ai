@@ -28,9 +28,24 @@ async function initDB() {
   await registerParquet(db, '/data/season_2025.parquet', 'season.parquet');
   await registerParquet(db, '/data/teams_2025.parquet', 'teams.parquet');
   await registerParquet(db, '/data/lineup_slots_2025.parquet', 'slots.parquet');
+  await registerParquet(db, '/data/league_settings_2025.parquet', 'league_settings.parquet');
   await registerParquet(db, '/data/team_form_2025.parquet', 'team_form.parquet');
   await registerParquet(db, '/data/team_leakage_2025.parquet', 'team_leakage.parquet');
   await registerParquet(db, '/data/player_signal_2025.parquet', 'player_signal.parquet');
+  // Gridiron player reads: Production VOR (2025 frozen roster), Market VOR (cross-time
+  // 2026 market), and ROS Synthesis (the AI 1-10 grades; sparse — keyed on the 2026
+  // news world, hence _2026). All join to the others on sleeper_player_id.
+  await registerParquet(db, '/data/production_vor_2025.parquet', 'production_vor.parquet');
+  await registerParquet(db, '/data/market_vor_2025.parquet', 'market_vor.parquet');
+  await registerParquet(db, '/data/ros_synthesis_2026.parquet', 'ros_synthesis.parquet');
+  // Teams standings: bracket_odds (playoff odds, tall over as_of_week — the standings
+  // playoff % + trendline; also all-play "true record" computed off season above).
+  await registerParquet(db, '/data/bracket_odds_2025.parquet', 'bracket_odds.parquet');
+  // Team detail: positional_depth (per team/position starter value + league spectrum +
+  // surplus/adequate/gap shape, tall over as_of_week).
+  await registerParquet(db, '/data/positional_depth_2025.parquet', 'positional_depth.parquet');
+  // Manager Dossier: the AI headline + tendencies + signal-depth counts, one row per team.
+  await registerParquet(db, '/data/manager_dossiers_2025.parquet', 'manager_dossiers.parquet');
   return db;
 }
 
