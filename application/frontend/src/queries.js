@@ -9,6 +9,7 @@
 // One exported function per panel; each returns view-ready objects.
 
 import { query } from './db.js';
+import { derivePosture } from './posture.js';
 
 export const POS = ['QB', 'RB', 'WR', 'TE'];
 
@@ -821,6 +822,110 @@ export async function loadPlayerCard(sleeperId, asOfWeek) {
     opportunity,
     ros,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Teams tab — the standings table (Gridiron surface #3).
+// ---------------------------------------------------------------------------
+
+// One row per (team, week): total points + W/L, bounded to weeks ≤ N. Feeds both the
+// real record and the all-play ("true record") computation (score vs every other team
+// every week — the luck-neutral read the contract §4.4 keeps distinct from true_rank).
+const SQL_STANDINGS_WEEKS = (n) => `
+  SELECT roster_id, week,
+         any_value(roster_total_points) AS pts,
+         any_value(matchup_result)      AS result
+  FROM 'season.parquet'
+  WHERE ${weekCutoff(n)}
+  GROUP BY roster_id, week
+`;
+
+/**
+ * The Teams standings: every team with its real record, all-play "true record",
+ * playoff odds (+ the weekly odds series for the trendline) and derived posture.
+ * Sorted by playoff odds desc. bracket_odds is tall over as_of_week; playoff_odds is a
+ * 0–1 fraction (surfaced ×100). Posture is the shared §5 derivation (posture.js).
+ * @param {number} [asOfWeek] view as of week N; omit for the latest week
+ * @returns {Promise<object[]>} view-ready standings rows, best playoff odds first
+ */
+export async function loadStandings(asOfWeek) {
+  // All odds rows up to week N → per team, the weekly series + the current (latest) row.
+  const oddsCutoff = asOfWeek == null ? 'TRUE' : `as_of_week <= ${Number(asOfWeek)}`;
+  const [teamWeeks, oddsRows, teamRows] = await Promise.all([
+    query(SQL_STANDINGS_WEEKS(asOfWeek)),
+    query(`
+      SELECT as_of_week, roster_id, playoff_odds, avg_seed, magic_wins, remaining_games
+      FROM 'bracket_odds.parquet'
+      WHERE ${oddsCutoff}
+      ORDER BY roster_id, as_of_week
+    `),
+    query(`SELECT roster_id, team_name, owner_name FROM 'teams.parquet'`),
+  ]);
+
+  // Records + all-play, from the team-week scores (mirrors loadTeamDetails' all-play).
+  const byWeek = {};
+  const record = {};
+  for (const r of teamWeeks) {
+    const row = { rosterId: Number(r.roster_id), pts: Number(r.pts), result: r.result };
+    (byWeek[Number(r.week)] ??= []).push(row);
+    const rec = (record[row.rosterId] ??= { w: 0, l: 0 });
+    if (row.result === 'W') rec.w++;
+    else if (row.result === 'L') rec.l++;
+  }
+  const allPlay = {};
+  for (const rows of Object.values(byWeek)) {
+    for (const a of rows) {
+      const rec = (allPlay[a.rosterId] ??= { w: 0, l: 0 });
+      for (const b of rows) {
+        if (b.rosterId === a.rosterId) continue;
+        if (a.pts > b.pts) rec.w++;
+        else if (a.pts < b.pts) rec.l++;
+      }
+    }
+  }
+
+  // Odds: weekly playoff-odds series (×100) + the latest slice's current values.
+  const oddsByTeam = {};
+  for (const r of oddsRows) {
+    const rid = Number(r.roster_id);
+    (oddsByTeam[rid] ??= { series: [], last: null });
+    oddsByTeam[rid].series.push(Number(r.playoff_odds) * 100);
+    oddsByTeam[rid].last = r; // rows are ordered by as_of_week, so this ends as the latest
+  }
+
+  const nameOf = {};
+  for (const t of teamRows) nameOf[Number(t.roster_id)] = t;
+
+  const rows = Object.keys(allPlay).map(Number).map((rid) => {
+    const t = nameOf[rid];
+    const o = oddsByTeam[rid];
+    const ap = allPlay[rid];
+    const rec = record[rid] ?? { w: 0, l: 0 };
+    const playoffPct = o?.last ? Number(o.last.playoff_odds) * 100 : null;
+    const allPlayPct = ap.w + ap.l ? (ap.w / (ap.w + ap.l)) * 100 : 0;
+    return {
+      rosterId: rid,
+      name: t?.team_name || t?.owner_name || `Team ${rid}`,
+      owner: t?.owner_name ?? null,
+      isMe: t?.owner_name === MY_USERNAME,
+      wins: rec.w,
+      losses: rec.l,
+      allPlayW: ap.w,
+      allPlayL: ap.l,
+      playoffPct,
+      allPlayPct,
+      seed: o?.last?.avg_seed != null ? Math.round(Number(o.last.avg_seed)) : null,
+      magicWins: o?.last?.magic_wins != null ? Number(o.last.magic_wins) : null,
+      remainingGames: o?.last?.remaining_games != null ? Number(o.last.remaining_games) : null,
+      oddsSeries: o?.series ?? [],
+      posture: playoffPct != null ? derivePosture(playoffPct, allPlayPct) : null,
+    };
+  });
+
+  // Rank by playoff odds desc (nulls last), then all-play % as a tiebreak.
+  rows.sort((a, b) => (b.playoffPct ?? -1) - (a.playoffPct ?? -1) || b.allPlayPct - a.allPlayPct);
+  rows.forEach((r, i) => (r.rank = i + 1));
+  return rows;
 }
 
 // Summarize a value series → current value, delta (last − first), direction.

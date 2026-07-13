@@ -38,6 +38,9 @@ async function initDB() {
   await registerParquet(db, '/data/production_vor_2025.parquet', 'production_vor.parquet');
   await registerParquet(db, '/data/market_vor_2025.parquet', 'market_vor.parquet');
   await registerParquet(db, '/data/ros_synthesis_2026.parquet', 'ros_synthesis.parquet');
+  // Teams standings: bracket_odds (playoff odds, tall over as_of_week — the standings
+  // playoff % + trendline; also all-play "true record" computed off season above).
+  await registerParquet(db, '/data/bracket_odds_2025.parquet', 'bracket_odds.parquet');
   return db;
 }
 

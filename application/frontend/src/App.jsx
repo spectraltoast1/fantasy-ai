@@ -4,6 +4,7 @@ import { TAB_ICONS, IconChevronLeft } from './icons.jsx';
 import Placeholder from './Placeholder.jsx';
 import Players from './Players.jsx';
 import PlayerCard from './PlayerCard.jsx';
+import Teams from './Teams.jsx';
 
 // Gridiron app shell. Owns the three pieces of global state the whole app reads:
 //   tab      — the active surface (league / matchups / teams / players)
@@ -88,6 +89,8 @@ function Surface({ tab, detail, asOfWeek, onOpenPlayer, onBack }) {
     );
   } else if (tab === 'players') {
     content = <Players asOfWeek={asOfWeek} onOpenPlayer={onOpenPlayer} />;
+  } else if (tab === 'teams') {
+    content = <Teams asOfWeek={asOfWeek} />;
   } else {
     content = <Placeholder tab={tab} />;
   }
