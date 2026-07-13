@@ -1,15 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { loadTeamDetail } from './queries.js';
-import { TrendLine, DepthBar } from './charts.jsx';
+import { TrendLine, DepthBar, WinProbBar } from './charts.jsx';
 import { POS_COLORS } from './posColors.js';
 import { IconShieldCheck } from './icons.jsx';
 
 // Team detail (drill-down from the standings). Consumes the assembled object from
-// queries.loadTeamDetail: 4 stat blocks, positional depth per QB/RB/WR/TE, and the roster
-// (starters/bench) with a PROD/MKT VOR toggle + trend sparkline per player. Pure renderer.
-// The this-week matchup bar is deferred to the Matchups slice (needs the bracket sim).
+// queries.loadTeamDetail: 4 stat blocks, the this-week matchup bar, positional depth per
+// QB/RB/WR/TE, and the roster (starters/bench) with a PROD/MKT VOR toggle + trend sparkline per
+// player. Pure renderer. The this-week bar drills into the full matchup detail (Matchups slice).
 
-export default function TeamDetail({ rosterId, asOfWeek, onOpenPlayer, onOpenDossier }) {
+export default function TeamDetail({ rosterId, asOfWeek, onOpenPlayer, onOpenDossier, onOpenMatchup }) {
   const [team, setTeam] = useState(null);
   const [err, setErr] = useState(null);
   const [metric, setMetric] = useState('prod'); // 'prod' | 'mkt'
@@ -53,13 +53,38 @@ export default function TeamDetail({ rosterId, asOfWeek, onOpenPlayer, onOpenDos
         <Stat label="Pts / Wk" value={s.ptsWk != null ? s.ptsWk.toFixed(1) : '—'} />
       </div>
 
-      {/* This-week matchup bar — deferred (needs the bracket sim from the Matchups slice). */}
+      {/* This-week matchup bar — the team's upcoming projected game; drills into the full detail. */}
       <section className="td-section">
-        <div className="td-h3">This week</div>
-        <p className="td-defer">
-          The head-to-head win-probability bar lands with the Matchups slice (it runs off the
-          bracket sim + projection consensus). Not fabricated here.
-        </p>
+        <div className="td-h3">
+          This week{team.thisWeek ? ` · Wk ${team.thisWeek.targetWeek}` : ''}
+        </div>
+        {team.thisWeek ? (
+          <button className="td-matchup" onClick={() => onOpenMatchup?.(team.thisWeek.matchupId)}>
+            <div className="td-matchup-side">
+              <span className="td-matchup-name">{team.name}</span>
+              <span className="td-matchup-nums mono">
+                <span className="td-matchup-wp">{team.thisWeek.me.winProb}%</span>
+                <span className="td-matchup-proj">proj {team.thisWeek.me.proj.toFixed(1)}</span>
+              </span>
+            </div>
+            <WinProbBar
+              teams={[
+                { winProb: team.thisWeek.me.winProb, isMe: team.onYours },
+                { winProb: team.thisWeek.opp.winProb, isMe: false },
+              ]}
+              height={10}
+            />
+            <div className="td-matchup-side r">
+              <span className="td-matchup-name">{team.thisWeek.opp.name}</span>
+              <span className="td-matchup-nums mono">
+                <span className="td-matchup-wp">{team.thisWeek.opp.winProb}%</span>
+                <span className="td-matchup-proj">proj {team.thisWeek.opp.proj.toFixed(1)}</span>
+              </span>
+            </div>
+          </button>
+        ) : (
+          <p className="td-defer">No upcoming game — the regular season is complete.</p>
+        )}
       </section>
 
       {/* Positional Depth. */}

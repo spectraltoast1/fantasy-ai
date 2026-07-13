@@ -636,3 +636,19 @@ body {
 .md-prow-name { grid-area: name; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .md-prow-proj { grid-area: proj; font-size: 12px; font-weight: 700; color: var(--text-2); }
 .md-prow-gauge { grid-area: gauge; margin-top: 2px; }
+
+/* Team detail — this-week matchup bar (drills into the full matchup detail). */
+.td-matchup {
+  display: grid; grid-template-columns: 1fr 1.6fr 1fr; align-items: center; gap: 16px; width: 100%;
+  font: inherit; color: inherit; cursor: pointer; text-align: left;
+  border: 1px solid var(--border); background: var(--panel); border-radius: 12px; padding: 12px 16px;
+  transition: border-color 0.15s;
+}
+.td-matchup:hover { border-color: var(--border-2); }
+.td-matchup-side { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.td-matchup-side.r { align-items: flex-end; }
+.td-matchup-name { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.td-matchup-nums { display: flex; align-items: baseline; gap: 8px; }
+.td-matchup-side.r .td-matchup-nums { flex-direction: row-reverse; }
+.td-matchup-wp { font-size: 15px; font-weight: 800; color: var(--text); }
+.td-matchup-proj { font-size: 10.5px; color: var(--muted-2); }

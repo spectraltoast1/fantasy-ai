@@ -1125,12 +1125,17 @@ export async function loadTeamDetail(rosterId, asOfWeek) {
   const starters = players.filter((p) => p.isStarter).sort(byValue);
   const bench = players.filter((p) => !p.isStarter).sort(byValue);
 
+  // This-week matchup bar (§4.5): the team's upcoming projected game (now that the Matchups slice
+  // supplies the read — no longer deferred).
+  const thisWeek = await teamMatchupSummary(rid, asOfWeek);
+
   return {
     rosterId: rid,
     name: me?.team_name || me?.owner_name || `Team ${rid}`,
     owner: me?.owner_name ?? null,
     onYours: rid === myRosterId,
     stats,
+    thisWeek,
     depth,
     roster: { starters, bench },
   };
@@ -1406,6 +1411,34 @@ function matchupWinProbs(muA, sigA, muB, sigB) {
   const denom = Math.sqrt(sigA * sigA + sigB * sigB);
   const pa = denom > 0 ? normalCdf((muA - muB) / denom) : 0.5;
   return [pa, 1 - pa];
+}
+
+// One team's upcoming (week N+1) game — opponent + projected totals + win prob — for the Team-detail
+// this-week bar (§4.5). Folded into loadTeamDetail so the surface stays one read. null when there's
+// no next game (season complete) or the team isn't scheduled.
+async function teamMatchupSummary(rid, asOfWeek) {
+  const targetWeek = await targetWeekFor(asOfWeek);
+  if (targetWeek == null) return null;
+  const mine = await query(
+    `SELECT matchup_id FROM 'schedule.parquet' WHERE week = ${targetWeek} AND roster_id = ${Number(rid)}`,
+  );
+  if (!mine.length) return null;
+  const mid = Number(mine[0].matchup_id);
+  const [teams, sides] = await Promise.all([
+    teamProjections(asOfWeek, targetWeek),
+    query(`SELECT roster_id FROM 'schedule.parquet' WHERE week = ${targetWeek} AND matchup_id = ${mid}`),
+  ]);
+  const oppId = sides.map((r) => Number(r.roster_id)).find((r) => r !== Number(rid));
+  if (oppId == null || !teams[Number(rid)] || !teams[oppId]) return null;
+  const me = teams[Number(rid)];
+  const opp = teams[oppId];
+  const [pMe, pOpp] = matchupWinProbs(me.mu, me.sigma, opp.mu, opp.sigma);
+  return {
+    matchupId: mid,
+    targetWeek,
+    me: { proj: me.mu, winProb: Math.round(pMe * 100) },
+    opp: { rosterId: oppId, name: opp.name, proj: opp.mu, winProb: Math.round(pOpp * 100) },
+  };
 }
 
 /**
