@@ -2,11 +2,11 @@
 Prompt construction for the ROS Synthesis AI layer (§2 ROS Outcome Shape — the interpretation half).
 
 Pure — no I/O, no API calls. Builds the shared, stable system prefix (cache-friendly) and a
-per-player user prompt that fuses TWO inputs the quantitative skeleton (compute_ros_outcome_shape.py)
-deliberately left un-fused (its header: "the AI narrative + 1-10 grade roll-up is Phase 6"):
+per-player user prompt that fuses TWO inputs the quantitative skeleton (compute_ros_player_band +
+compute_ros_league_view) deliberately left un-fused ("the AI narrative + 1-10 grade roll-up is Phase 6"):
 
-  1. the QUANTITATIVE ANCHOR — the player's ros_outcome_shape row (bull/bear point band, league-
-     relative caliber, draft capital, security tier + trust axis). Sets the SCALE so grades aren't
+  1. the QUANTITATIVE ANCHOR — the player's ROS anchor row (ros_player_band ⋈ ros_league_view: bull/bear
+     point band, league-relative caliber, draft capital, security tier + trust axis). Sets the SCALE so grades aren't
      free-floating (DECISION_READS §2 guardrail: "anchor the AI to the structured inputs").
   2. the SITUATION NEWS — the player's inherited player_news_slice claims (scope-tagged, attributed,
      with a signal_tier thinness tripwire). Explains WHERE the range sits and WHICH WAY it breaks.
@@ -59,7 +59,7 @@ _DIRECTION_PLAIN = {
 }
 
 # The player's league-relative standing at his position, bucketed to a WORD (never a number reaches
-# the prompt) — the primary, hard anchor for bull_grade. (from ros_outcome_shape.spectrum_pos, 0-1.)
+# the prompt) — the primary, hard anchor for bull_grade. (from ros_league_view.spectrum_pos, 0-1.)
 _STANDING_BUCKETS = (
     (0.90, "elite"),          # -> bull 9-10
     (0.75, "high-end"),       # -> bull 8

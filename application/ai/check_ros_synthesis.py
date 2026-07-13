@@ -12,7 +12,7 @@ the read is INTERNALLY consistent with its own inputs and honest about its confi
   4. confidence  — thin/none news OR no anchor => confidence != 'high'; a zero-signal row carries the
                    hardcoded fallback (null grades, null model, low confidence, no headlines).
   5. data-flags  — has_ros_anchor / has_news / n_news_claims match what actually resolves from the
-                   anchors (ros_outcome_shape) + the news slice.
+                   anchors (ros_player_band ⋈ ros_league_view) + the news slice.
 
 Plus a soft evidence block (grade spread, anchor consistency, a prose-leak scan) — reported, not gated.
 
@@ -129,12 +129,13 @@ def _check_confidence(s: pl.DataFrame) -> bool:
 
 def _check_data_flags(s: pl.DataFrame, ids_by_player: dict, claim_counts: dict) -> bool:
     ok = True
-    # anchor presence: recompute from ros_outcome_shape for each anchor_season present.
+    # anchor presence: recompute from the rostered anchor set (ros_league_view — the writer's grain) for
+    # each anchor_season present. (ros_player_band covers the whole pool; only rostered players anchor.)
     anchor_ids: dict[int, set] = {}
     for aseason in s.select("anchor_season").unique().to_series().to_list():
         try:
             anchor_ids[aseason] = set(
-                data_layer.read_ros_outcome_shape(aseason)["sleeper_player_id"].to_list())
+                data_layer.read_ros_league_view(aseason)["sleeper_player_id"].to_list())
         except FileNotFoundError:
             anchor_ids[aseason] = set()
     for r in s.iter_rows(named=True):

@@ -1068,71 +1068,107 @@ def read_bracket_odds(season: int, *, league_id=None, as_of_week=None) -> pl.Dat
     return _as_of_slice(pl.read_parquet(_bracket_odds_path(season, league_id)), as_of_week)
 
 
-# --- ROS Outcome Shape ---
-# The forward player read (DECISION_READS.md §2): bull season / bear season / situation-security
-# per rostered player. This is the *quantitative skeleton* — bull/bear is the rest-of-season-horizon
-# analog of the §3 weekly spread: the borrowed ROS centre (Production VOR's ros_value) ± an
-# accumulated band (√Σ of the §3 weekly band² over the remaining schedule, weekly independence),
-# floored at 0. Time decay is emergent — fewer remaining weeks shrink the band toward the realised
-# path. Situation/security carries the structured Sleeper security tier + the player_signal trust
-# axis (direction/reliability) as evidence, not a fused grade. The AI narrative + 1-10 roll-up is
-# Phase 6. Tall over as_of_week like the other derived analytics, so it plugs into the same "As of"
-# week selector.
+# --- ROS Player Band (scoring-scoped half of the old §2 ROS Outcome Shape) ---
+# The forward player read's roster-free skeleton (DECISION_READS.md §2), split out in L0 keying
+# (audit S3.2). Per (as_of_week, player): the borrowed ROS centre (Σ weekly consensus centres over the
+# remaining schedule) ± the accumulated bull/bear band (√Σ of the §3 weekly band² over those weeks,
+# floored at 0) and its preseason-ADP anchor evidence. It needs NO roster, so it is SCORING-scoped —
+# two leagues on the same scoring profile share one file. Output of transforms/compute_ros_player_band.py,
+# over the whole projected pool. Tall over as_of_week (default = latest).
 
 
-def _ros_outcome_shape_path(season: int) -> Path:
-    return _SNAPSHOT_DIR / "derived" / f"ros_outcome_shape_{season}.parquet"
+def _ros_player_band_path(season: int, scoring_key) -> Path:
+    return _scoring_dir(scoring_key) / f"ros_player_band_{season}.parquet"
 
 
-def write_ros_outcome_shape(df: pl.DataFrame, season: int) -> None:
-    """Write the per-(as_of_week, roster_id, player) ROS Outcome Shape read for a season (overwrite).
+def write_ros_player_band(df: pl.DataFrame, season: int, *, scoring_key=None) -> None:
+    """Write the per-(as_of_week, player) ROS bull/bear band for a scoring profile (overwrite).
 
-    Output of transforms/compute_ros_outcome_shape.py: one row per rostered skill player per as-of
-    week, carrying the borrowed ROS centre (ros_center), the bull/bear rest-of-season band
+    Output of transforms/compute_ros_player_band.py: one row per projected skill player per as-of week,
+    carrying the borrowed ROS centre (ros_center), the bull/bear rest-of-season band
     (ros_bull/ros_bear = centre ± bull_z·ros_sigma, floored at 0), the accumulated band std
-    (ros_sigma = √Σ weekly band² over the remaining schedule) + relative dispersion (ros_cv), the
-    number of remaining projected weeks, and the structured situation/security evidence
-    (security tier + direction/reliability from the player_signal trust axis). Borrows the centre and
-    band — builds only the ROS-horizon aggregation and the situation carry-through.
+    (ros_sigma = √Σ weekly band² over the remaining schedule) + relative dispersion (ros_cv), the number
+    of remaining projected weeks, and the preseason-ADP anchor evidence. Roster-free → scoring-scoped.
     """
-    path = _ros_outcome_shape_path(season)
+    scoring_key = scoring_key or _active_league(season)[1]
+    path = _ros_player_band_path(season, scoring_key)
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path)
 
 
-def read_ros_outcome_shape(season: int, as_of_week=None) -> pl.DataFrame:
-    """Read the ROS Outcome Shape read for one as-of week (default = latest)."""
-    return _as_of_slice(pl.read_parquet(_ros_outcome_shape_path(season)), as_of_week)
+def read_ros_player_band(season: int, *, scoring_key=None, as_of_week=None) -> pl.DataFrame:
+    """Read the ROS player band for one as-of week (default = latest)."""
+    scoring_key = scoring_key or _active_league(season)[1]
+    return _as_of_slice(pl.read_parquet(_ros_player_band_path(season, scoring_key)), as_of_week)
 
 
-# --- ROS Synthesis (the §2 AI interpretation of ROS Outcome Shape) ---
-# The interpretation half of §2 (DECISION_READS.md §2) — the last mile compute_ros_outcome_shape.py
-# deferred ("the AI narrative + 1-10 grade roll-up is Phase 6"). Per player, one Claude call fuses the
-# quantitative anchor (ros_outcome_shape) with the situation news (player_news_slice) into three 1-10
-# grades (bull / bear / situation) EACH with a prose note, consolidated headlines (grounded in the
-# cited claims), and a confidence flag. Keyed by the NEWS (season, week) = the current world; the ros
-# anchor is a by-id lookup carrying anchor_season / anchor_is_prior_season so a prior-season anchor is
-# flagged, never silently fused. Written by application/ai/write_ros_synthesis.py via Claude Haiku; a
-# player with no anchor AND no news gets a hardcoded "insufficient data" row (is_zero_signal, AI
-# skipped). One file per season; REPLACE-BY (season, week, sleeper_player_id) so a single-player
-# re-run (news changed / --force) overwrites just his row — the per-player, cache-friendly grain the
-# on-demand runtime will lean on (news_content_hash is the staleness seam).
+def ros_player_band_exists(season: int, *, scoring_key=None) -> bool:
+    scoring_key = scoring_key or _active_league(season)[1]
+    return _ros_player_band_path(season, scoring_key).exists()
 
 
-def _ros_synthesis_path(season: int) -> Path:
-    return _SNAPSHOT_DIR / "derived" / f"ros_synthesis_{season}.parquet"
+# --- ROS League View (league-scoped half of the old §2 ROS Outcome Shape) ---
+# The roster-relative half split from ROS Outcome Shape in L0 keying (audit S3.2). Per (as_of_week,
+# roster_id, player): the league-relative bull spectrum position within the player's position cohort and
+# the structured situation/security evidence (Sleeper security tier + the player_signal trust axis
+# direction/reliability). Roster membership makes it LEAGUE-scoped. Output of
+# transforms/compute_ros_league_view.py; joined to ros_player_band on sleeper_player_id it reconstitutes
+# the old ros_outcome_shape frame. Tall over as_of_week (default = latest).
 
 
-def write_ros_synthesis(df: pl.DataFrame) -> None:
+def _ros_league_view_path(season: int, league_id) -> Path:
+    return _league_dir(league_id) / f"ros_league_view_{season}.parquet"
+
+
+def write_ros_league_view(df: pl.DataFrame, season: int, *, league_id=None) -> None:
+    """Write the per-(as_of_week, roster_id, player) ROS league view for a league season (overwrite)."""
+    league_id = league_id or _active_league(season)[0]
+    path = _ros_league_view_path(season, league_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
+
+def read_ros_league_view(season: int, *, league_id=None, as_of_week=None) -> pl.DataFrame:
+    """Read the ROS league view for one as-of week (default = latest)."""
+    league_id = league_id or _active_league(season)[0]
+    return _as_of_slice(pl.read_parquet(_ros_league_view_path(season, league_id)), as_of_week)
+
+
+def ros_league_view_exists(season: int, *, league_id=None) -> bool:
+    league_id = league_id or _active_league(season)[0]
+    return _ros_league_view_path(season, league_id).exists()
+
+
+# --- ROS Synthesis (the §2 AI interpretation) ---
+# The interpretation half of §2 (DECISION_READS.md §2) — the last mile compute_ros_player_band.py
+# defers ("the AI narrative + 1-10 grade roll-up is Phase 6"). Per player, one Claude call fuses the
+# quantitative anchor (ros_player_band ⋈ ros_league_view) with the situation news (player_news_slice)
+# into three 1-10 grades (bull / bear / situation) EACH with a prose note, consolidated headlines
+# (grounded in the cited claims), and a confidence flag. Keyed by the NEWS (season, week) = the current
+# world; the ros anchor is a by-id lookup carrying anchor_season / anchor_is_prior_season so a
+# prior-season anchor is flagged, never silently fused. Written by application/ai/write_ros_synthesis.py
+# via Claude Haiku; a player with no anchor AND no news gets a hardcoded "insufficient data" row
+# (is_zero_signal, AI skipped). LEAGUE-scoped in L0: its stored grades depend on league-relative anchor
+# inputs (spectrum_pos / security / direction), so a scoring-agnostic store would collide at n=2 same-
+# scoring leagues (audit S3.2). One file per (league, season); REPLACE-BY (season, week,
+# sleeper_player_id) so a single-player re-run overwrites just his row (news_content_hash is the seam).
+
+
+def _ros_synthesis_path(season: int, league_id) -> Path:
+    return _league_dir(league_id) / f"ros_synthesis_{season}.parquet"
+
+
+def write_ros_synthesis(df: pl.DataFrame, *, league_id=None) -> None:
     """Replace the (season, week, sleeper_player_id) rows present in `df`, per-player idempotent.
 
     A re-run of a player overwrites just his row (idempotent) and a single-player verify run replaces
-    only that player, leaving the rest of the week intact. One file per season (from `df`'s season).
+    only that player, leaving the rest of the week intact. One file per (league, season) — league-scoped.
     Concat is diagonal so a later schema tweak doesn't break the append.
     """
     for season in df.select("season").unique().to_series().to_list():
         part = df.filter(pl.col("season") == season)
-        path = _ros_synthesis_path(season)
+        lid = league_id or _active_league(season)[0]
+        path = _ros_synthesis_path(season, lid)
         path.parent.mkdir(parents=True, exist_ok=True)
         keys = part.select("season", "week", "sleeper_player_id").unique()
         if path.exists():
@@ -1143,9 +1179,10 @@ def write_ros_synthesis(df: pl.DataFrame) -> None:
 
 
 def read_ros_synthesis(season: int, week: int | None = None,
-                       sleeper_player_id: str | None = None) -> pl.DataFrame:
-    """Read the per-player §2 ROS synthesis for a season, optionally one week / player."""
-    df = pl.read_parquet(_ros_synthesis_path(season))
+                       sleeper_player_id: str | None = None, *, league_id=None) -> pl.DataFrame:
+    """Read the per-player §2 ROS synthesis for a league season, optionally one week / player."""
+    league_id = league_id or _active_league(season)[0]
+    df = pl.read_parquet(_ros_synthesis_path(season, league_id))
     if week is not None:
         df = df.filter(pl.col("week") == week)
     if sleeper_player_id is not None:
@@ -1153,8 +1190,9 @@ def read_ros_synthesis(season: int, week: int | None = None,
     return df
 
 
-def ros_synthesis_exists(season: int) -> bool:
-    return _ros_synthesis_path(season).exists()
+def ros_synthesis_exists(season: int, *, league_id=None) -> bool:
+    league_id = league_id or _active_league(season)[0]
+    return _ros_synthesis_path(season, league_id).exists()
 
 
 # --- Manager Activity (cross-league, DECISION_READS.md §7) ---

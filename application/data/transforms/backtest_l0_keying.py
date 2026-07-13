@@ -78,6 +78,25 @@ def _check_migration(season: int, lid: str, sk: str, results: list) -> None:
         print("    (no flat files present — migration-identity check had nothing to compare)")
 
 
+def _check_ros_split(season: int, lid: str, sk: str, results: list) -> None:
+    """The old ros_outcome_shape must equal ros_player_band ⋈ ros_league_view — the split loses nothing."""
+    print("  A2 — ROS split reconstruction (old ros_outcome_shape == band ⋈ league_view):")
+    old = _SNAP / "derived" / f"ros_outcome_shape_{season}.parquet"
+    band_p = _SNAP / "derived" / "scoring" / sk / f"ros_player_band_{season}.parquet"
+    view_p = _SNAP / "derived" / "league" / lid / f"ros_league_view_{season}.parquet"
+    if not old.exists():
+        print("    ros_outcome_shape flat absent — reconstruction had nothing to compare")
+        return
+    if not (band_p.exists() and view_p.exists()):
+        _check("ros band + league_view present", False, results,
+               "run compute_ros_player_band + compute_ros_league_view")
+        return
+    recon = pl.read_parquet(view_p).join(
+        pl.read_parquet(band_p), on=["season", "as_of_week", "sleeper_player_id", "position"], how="left")
+    _check(f"ros_outcome_shape reconstructed (rows {recon.height})",
+           _frame_eq(pl.read_parquet(old), recon), results)
+
+
 def _check_collision(season: int, results: list) -> None:
     print("  B — collision isolation (two leagues cannot overwrite each other):")
     a_id, b_id = "__L0TEST_A__", "__L0TEST_B__"
@@ -118,6 +137,7 @@ def run(season: int) -> bool:
     if data_layer.leagues_exists():
         lid, sk = data_layer._active_league(season)
         _check_migration(season, lid, sk, results)
+        _check_ros_split(season, lid, sk, results)
     else:
         print("  A — migration identity: SKIP (no registry; build it, then re-run after migration)")
     _check_collision(season, results)

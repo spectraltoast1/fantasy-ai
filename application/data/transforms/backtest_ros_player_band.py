@@ -1,5 +1,10 @@
 """
-Backtest the ROS Outcome Shape bull/bear band against the full-2025 answer key.
+Backtest the ROS Player Band bull/bear band against the full-2025 answer key.
+
+(Renamed from backtest_ros_outcome_shape.py in the L0 keying split — the band it validates is now the
+scoring-scoped ros_player_band; the calibration is computed on the is_mine league's rostered players
+[band ⋈ production_vor], reproducing the pre-split numbers since it rebuilds the band through the same
+pure functions from production_vor.ros_value.)
 
 The gate §2's quantitative skeleton (DECISION_READS.md §2) must clear: is the rest-of-season
 bull/bear range **calibrated** — does a player's realised ROS production actually land inside
@@ -41,8 +46,8 @@ anchor matters most, which is the honest place to tune it. The gate reports the 
 anchored freeze-week tails so the anchor's calibration contribution is visible, not assumed.
 
 Usage:
-    python3 -m application.data.transforms.backtest_ros_outcome_shape --season 2025
-    python3 -m application.data.transforms.backtest_ros_outcome_shape --season 2025 --sweep
+    python3 -m application.data.transforms.backtest_ros_player_band --season 2025
+    python3 -m application.data.transforms.backtest_ros_player_band --season 2025 --sweep
 """
 
 import argparse
@@ -53,7 +58,7 @@ import polars as pl
 
 from application.data import data_layer
 from application.data.transforms._analytics import mean
-from application.data.transforms.compute_ros_outcome_shape import (
+from application.data.transforms.compute_ros_player_band import (
     ANCHOR_W, BULL_Z, SKILL_POSITIONS, _blended_band, _load_anchor_inputs, _preseason_anchor, _ros_sigma,
 )
 
@@ -168,14 +173,14 @@ def sweep(season: int) -> None:
                 best = (z, w, score)
             print(f"  {z:>8.3f}{w:>10.2f}{cov:>10.3f}{below:>12.3f}{above:>12.3f}{score:>9.3f}")
     print(f"  → best (BULL_Z, ANCHOR_W) at this answer key: ({best[0]}, {best[1]}) "
-          f"score={best[2]:.3f} (|cov-tgt|+|tail imbalance|) — bake into compute_ros_outcome_shape.py")
+          f"score={best[2]:.3f} (|cov-tgt|+|tail imbalance|) — bake into compute_ros_player_band.py")
 
 
 def run(season: int, bull_z: float = BULL_Z, anchor_w: float = ANCHOR_W) -> bool:
     rows, freeze = _test_points(season, bull_z, anchor_w)
     tp = pl.DataFrame(rows)
     fz = tp.filter(pl.col("as_of_week") == freeze)
-    print(f"=== ROS Outcome Shape backtest: season={season}  test points={tp.height} "
+    print(f"=== ROS Player Band backtest: season={season}  test points={tp.height} "
           f"(player × as-of week; freeze week={freeze}, n={fz.height})  BULL_Z={bull_z}  ANCHOR_W={anchor_w} ===")
 
     # 1. Calibration — freeze-week coverage near TARGET, tails reported (symmetric band, no ROS skew term).
