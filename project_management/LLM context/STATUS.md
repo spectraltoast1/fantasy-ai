@@ -1,6 +1,17 @@
 # STATUS
 
-**Last updated:** 2026-07-13 (**GRIDIRON FRONT-END — TEAMS CLUSTER SHIPPED: Teams standings + Team
+**Last updated:** 2026-07-13 (**CORPUS §0.5 — DISCOVERY, SELECTION & THE LEAGUE REGISTRY SHIPPED (Improvement-Loop
+Track A; unblocks L0 keying).** New additive `application/data/corpus/` package (`discover.py` persisted/resumable
+BFS → `corpus_discovery.parquet`; `select.py` → the stratified league registry `corpus_manifest.parquet`;
+`check_corpus.py` gate, exit 0), all network via `_http`, all parquet via `data_layer`, **nothing existing
+changed** — L0 does the keying. **Narrow-corpus decision:** the crawlable neighbourhood is the near-inverse of
+the product (72% custom, superflex>1qb, dynasty>redraft), so only the **`matched`** stratum (PPR/half·1qb·redraft·
+10-14t) tunes/gates; exotic leagues are a `never_tune` **`generalization`** test set. **The 3 numbers:** matched
+per season 2022:21/2023:58/2024:65/2025:117 (**2020-21=0**); split **TRAIN 2023-24 · DEV 2022 (thin) · TEST 2025**;
+**39.2%** of 2,045 custom leagues unscoreable by today's `_scoring` (threshold-yardage + first-down bonuses — a
+roadmap number, engine untouched). Live: discovery 2,729 league-seasons (frontier 6,937 unvisited = lower bound);
+manifest 319 rows (matched 179 / generalization 58 / excluded 80 / mine 2), pass-rate 82%, gate exit 0. **Next =
+L0 keying (Session 1).** — Prior front-end: **GRIDIRON FRONT-END — TEAMS CLUSTER SHIPPED: Teams standings + Team
 detail + Manager Dossier, the 2nd front-end slice against the `DATA_CONTRACT` (§4.4 / §4.5 / §4.8).**
 **Commit 1** the **Teams standings** — `queries.loadStandings()`: per team the real record + **all-play
 "true record"** (score vs every team every week, luck-stripped) + `bracket_odds` playoff % (a 0–1 fraction
@@ -170,6 +181,36 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**Corpus §0.5 — Discovery, Selection & the league registry (the offline-tuning asset; Improvement-Loop
+Track A, unblocks L0 keying).** Session 0's spike proved the corpus viable; §0.5 built it. **New additive
+`application/data/corpus/` package** (nothing existing changed — L0 does the keying) run as `python3 -m
+application.data.corpus.<module>`, all network I/O through `_http`, all parquet through `data_layer`.
+**(1) `discover.py`** — persisted, resumable, idempotent manager-keyed BFS (depth 2) from the config
+seed, reusing `sleeper._manager_leagues` + `_manager.classify_league` (classification is FREE off the
+`/user/.../leagues` payload); writes the full deduped set to `snapshots/corpus/corpus_discovery.parquet`
+each checkpoint + a sidecar crawl-state json (the `leaguelogs.snapshot()` precedent); stops when the
+recent-season matched stratum is over-supplied, not at exhaustion. **(2) `select.py` → the league
+registry `corpus_manifest.parquet`** — narrows by classification, then runs the inclusion filter +
+scoreability on a BOUNDED pre-selected pool only (discovery is free; harvest costs), transiently fetching
+rosters/matchups/transactions to judge pass/fail and persisting the **verdict, not the raw game data**
+(Session 4 harvests); a verdict cache makes it crash-safe. Stratifies **`matched`** (the product's shape:
+PPR/half·1qb·redraft·10-14t; tunes+gates; per-season cap ≤60), **`generalization`** (`never_tune=true`
+robustness set: superflex/divisions/custom/exotic sizes), **`mine`**. **(3) `check_corpus.py`** —
+internal-consistency gate (stratum integrity / declared-train-season floor / filter honesty / no-leakage),
+exit 0. **Governing decision (2026-07-13): stay NARROW** — the neighbourhood is the near-inverse of the
+product (72% custom, superflex>1qb, dynasty>redraft), so pooling+tuning on it would import a distribution
+shift; exotic leagues are a **test** set, never a tuning input. **The three deliverable numbers:**
+(1) matched crosstab per season 2022:21 / 2023:58 / 2024:65 / 2025:117, **2020-21 = 0** (the matched shape
+is absent that far back); (2) **split — TRAIN 2023-2024 (45+58=103 selected) · DEV 2022 (16, thin) · TEST
+2025 (60); 2020-21 excluded** (cannot train — no matched leagues); (3) **39.2%** of the 2,045 custom
+leagues are UNSCOREABLE by today's `_scoring` (threshold-yardage + first-down bonuses: `bonus_*_yd_*`,
+`rush_fd`/`rec_fd`) — a roadmap number, engine untouched. Verified live: discovery 2,729 league-seasons
+(325 managers, frontier 6,937 unvisited = a lower bound); manifest 319 rows (matched 179 / generalization
+58 / excluded 80 / mine 2), pass-rate 82% (Session 0: 87%), generalization spans superflex/divisions/custom
++ a 32-team league, zero unscoreable matched rows; gate exit 0. **Next — L0 keying (Session 1): `league_id`
++ `scoring_key`, partition derived parquet by league, split `ros_outcome_shape` — keys against this manifest.**
+
+> earlier build
 **Gridiron front-end — Teams cluster: Teams standings + Team detail + Manager Dossier (2nd front-end slice; 3 commits).**
 Continues the slice-by-slice build against `DATA_CONTRACT.md` (§4.4 / §4.5 / §4.8). **New shared `src/posture.js`**
 — the contract §5 posture derivation (`derivePosture(playoffOddsPct, allPlayPct)`, locked `BAND=9` / `LEVEL_CUT=60`,
@@ -229,46 +270,6 @@ QB filter + MKT re-sort, is_me badges, row→card→back; Player card full — G
 **Next — Manager Dossier slice (trivial 1:1 to `manager_dossiers`), then Teams/Team-detail → League →
 Matchups; plus mobile-responsive pass + the free-agent value backend read that unblocks Available/waivers.**
 
-> earlier build
-**§4 Market VOR + Production−Market trade gap — the market-value twin of Production VOR (completes the
-§4 read; the un-backdatable POC piece built on CURRENT 2026 data).** The primary remaining backend read.
-Per design law 3 it borrows the LeagueLogs market value and adds only the decision layer — the SAME
-anchoring + normalisation as Production VOR, reusing the shared engine (`_analytics.position_pools`,
-`compute_production_vor._pool_lines`/`_vor`/`_roster_as_of`, `round1`) with **no new VOR math**. **New
-`data_layer` `market_vor` entity** (`snapshots/derived/market_vor_{season}.parquet`; grain one row per
-(snapshot_date, rostered skill player); **tall over the market's `snapshot_date` axis** — the analog of
-Production VOR's `as_of_week`, banking the un-backdatable market series in derived form; `read_market_vor(
-season, snapshot_date=None)` defaults to the latest banked day). **`compute_market_vor.py`:** filters the
-market to the **format-matched** profile `redraft-1qb-12t-ppr1` (redraft ✓ 1QB ✓ full-PPR ✓ — resolves
-the §4 open prereq flag; LeagueLogs only publishes 12-team profiles vs our 10-team, a documented non-issue
-because the waiver line is computed from OUR league's roster/available split, not the profile), joins
-**position from the Sleeper registry** (the feed carries only `position_rank`, no label), resolves the
-frozen-2025 roster/available split (`_roster_as_of` at the freeze week), and per pool sets waiver = best
-**available** value / top = best value → `market_vor = (value − waiver) / (top − waiver)` (waiver=0,
-top≈1, negative = below the best freely-available player). **Pools identical to Production VOR** (QB pool
-+ pooled flex line from `lineup_slots`). **The Production−Market gap folded in:** joins the frozen
-Production VOR slice (latest `as_of_week`) → `trade_gap = market_vor − production_vor` (Market ≫ Production
-→ sell; Production ≫ Market → buy/hold; the gap ≈ the speculation premium). **Time-world honesty (the
-crux):** the app is frozen at 2025 wk4 but the LeagueLogs market is **current 2026 and can't be backdated**,
-so the gap is **cross-time by construction** — `is_cross_time` + `market_season` + `production_as_of` +
-`has_production_vor` ride as **first-class columns**; the market number is never silently fused with the
-production number (the `ros_synthesis.anchor_is_prior_season` precedent). At the freeze the gap is
-**POC/architecture validation, NOT a live trade call** (the biggest gaps are cross-time + 1QB-pool-
-compression artifacts — "sell all your QBs" is noise, exactly what the flag warns against); it becomes a
-real signal once the season rolls to 2026 and production is recomputed there. **Purely additive** — a new
-derived parquet + `data_layer` fns + a gate; **nothing in the front end or any existing transform reads
-it**, so the current-vs-2025 split does NOT touch app functioning (front-end surfacing is the next work).
-**Internal-consistency gate `check_market_vor.py`** (no answer key at the 2026-offseason freeze — the
-market has no future truth to grade against here, the `backtest_manager_features`/`check_ros_synthesis`
-regime): recompute-match (persisted == shipped `compute()` frame-for-frame) / VOR algebra (waiver≤top,
-market_vor reproduces (value−waiver)/spread within a spread-aware rounding tol ⇒ monotonic + negatives
-below waiver, top≈1.0) / pool integrity (= Production VOR's pools) / profile+coverage (single profile, no
-picks, ≥95%) / gap honesty (all cross-time flagged; `trade_gap` null iff no production row else exactly
-market−production). Verified live 2026 offseason: **31 snapshots → 5270 rows**, 170/171 frozen roster
-priced (99.4%), 248 no-production rows null (law 2), gate exit 0; Production VOR gate unaffected (corr
-0.944 QB / 0.955 FLEX). No UI (data + gate). **Next — front-end surfacing of the gated forward reads
-(Phase 4).**
-
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
@@ -307,6 +308,7 @@ priced (99.4%), 248 no-production rows null (law 2), gate exit 0; Production VOR
     - Any-league pieces 2 & 3 (project complete) — **roster-shape/superflex:** new shared `_analytics.position_pools(slot_rows)` derives swap/replacement pools from `lineup_slots` (positions sharing a multi-position slot pooled; key = broadest inducing slot). `compute_production_vor._pool_of` + `compute_team_leakage._cls` now use it (fixes the `SUPER_FLEX` latent + generalizes leakage swap classes); standard config byte-identical, superflex pools QB with flex. `backtest_roster_shape.py` (exit 0): no-regression frame-equal on vor/leakage/true_rank/positional_depth + synthetic superflex. **Division seeding (synthetic-gated latent):** `_seed_table` extracted from `compute_bracket_sim._simulate`, division-aware when a roster→division map is present (winners seeded ahead of wildcards) else flat (proven identical); `sleeper.py fetch-league-config` persists `settings.divisions`; `_division_map` None today (teams entity has no `division` col — rosters-endpoint population deferred). NOT validated on a real division league. **Also fixed:** the fixed-SEED bracket sim wasn't reproducible (polars group_by order + zero-score bye ties) — sorting schedule pairings + roster player lists restores determinism (shared `optimal_lineup` untouched). `backtest_bracket_sim.py` extended (exit 0): Brier 0.224/Spearman 0.756 unchanged + determinism + Σ-invariant + synthetic 2-division correctness.
     - ROS Outcome Shape (§2 quantitative skeleton — completes the player-read backend §1–§4) — compute_ros_outcome_shape.py → derived/ros_outcome_shape_{season}.parquet, tall over (as_of_week, roster_id, player). Bull/bear = the borrowed ROS centre (Production VOR ros_value, reused directly) ± BULL_Z·ros_sigma, floored at 0, where ros_sigma = √(Σ band_ppr² over the remaining schedule) — the §3 weekly band summed under weekly independence (compute_bracket_sim's documented assumption). New pure `_ros_sigma` (mirrors `_ros_values`, aggregates band²) + `_outcome_band`; ros_cv = sigma/centre (fragility), per-position spectrum_pos on the bull ceiling. Time decay emergent (shrinking horizon → tighter band; 0/142 σ grew wk1→wk4). Situation/security borrows the player_signal trust axis (security tier + direction/reliability) as structured evidence — the AI narrative + 1-10 roll-up is Phase 6. New data_layer write/read_ros_outcome_shape (mirrors the Production VOR tall block). Gate (backtest_ros_outcome_shape.py, exit 0): calibration — freeze-wk actual ROS in [bear, bull] = 0.835 (target 0.80±0.05), BULL_Z swept to 1.645 (above the normal 1.28 because weekly residuals are positively autocorrelated → realised ROS more dispersed than the independent sum); decision-relevant — actual ROS monotonic by ros_bull tercile (dead 58 < mid 126 < stud 206); bonus — non-stable players broke their bear floor 15.9% vs stable 9.8%. Symmetric-by-design (ROS-level skew deferred). No-regression (reads-only of the three source parquets). No UI (data + gate).
     - Manager Dossiers Phase A (§7 — cross-league acquisition + deterministic behavioral features; the credit-free substrate the Phase-B AI writer consumes) — 3 commits. (1) sleeper.py: fetch_teams persists owner_id (the user_id identity key it dropped; teams_2025 regenerated, additive); new _get_json (timeout + backoff-retry on transient/5xx, 4xx raise, optional throttle), all bare requests.get routed through it. (2) transforms/_manager.py (pure comparability + attribution helpers, reuses _scoring.scoring_profile; shared by fetch mode + transform + gate) + sleeper.py fetch-manager-activity <season> [--me] [--limit N] [--throttle S]: per manager, fan out to their comparable other leagues (same scoring/size/QB-structure/format — redraft-only V1, format tagged), ≤5 across current+2-prior biased to prior; classifies off the /user/.../leagues payload (carries scoring_settings+roster_positions+settings, verified) so no per-candidate fetch; persists incrementally per manager (replace-by-owner_id, recoverable/idempotent). New manager_activity_{season} — the FIRST cross-league/user-keyed entity (owner_id key; source_league_id/source_season as columns; league-marker + txn row kinds). (3) compute_manager_features.py → manager_features_{season} (per manager: FAAB aggression/budget-spent [completed waivers only], waiver/FA mix, success rate, churn, trade freq, positional lean of adds, signal-depth counts + depth_tier + is_primary); pure manager_features (injected constants); rate/lean features null when undefined (law 2, never fabricated 0). Gate (backtest_manager_features.py, exit 0 — internal consistency, behaviour has no answer key): comparability invariant (0 leaked, grounded on persisted target facts) + accounting round-trip (independent re-aggregation; fractions ∈[0,1]; shares sum 1) + signal-depth honesty (all profiled; zero-signal → null). Verified live 2025: 10 managers, 431 activity rows, real differentiation; depth honestly thin (recurring-league friend group). No AI/credits/UI. Phase B (Haiku dossier writer) next.
+    - Corpus §0.5 — discovery, selection & the league registry (Improvement-Loop Track A; unblocks L0). New additive application/data/corpus/ package (discover.py + select.py + check_corpus.py + pure _corpus.py; 4 additive data_layer entities under snapshots/corpus/), all network via _http, all parquet via data_layer, no existing path/entity touched. discover.py = persisted/resumable/idempotent manager-keyed BFS (depth 2, reuses sleeper._manager_leagues + _manager.classify_league) → corpus_discovery.parquet. select.py = classification-narrow → inclusion filter + scoreability on a bounded pool (verdict-only persist, cache-backed; harvest is Session 4) → corpus_manifest.parquet, the registry L0 keys against; strata matched (product shape, tunes+gates, ≤60/season) / generalization (never_tune robustness set) / mine. check_corpus.py = internal-consistency gate, exit 0. Narrow-corpus decision (neighbourhood is 72% custom, superflex>1qb, dynasty>redraft — a distribution shift if pooled). Live: discovery 2,729 league-seasons (325 managers, frontier 6,937 = lower bound); manifest 319 rows (matched 179 / generalization 58 / excluded 80 / mine 2); split TRAIN 2023-24 · DEV 2022 (thin) · TEST 2025, 2020-21 = 0 matched; 39.2% of 2,045 custom leagues unscoreable (threshold-yardage + first-down bonuses — roadmap number, engine untouched); gate exit 0.
     - Manager Dossiers Phase B (§7 — the API-key-gated Haiku dossier writer; §7 COMPLETE) — the project's FIRST AI-layer code. New application/ai/ module (distinct from the polars transforms; parquet I/O still via data_layer, the Anthropic call is external like a fetcher's HTTP). (1) ai/client.py — the isolation seam: api_available() gates on a real config.ANTHROPIC_API_KEY (absent/placeholder/non-sk-ant → locked, no anthropic import to check); generate_dossier() is the ONE place that knows how a request reaches the model (synchronous messages.create, Haiku 4.5, no thinking/effort, tolerant json.loads NOT messages.parse — SDK-version-safe; returns (dossier, usage)) — a Batch path swaps here only. ai/dossier_prompt.py — pure: stable system prefix (fixed 7-key JSON schema + tendencies-not-verdicts guardrails) + per-manager user prompt (blindspot framing for is_primary / exploitable-edge for opponents) + hardcoded zero-signal "no intel" dossier. (2) ai/write_manager_dossiers.py (compute/run/--season/--force) → manager_dossiers_{season} (first AI-written entity; one row per owner_id: structured fields + is_primary + signal-depth echo + model/generated_at/is_zero_signal): per manager, zero comparable leagues ⇒ hardcoded (no API); else prompt→generate→validate schema; synchronous sequential (caching off — ~347-token prefix below Haiku's 4096 min); run-once-per-season guard; key-gate clean exit. New data_layer write/read_manager_dossiers. (3) ai/check_manager_dossiers.py — internal-consistency gate (no API, reads persisted only): coverage + schema completeness + depth-echo-matches-features + zero-signal honesty (exit 0). Design decision: synchronous not Batch (≤16 managers once/season → 50% batch discount is noise; concurrent batch can't share a prompt cache; seam lets Batch swap in later). Verified live 2025: 10 dossiers, 10 Haiku calls, ~$0.025, gate exit 0; primary=blindspot, opponents=exploitable-edge, 10/10 confidence notes cite the real txn count. Guards unit-tested credit-free (zero-signal skips API; locked-key refuses even with --force). No UI.
     - 710 backend-audit fixes (structural #1 + hygiene #5/#6/#7) — `application/` made a proper Python package: `__init__.py` in the 6 dirs + root `pyproject.toml`; every bare sys.path-dependent import rewritten to absolute package form and all 56 `sys.path.insert` lines across 31 files deleted (zero remain); scripts run as `python3 -m application.<pkg>.<module>` from the repo root (`-m` puts cwd on the path — no editable install); lazy `_import_manager_helpers` → top-level package import; ~30 usage strings + the two doc call-sites + the launchd plist (`-m` module, WorkingDirectory=repo root) + README updated. Hygiene: config.example gains SLEEPER_LEAGUE_ID + drops dead LEAGUE_TYPES/EXCLUDED_LEAGUES; requirements sheds unused pandas/nfl_data_py; bracket figure reconciled to top-4=3/4. Behavior-preserving (all backtest gates pass via -m, identical numbers; byte-compiles clean). Deferred: #2 scaling (no-op migration trigger), #3 §1 quality axis (net-new empirical-weighting transform), #4 §2 preseason anchor (blocked — no ADP source fetched). Post-merge: reinstall the launchd plist.
     - 710 audit #4 (§2 ROS preseason anchor) — overturns session-1's "#4 blocked on data": the ADP source was `nflreadpy.load_ff_rankings` (already a dependency). `fetchers/adp.py` fetches the historical FantasyPros preseason redraft-overall board (latest full-skill-board pre-kickoff snapshot/season; ecr/best/worst/sd + positional rank; id-bridged `fantasypros_id`→sleeper via ff_playerids, cbs/yahoo all-null; `adp_preseason` entity, 2020–2025, top-150 150/150). `compute_adp_points_curve.py` fits per-position `pos_ecr_rank → realized-points` floor/center/ceiling (P10/P50/P90 over a rolling ±3-rank window, isotonic non-increasing; drafted-never-produced = 0.0 floor signal; trained 2020–24, 2025 held out = leak-free; `adp_points_curve` entity; +`_analytics.quantile`). Historical realized points via existing `nfl_stats` backfill 2020–24 (sanctioned data-layer path — no transform hits nflreadpy). Anchor blended into `compute_ros_outcome_shape` bull/bear via horizon-decaying `w_N = ANCHOR_W·(remaining/total)`; `ros_center` stays borrowed (law 3); undrafted/uncovered degrade to the pure-projection band; +adp/anchor evidence cols. Joint `BULL_Z×ANCHOR_W` re-sweep (gate imports shipped `_preseason_anchor`/`_blended_band`; objective |cov−tgt|+|tail imbalance|) → (1.44, 0.25): freeze coverage 0.744→0.817, tails 0.195/0.061→0.091/0.091, gate exit 0, ros_bull terciles 58<127<205. Limitation: freeze bounds tested cutoffs to N=1..4 (early/prior-heavy) — decay's late tail by construction. Also re-scoped #3 (§1 quality) smaller: `load_ff_opportunity` ships the empirical expected-points model → consume-and-re-score, not fit-your-own-weights.

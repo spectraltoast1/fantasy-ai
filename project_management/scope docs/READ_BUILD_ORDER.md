@@ -98,6 +98,18 @@ pure helpers `_analytics.py` / `_manager.py`; the `league_settings`, multi-sourc
 → `player_news_slice`) entities; the season-replay `as_of_week` tall dimension; and the `position_pools`
 / any-league generalization (superflex, custom scoring, division seeding).
 
+**Corpus & Improvement Loop (Track A — offline tuning asset).** **Session 0** (spike, throwaway) verified
+the corpus is viable — see `LLM context/SPIKE_CORPUS_FINDINGS.md`. **Session 0.5** built it: the additive
+`application/data/corpus/` package — `discover.py` (persisted/resumable manager-keyed BFS →
+`corpus_discovery.parquet`, 2,729 league-seasons found, a lower bound), `select.py` (classification-narrow →
+inclusion filter + scoreability on a bounded pool → the stratified **league registry**
+`corpus_manifest.parquet`, 319 rows: matched 179 / generalization 58 / mine 2 / excluded 80), and
+`check_corpus.py` (internal-consistency gate). **Narrow-corpus decision:** only the `matched` stratum
+(PPR/half·1qb·redraft·10-14t) tunes/gates; exotic leagues are a `never_tune` robustness set. **Split: TRAIN
+2023-24 · DEV 2022 · TEST 2025** (2020-21 have no matched leagues). **Next: L0 keying** (`league_id` +
+`scoring_key`, partition derived parquet by league, split `ros_outcome_shape`) — keys against this manifest;
+then Session 4 harvest → L2 ledger backfill (`IMPROVEMENT_LOOP.md`, `LEAGUE_CORPUS.md`).
+
 ## Built — Frontend
 
 Production front end — **React + Vite + DuckDB-WASM**, reads live parquet client-side. `src/queries.js`
