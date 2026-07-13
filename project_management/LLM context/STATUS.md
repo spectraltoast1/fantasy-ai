@@ -1,6 +1,29 @@
 # STATUS
 
-**Last updated:** 2026-07-12 (**§4 MARKET VOR + PRODUCTION−MARKET TRADE GAP SHIPPED — the primary
+**Last updated:** 2026-07-13 (**GRIDIRON FRONT-END — FOUNDATION + PLAYERS SLICE SHIPPED: the first
+front-end surfacing of the gated backend reads.** Recreates the Claude-Design `Gridiron` handoff (in
+`scope docs/`, its `DATA_CONTRACT.md` mapping every visual → a backend entity) in the real React + Vite +
+DuckDB-WASM app — Web-first, new-shell-with-placeholders migration. **Commit 1** the violet/posture design
+system + 4-surface app chrome (brand + real derived league meta `10-tm · PPR · 1QB · 3-1` from teams/
+league_settings/lineup_slots, segmented League/Matchups/Teams/Players tabs, the existing week selector
+reused, coming-soon placeholders for the 3 unbuilt surfaces; new `icons.jsx`/`Placeholder.jsx`, `styles.css`
+rewritten to the token set). **Commit 2** the **Players table** — `queries.loadPlayers()`: ONE read joining
+`production_vor` (PROD VOR, default sort) + `market_vor` (MKT VOR, cross-time) + `ros_synthesis` (bull/bear/
+situation 1-10 grades) + season identity, ALL on `sleeper_player_id`; VOR-anchored sortable table + position
+filter, is_me YOU badges. **Commit 3** the **Player card** — `loadPlayerCard()` + shared `charts.jsx`
+(Sparkline/TrendLine/GradeBar/RangeGauge): Value·VOR (Production + Market weekly series + value/delta) + a
+BUY/HOLD/SELL trade lean off `trade_gap` (POC-GATED — cross-time, never a live call), Opportunity from
+`player_signal` (quality_rate / opp_pct / direction+reliability / recent-vs-expected), ROS Outcome Shape
+(grades + prose notes + confidence, prior-season flagged), all with honest empty states. **Honest gaps:**
+rostered-only (no free-agent VOR entity → the Available filter + waiver strip are deferred, a backend
+follow-up); `ros_synthesis` is sparse (~16 players → grades shown where present, full coverage needs a
+roster-wide AI batch ~$0.75); MKT/trade-gap cross-time (2026 market × 2025 roster) so gated POC. All new
+front-end data access is through the `queries.js` seam (loadPlayers/loadPlayerCard/loadLeagueMeta); the old
+League/Team panels are retired from the shell (files kept, unimported). Verified live 1280px: real players
+sorted by PROD VOR, MKT + negatives, is_me badges, PROD/MKT re-sort, QB filter, row→card→back; Player card
+full (Gibbs honest ROS-empty; Hurts full ROS 8/6/6 + MED confidence + prior-season flag), no console errors.
+**Next — Manager Dossier slice (trivial 1:1 map), then Teams/Team-detail → League → Matchups per the
+contract build order.** — Prior backend: **§4 MARKET VOR + PRODUCTION−MARKET TRADE GAP SHIPPED — the primary
 remaining backend read, and the one un-backdatable piece built on CURRENT (2026) data.** The market-value
 twin of Production VOR: the same waiver=0 ÷ pool-spread VOR (reusing the shared `position_pools` /
 `_pool_lines` / `_vor` engine — no new math, law 3) on the borrowed LeagueLogs `value` for the
@@ -122,6 +145,34 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**Gridiron front-end — Foundation + Players slice (first front-end surfacing of the gated reads; 3 commits).**
+Recreates the Claude-Design `Gridiron` handoff in the real React + Vite + DuckDB-WASM app per its
+`DATA_CONTRACT.md` (Web-first; new-shell-with-placeholders migration). **(1) Foundation:** `styles.css`
+rewritten to the Gridiron token set (violet brand accent + reserved 5-color posture palette, Archivo/IBM
+Plex Mono), a new top-bar shell (`App.jsx`) — brand + league switcher (real derived `10-tm · PPR · 1QB · 3-1`
+via new `queries.loadLeagueMeta` off teams/league_settings/lineup_slots, nothing hardcoded), centered
+segmented tabs with SVG glyphs (`icons.jsx`), the existing week selector reused, avatar; `Placeholder.jsx`
+coming-soon slot for League/Matchups/Teams. The old League/Team panels are retired from the shell (files
+kept, unimported). **(2) Players table:** `queries.loadPlayers(asOfWeek)` — ONE read joining `production_vor`
+(as-of slice → PROD VOR, default sort), `market_vor` (latest snapshot → MKT VOR + trade_gap, cross-time),
+`ros_synthesis` (latest week → bull/bear/situation grades, sparse), and season identity (name + NFL team),
+ALL on `sleeper_player_id`; `Players.jsx` renders a VOR-anchored sortable table (PROD/MKT/BULL/BEAR/SIT) +
+position filter + is_me YOU badges, wrapped in the point-in-time readiness `Gate`. Available/waiver filter
+DEFERRED (no free-agent VOR entity in V1). **(3) Player card:** shared `charts.jsx` (Sparkline/TrendLine/
+GradeBar/RangeGauge) + `queries.loadPlayerCard(sleeperId, asOfWeek)` → `PlayerCard.jsx`: Value·VOR
+(Production + Market weekly series + value/delta) with a BUY/HOLD/SELL lean off `trade_gap` **POC-gated**
+(is_cross_time — never a live call), Opportunity from `player_signal` (quality_rate/opp_pct/direction+
+reliability/recent-vs-expected + read), ROS Outcome Shape (`ros_synthesis` grades + prose notes + confidence,
+prior-season flagged); honest empty states where a read is absent. `db.js` registers production_vor/
+market_vor/ros_synthesis/league_settings (public/data symlinks added). **Seam discipline kept** — all new
+data access is in `queries.js`; views are pure renderers consuming plain objects. Verified live at 1280px
+(browser preview): real players sorted by PROD VOR (Josh Allen/McCaffrey…), MKT cross-time incl. negatives,
+QB filter + MKT re-sort, is_me badges, row→card→back; Player card full — Gibbs (honest ROS-empty) and Hurts
+(full ROS BULL 8 / BEAR 6 / SITUATION 6 + AI prose + MED confidence + prior-season flag); no console errors.
+**Next — Manager Dossier slice (trivial 1:1 to `manager_dossiers`), then Teams/Team-detail → League →
+Matchups; plus mobile-responsive pass + the free-agent value backend read that unblocks Available/waivers.**
+
+> earlier build
 **§4 Market VOR + Production−Market trade gap — the market-value twin of Production VOR (completes the
 §4 read; the un-backdatable POC piece built on CURRENT 2026 data).** The primary remaining backend read.
 Per design law 3 it borrows the LeagueLogs market value and adds only the decision layer — the SAME
@@ -194,33 +245,6 @@ wiring + the browser-triggered on-demand runtime (no server; the key is server-s
 is the future staleness-cache seam) + validated same-season live fusion. **Next — front-end surfacing
 of the gated forward reads** (Phase 4).
 
-> earlier build
-**Daily-collector reliability — shared `_http` resilience layer + collector registry + coverage gate
-(QUEUED #1).** Separation of concerns: retry / backoff / throttle / per-item isolation now live ONCE in
-one shared script, so every collector gets a consistent, resilient fetch process. **Three commits.**
-(1) **`fetchers/_http.py`** — `get`/`get_json` (bounded timeout + exponential-backoff-with-jitter retry
-on TRANSIENT failures — timeouts/conn-errors/5xx; a 4xx raises immediately, not retried) + `set_throttle`
-(the process min-gap the manager-activity fan-out raises) + `isolate` (per-item catch+log+continue).
-All three HTTP callers migrated: `sleeper._get_json` → thin wrapper (behaviour-identical, `set_throttle`
-re-exported); `news._get_feed` → `_http.get` + `_http.isolate`; **`leaguelogs._get` → `_http.get_json`
-(ADDS retry) + `snapshot()` per-item isolation** (ADDS it — the fix for "dynasty profiles, fetched last,
-drop first"). (2) **`fetchers/run.py`** — a declarative collector REGISTRY (leaguelogs + news — the
-banked daily series; NOT sleeper, which is on-demand) with cadence + coverage-shape per collector, and a
-`run <name> | --all | --list` dispatcher (uniform process → post-run freshness). The **meter stays
-external** (launchd → GitHub Actions calls this same dispatcher — nothing wasted). **`fetchers/
-check_collectors.py`** — a network-free coverage/health gate: leaguelogs STRICT daily coverage
-(per-day distinct profiles vs the max-seen full day), news RECENCY (append-only); HARD criterion is a
-recent window (default 7d, excl. today) so permanent historical gaps don't fail forever; `--today`
-monitoring; UTC-dated to match the collectors. (3) **Docs.** The **off-laptop host** (the ~8
-powered-off days — a host problem retry can't fix) stays **deferred to the deployment decision** (GitHub
-Actions the lead, collects + publishes). Verified: network-free retry/4xx/isolate self-test (all PASS);
-live no-regression on all three fetchers (sleeper nfl-state + set_throttle, leaguelogs profiles, news
-KC snapshot); isolation proof (2 forced-dead leaguelogs profiles → the 3 good ones collected + the run
-COMPLETED reporting "2/5 failed (isolated)" instead of aborting); the gate reproduces the audit
-(leaguelogs full-span 28 complete / 65% / 72% any-data — matches the documented 63%/71%) and flags the
-real recent gap (07-05 partial → FAIL/exit 1; `--since 3` clean → PASS/exit 0). **Next — QUEUED #2**
-(§2 ROS synthesis call).
-
 > built
     - nflreadpy fetcher
     - sleeper fetcher (includes fetch_players() for Sleeper player registry)
@@ -271,6 +295,7 @@ real recent gap (07-05 partial → FAIL/exit 1; `--since 3` clean → PASS/exit 
     - §2 ROS Synthesis — the per-player AI interpretation call (QUEUED #2; completes the §2 read, the last mile compute_ros_outcome_shape deferred to Phase 6) — the project's 3rd AI-layer read, reusing the `ai/client.py` seam. New `application/ai/` trio + a `data_layer` entity. (1) **`ros_synthesis_prompt.py`** — the pure, editable prompt (`system_prompt()` + `user_prompt(ctx)` + `SYNTHESIS_KEYS` + `zero_signal_synthesis()` + plain-language translations of the internal security/direction labels). (2) **`write_ros_synthesis.py`** — per player: `assemble_player` gathers his `player_news_slice` claims + `ros_outcome_shape` anchor (by id, from `--anchor-season`) + Sleeper injury/depth facts → one `client.generate_dossier` Haiku call → `_validate` (grades 1-10, notes non-empty, headline ids ⊆ the slice, confidence vocab) → row. Modes: `run` (write, run-once superset guard by (season,week,player), `--force`), `--preview` (print output), and the **no-AI** `--render` (print the exact assembled prompt) / `--replay REPLY.json` (run a canned reply through validation) — both need no key/no cost, the prompt-iteration loop. Zero-signal (no anchor AND no news) → hardcoded row, API skipped. (3) **`check_ros_synthesis.py`** — internal-consistency gate (no answer key): coverage / schema / grounding (headlines trace to the slice) / confidence honesty (thin or no-anchor ⇒ not 'high'; zero rows are clean fallbacks) / data-flag honesty + a soft high-precision prose-leak scan. New **`data_layer` `ros_synthesis`** entity (`snapshots/derived/ros_synthesis_{season}.parquet`; grain one row per (season,week,player); replace-by-(season,week,player)). Output columns fully separable: `bull_grade`/`bear_grade`/`situation_grade` (Int, independent axes — no ordering) each with its `*_note`, `headlines` (List(Struct{text, source_article_ids})), `confidence`/`confidence_note`, availability flags (`has_ros_anchor`/`has_news`/`signal_tier`/`n_news_claims`), anchor carries + `anchor_is_prior_season`, `news_content_hash` (future on-demand-cache seam), provenance. **Grade convention (with the PM):** 10=best on all three; bull hard-anchored to a caliber bucket (elite→9-10 … fringe→1-2, full range) and decoupled from downside (that lives in bear/situation). **Prose discipline:** notes are natural manager language; the substrata (percentile/tier/projection/trend) drive the grades but are banned from the prose; attributed news stays. **Season/time-world honesty:** keyed by the news (season,week); a differing anchor season is flagged PRIOR-SEASON, never silently fused (the STATUS caveat — 2026 news × 2025 anchor). Verified live 2026 wk0: 16 players across all regimes (Chase bull 9 … Kraft/Rodriguez 3-4; ~$0.07), gate exit 0, guard tests (run-once / locked-key refusal / partial run hits the API only for the new player / zero-signal skip) all clean. Front-end wiring + the browser on-demand runtime + validated same-season fusion deferred with deployment (no server; key server-side). No UI (data + gate + prompt tooling).
     - §4 Market VOR + Production−Market trade gap — the market-value twin of Production VOR (completes §4; the primary remaining backend read, and the un-backdatable POC piece built on CURRENT 2026 data). Per law 3 borrows the LeagueLogs market value + adds only the decision layer, reusing the shared engine (`_analytics.position_pools`, `compute_production_vor._pool_lines`/`_vor`/`_roster_as_of`, `round1`) — **no new VOR math**. **2 code commits + docs.** (1) New `data_layer` **`market_vor`** entity (`snapshots/derived/market_vor_{season}.parquet`; grain one row per (snapshot_date, rostered skill player); **tall over the market's `snapshot_date` axis** — the analog of Production VOR's `as_of_week`, banking the un-backdatable series; `read_market_vor(season, snapshot_date=None)` → latest banked day) + `compute_market_vor.py`: filters to the format-matched profile **`redraft-1qb-12t-ppr1`** (redraft/1QB/full-PPR — resolves the §4 open prereq flag; 12t-vs-our-10t a documented non-issue since the waiver line is from OUR roster/available split), joins **position from the Sleeper registry** (feed carries only `position_rank`), resolves the frozen-2025 roster (`_roster_as_of` at the freeze week), per pool sets waiver=best-available / top=best value → `market_vor=(value−waiver)/(top−waiver)`; QB pool + pooled flex line identical to Production VOR. The **Production−Market gap folded in**: joins the frozen Production VOR slice → `trade_gap=market_vor−production_vor` + `is_cross_time`/`market_season`/`production_as_of`/`has_production_vor` as **first-class columns** (the market is CURRENT 2026, rosters/production are 2025 → cross-time by construction, never fused — the `anchor_is_prior_season` precedent; POC/architecture validation, NOT a live trade call, until the season rolls to 2026). **Purely additive** — nothing in the front end or any existing transform reads it, so the current-vs-2025 split does NOT affect app functioning. (2) **Internal-consistency gate `check_market_vor.py`** (no answer key at the 2026-offseason freeze — the `backtest_manager_features`/`check_ros_synthesis` regime): recompute-match (persisted == shipped `compute()`) / VOR algebra (waiver≤top, reproduces (value−waiver)/spread within a spread-aware rounding tol, top≈1.0) / pool integrity (= Production VOR's pools) / profile+coverage (single profile, no picks, ≥95%) / gap honesty (all cross-time flagged; `trade_gap` null iff no production row else exactly market−production). Verified live 2026 offseason: **31 snapshots → 5270 rows**, 170/171 frozen roster priced (99.4%), 248 no-production rows null (law 2), gate exit 0; Production VOR gate unaffected (0.944/0.955). No UI (data + gate). Next — front-end surfacing of the gated forward reads (Phase 4).
     - Manager Dossiers — removed the API-key gate (now an **included AI run**, not opt-in) — the §7 dossier run is cheap (~10 Haiku calls / ~$0.025 / once per season) and now ships as a standard product AI read using the app owner's key (in the gitignored `config.py`, never user-supplied). Dropped the `client.api_available()` LOCKED early-return in `write_manager_dossiers.run()` so the writer always executes; the **shared `client.api_available()` seam is untouched** and the other two AI writers (`write_team_news_dossier`, `write_ros_synthesis`) stay key-gated. Unrelated guards unchanged (run-once-per-season, zero-signal API skip). Docstring + `TECHNICAL_ARCHITECTURE.md`/`READ_BUILD_ORDER.md` reworded from "API-key-gated / key-gate clean exit". No key-storage change (key stays out of git). Docs-and-one-writer change; `check_manager_dossiers.py` gate unaffected.
+    - Gridiron front-end — Foundation + Players slice (first front-end surfacing of the gated reads; 3 commits) — recreates the Claude-Design `Gridiron` handoff (`scope docs/`, `DATA_CONTRACT.md`) in the real React+Vite+DuckDB-WASM app, Web-first, new-shell-with-placeholders. (1) Gridiron design system (`styles.css` tokens — violet brand + reserved 5-color posture palette, Archivo/IBM Plex Mono) + 4-surface app chrome (`App.jsx`: brand + league switcher via new `queries.loadLeagueMeta` deriving `10-tm · PPR · 1QB · 3-1` from teams/league_settings/lineup_slots, segmented tabs with `icons.jsx` glyphs, week selector reused, `Placeholder.jsx` for League/Matchups/Teams; old League/Team panels retired from the shell). (2) Players table — `queries.loadPlayers(asOfWeek)` joins `production_vor` (PROD VOR, default sort) + `market_vor` (MKT VOR, cross-time) + `ros_synthesis` (bull/bear/situation grades, sparse) + season identity on `sleeper_player_id`; `Players.jsx` VOR-anchored sortable table + position filter + is_me badges + point-in-time `Gate`; Available/waiver DEFERRED (no FA-pool entity). (3) Player card — shared `charts.jsx` (Sparkline/TrendLine/GradeBar/RangeGauge) + `queries.loadPlayerCard()` → `PlayerCard.jsx`: Value·VOR series + BUY/HOLD/SELL lean off `trade_gap` (POC-gated cross-time), Opportunity from `player_signal`, ROS Outcome Shape from `ros_synthesis` (grades/notes/confidence, prior-season flagged); honest empty states. `db.js` registers production_vor/market_vor/ros_synthesis/league_settings (public/data symlinks added). All new data access through the `queries.js` seam. Verified live 1280px (browser preview): real players + sort/filter/is_me, full Player card (Gibbs ROS-empty; Hurts full ROS 8/6/6 + confidence + prior-season flag), no console errors. Next — Manager Dossier slice, then Teams/League/Matchups; + mobile pass + free-agent value read (unblocks Available/waivers) + roster-wide ros_synthesis batch.
 
 > not yet built
     >> backend
