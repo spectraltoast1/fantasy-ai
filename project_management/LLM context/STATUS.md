@@ -1,6 +1,6 @@
 # STATUS
 
-**Last updated:** 2026-07-13 (**BACKEND — L0 KEYING SHIPPED (Improvement-Loop Session 1): the unlock —
+**Last updated:** 2026-07-14 (**BACKEND — L0 KEYING SHIPPED + REAL-DATA GATE GREEN (Improvement-Loop Session 1): the unlock —
 every league/scoring-scoped derived parquet is now partitioned by its scope, so league #2 can't silently
 overwrite #1 (audit S1.3), `projection_consensus` is stored per scoring profile not scoring-agnostically
 (S3.1), and `ros_outcome_shape` is split into a scoring-scoped `ros_player_band` + a league-scoped
@@ -23,15 +23,46 @@ rewired to anchor off `band ⋈ view` and **kept LEAGUE-scoped** (its grades dep
 leagues — the spec table's "truly shared" end-state is deferred to the live path, Sessions 7–8).
 **Verified** (synthetic — this remote clone has no runtime/data): `band ⋈ league_view` reconstructs the old
 `ros_outcome_shape` **frame-for-frame**; registry/resolver, collision isolation, and the ros-synthesis
-anchor rewire all pass; 60+ modules import clean. **The real-data frame-for-frame gate (mine's 2025
-snapshots) runs where the runtime lives:** build the registry (`python3 -m application.shared.league_registry
-build`), re-run the transforms to migrate onto the keyed paths, then `python3 -m
-application.data.transforms.backtest_l0_keying`. **Deferred to Session 2** (nothing to collide until league
+anchor rewire all pass; 60+ modules import clean. **The real-data frame-for-frame gate PASSED on the 2025
+snapshots (this session, on the runtime host):** registry built (`leagues.parquet`, 278 rows, primary
+`1182…/ppr`); a **byte-preserving copy** migrated the 12 flat entities to keyed paths (never re-run —
+`market_vor`/`manager_dossiers`/`manager_activity` would have drifted, violating "change no number") +
+`ros_player_band`/`ros_league_view` computed; `backtest_l0_keying` **exit 0** — all 12 frame-identical, ROS
+reconstruction green (a lone stale `security` cell in the old `ros_outcome_shape` — player_signal was
+re-run after it was last built — was refreshed from current inputs, confirming the split is lossless), and
+the **collision proof** green. Front end re-verified (Players/Teams render from the keyed paths after the
+`public/data` symlinks were repointed; `db.js`/`queries.js` untouched; console clean); the redundant flat
+parquets were then removed. **Deferred to Session 2** (nothing to collide until league
 #2's data exists): the frontend `MY_USERNAME`→`is_me` swap, re-keying the *fetched* league entities
 (teams/roster_positions/league_settings), and `db.js` multi-league addressing. **Next — the corpus harvester
 (Session 2):** the BFS crawl (`_manager_leagues` + `classify_league`) reading `corpus_manifest`, persisting
 the shape-matrix backfill under the new keyed paths — the first data that exercises the isolation L0 just
-built. — Prior front-end: **GRIDIRON FRONT-END — MATCHUPS SLICE SHIPPED: the fifth and final
+built. — Prior front-end: **GRIDIRON FRONT-END — MOBILE-RESPONSIVE PASS SHIPPED: the app is now
+responsive (it was Web-1280 only — `styles.css` had zero media queries).** A single
+`@media (max-width: 768px)` layer over the existing token/class system; the web layout is the
+untouched base above 768px (verified unchanged at 1280). **Commit 1 — chrome + foundation:** flattened
+`TopBar` to five grid-area-placed children (brand / league / tabs / week / avatar) so the layout
+regroups per breakpoint without touching the DOM → mobile is a **2-row header** (brand + avatar /
+league-card + week-card) + a **fixed bottom tab bar** (icon-over-label, active = violet); `gr-main`
+gains bottom-nav clearance, `gr-detail` goes full-screen, `html/body` guard against horizontal page
+scroll. **Commit 2 — per-surface reflow:** the **tables keep every column** — they break out to the
+full viewport width with a restored edge gutter, tighter interior padding and **thicker rows** (the
+shared-mockup look); Players fits all 7, Teams (which also carries a sparkline) drops only the
+decorative **Trend** column (the Playoff % number carries the read) + caps the team name, keeping every
+data column, and the owner sub truncates while the **YOU** badge always survives (a `tm-owner` span +
+flex sub). League's Your Race band + 3-col dashboard **stack**; Player card / Team detail (stat blocks →
+2×2, this-week bar stacks) / Matchup detail (rosters → one column) all reflow. **Commit 3 — Matchups
+behavior:** a small **`useIsMobile()`** (matchMedia at 768) switches Matchups between the web
+**two-pane** and a mobile **tap-through** (slate → the full-screen `matchup` stack detail, reusing the
+type already wired); App passes `onOpenMatchup`. Views stay pure; no data-layer change. Verified live
+375px (browser preview): 2-row header + bottom nav (tab tap switches surface, active violet);
+Players/Teams fit all columns with taller rows + YOU preserved; League stacks (Posture Map + Positional
+Talent intact); Player card, Team detail (2×2 + stacked this-week bar + depth), Matchup detail (stacked
+rosters + gauges) reflow with no overflow; Matchups slate → tap → full-screen detail → Back; and at 1280
+the web layout (top segmented tabs, League 3-col, Matchups two-pane) is unchanged; console clean.
+**Next — the (backend-blocked) free-agent value read** that unblocks the Players `Available` filter +
+the League Waiver-Wire strip (also queued: self-hosting the fonts for offline/static-hosting). — Prior
+front-end: **GRIDIRON FRONT-END — MATCHUPS SLICE SHIPPED: the fifth and final
 `DATA_CONTRACT` surface (§4.3), completing the 5-surface contract (Players · Dossier · Teams · League ·
 Matchups).** As-of week N the Matchups tab shows week **N+1**'s head-to-head slate, fully *projected*
 (the app is a season replay — the pairing is known in advance, the scores are the future it's pretending
