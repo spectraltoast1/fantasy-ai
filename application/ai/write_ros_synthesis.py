@@ -80,11 +80,19 @@ _SCHEMA = {
 # --------------------------------------------------------------------------- inputs / assembly
 
 def _resolve_anchor_season(season: int, anchor_season) -> int:
-    """The season whose ROS band anchors the read (default: this season if present, else 2025)."""
+    """The season whose ROS band anchors the read (default: this season if present, else 2025).
+
+    The `ros_player_band_exists(season)` probe resolves the is_mine scoring profile for `season`; when the
+    news season outruns the registry's league seasons (e.g. 2026 — no league keyed there) that raises, which
+    simply means "no same-season band" → fall through to the prior-season anchor. So a resolution failure is
+    caught, not propagated."""
     if anchor_season is not None:
         return anchor_season
-    if data_layer.ros_player_band_exists(season):
-        return season
+    try:
+        if data_layer.ros_player_band_exists(season):
+            return season
+    except ValueError:
+        pass
     return 2025
 
 
