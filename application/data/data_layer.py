@@ -789,53 +789,6 @@ def _scoring_dir(scoring_key) -> Path:
     return _SNAPSHOT_DIR / "derived" / "scoring" / str(scoring_key)
 
 
-def _team_form_path(season: int, league_id) -> Path:
-    return _league_dir(league_id) / f"team_form_{season}.parquet"
-
-
-def write_team_form(df: pl.DataFrame, season: int, *, league_id=None) -> None:
-    """Write the per-team trajectory (form) analytics for a league season (overwrite).
-
-    Output of transforms/compute_team_form.py: one row per roster_id carrying the
-    recency-weighted scoring slope, direction read, recent record, league-relative
-    spectrum position, and the per-week series (serialised JSON).
-    """
-    league_id = league_id or _active_league(season)[0]
-    path = _team_form_path(season, league_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    df.write_parquet(path)
-
-
-def read_team_form(season: int, *, league_id=None, as_of_week=None) -> pl.DataFrame:
-    """Read the per-team form analytics for one as-of week (default = latest)."""
-    league_id = league_id or _active_league(season)[0]
-    return _as_of_slice(pl.read_parquet(_team_form_path(season, league_id)), as_of_week)
-
-
-def _team_leakage_path(season: int, league_id) -> Path:
-    return _league_dir(league_id) / f"team_leakage_{season}.parquet"
-
-
-def write_team_leakage(df: pl.DataFrame, season: int, *, league_id=None) -> None:
-    """Write the per-team lineup-leakage analytics for a league season (overwrite).
-
-    Output of transforms/compute_team_leakage.py: one row per roster_id carrying
-    lineup efficiency %, season points left, the coachable-vs-variance split,
-    league-relative spectrum position, and the per-week leak + named fixes
-    (serialised JSON).
-    """
-    league_id = league_id or _active_league(season)[0]
-    path = _team_leakage_path(season, league_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    df.write_parquet(path)
-
-
-def read_team_leakage(season: int, *, league_id=None, as_of_week=None) -> pl.DataFrame:
-    """Read the per-team leakage analytics for one as-of week (default = latest)."""
-    league_id = league_id or _active_league(season)[0]
-    return _as_of_slice(pl.read_parquet(_team_leakage_path(season, league_id)), as_of_week)
-
-
 def _player_signal_path(season: int, league_id) -> Path:
     return _league_dir(league_id) / f"player_signal_{season}.parquet"
 

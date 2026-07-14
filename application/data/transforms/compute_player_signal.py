@@ -44,7 +44,7 @@ core read above, per "don't collapse the axes; divergence is the signal":
     `td_prob` proxy. Independent of Volume (`opp_g`): a 3rd-down back can be
     high-quality/low-volume, and that divergence is the signal.
   - `direction` / `reliability` — the Trust axis's trend + consistency, from the
-    player's own weekly opportunity series (mirrors compute_team_form.py's slope math).
+    player's own weekly opportunity series (a weighted-least-squares slope fit).
   - `security` — the Trust axis's context flag, from Sleeper injury/depth-chart status.
   - `point_correlation` — the companion: how tightly a player's weekly **actual** points
     track his weekly **expected** points. Read against `quality_rate`: low correlation +
@@ -110,12 +110,12 @@ OPP_HALF_LIFE_WK = None
 
 # --- Trust axis (DECISION_READS.md §1 refinement) ---
 # Direction's own recency weighting for the slope fit itself — separate from
-# OPP_HALF_LIFE_WK (which weights the opp_g *rate*, validated cumulative). Mirrors
-# compute_team_form.py's HALF_LIFE_WK: recent weeks matter more when fitting "is this
-# trending," independent of how the point-estimate rate is windowed.
+# OPP_HALF_LIFE_WK (which weights the opp_g *rate*, validated cumulative). Recent
+# weeks matter more when fitting "is this trending," independent of how the
+# point-estimate rate is windowed.
 DIRECTION_HALF_LIFE_WK = 2
 # A slope within ±DIRECTION_BAND of the player's own average opportunity reads
-# "steady" — same tuning rationale as compute_team_form.py's constant of the same name.
+# "steady" — a small wobble stays flat rather than reading as a trend.
 DIRECTION_BAND = 0.04
 # Sleeper injury_status values that flag real risk to the opportunity continuing.
 # "Questionable" is treated as its own softer tier, not lumped in here.
@@ -249,8 +249,8 @@ def td_points_expr() -> pl.Expr:
 def _direction(series, *, half_life, band) -> str:
     """Trend of a player's own opportunity across his recent weeks — the Trust axis's
     "direction" (DECISION_READS.md §1): is his role growing, shrinking, or steady?
-    Mirrors compute_team_form.py's weighted-least-squares slope + band-thresholding at
-    player grain, fit on `opp` instead of points. `series`: list of {week, opp, ...},
+    A weighted-least-squares slope + band-thresholding at player grain, fit on `opp`
+    instead of points. `series`: list of {week, opp, ...},
     any order. Fewer than 2 games reads "steady" — nothing to fit a trend to.
     """
     ws = sorted(series, key=lambda w: w["week"])

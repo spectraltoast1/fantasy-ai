@@ -31,7 +31,7 @@ from application.shared import league_resolver
 _SNAP = data_layer._SNAPSHOT_DIR
 
 # entity -> (old flat parquet path, new keyed parquet path builder taking (lid, sk))
-_LEAGUE_ENTITIES = ["team_form", "team_leakage", "player_signal", "production_vor", "market_vor",
+_LEAGUE_ENTITIES = ["player_signal", "production_vor", "market_vor",
                     "true_rank", "positional_depth", "bracket_odds", "manager_features", "manager_dossiers"]
 
 

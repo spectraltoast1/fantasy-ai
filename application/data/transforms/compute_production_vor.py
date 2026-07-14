@@ -119,7 +119,7 @@ def _vor(ros_value: float, waiver: float, top: float) -> float:
 def _roster_as_of(season_df: pl.DataFrame, n: int) -> dict:
     """sleeper_player_id → roster_id as of week N: the team a player belonged to in his latest
     week ≤ N (arg_max over the ≤ N slice) — the roster-as-of-N idiom shared with
-    compute_player_signal / compute_team_leakage, so a mid-season trade/add changes who is on
+    compute_player_signal, so a mid-season trade/add changes who is on
     the team at week N, not just their numbers."""
     sub = season_df.filter(pl.col("week") <= n)
     return {

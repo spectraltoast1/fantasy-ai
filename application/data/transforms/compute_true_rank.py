@@ -15,10 +15,9 @@ Per design law 3 it borrows nothing new — it *re-aggregates* the Production VO
     behind the starters, carried as evidence (a §6 Positional-Depth hint), not folded into the rank.
   - rank: 1 = strongest, dense-ranked within each as-of-week cohort. **Record-independent** — this
     reads no wins/standings; that tension (rank vs. record) is exactly what §5's posture read surfaces.
-  - spectrum_pos: league-relative 0–1 marker (min strength → 0, max → 1) via the shared normaliser,
-    the same idiom as team_form / team_leakage.
+  - spectrum_pos: league-relative 0–1 marker (min strength → 0, max → 1) via the shared normaliser.
 
-Tall over as_of_week like the three team/player analytics + Production VOR: Production VOR is already
+Tall over as_of_week like player_signal + Production VOR: Production VOR is already
 resolved per (as_of_week, roster_id) with the roster taken as-of-N, so True Rank inherits roster-as-of-N
 for free — it just groups VOR by (as_of_week, team) and runs the optimal-lineup pass. The roster (season
 join behind VOR) is frozen at weeks 1–4, so N is bounded there; the ROS horizon runs to week 18.
