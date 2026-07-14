@@ -2,7 +2,18 @@
 
 > Engineering context document for Claude Code. Describes the stack, folder structure, data layer design, and technical principles. Updated regularly as the project evolves.
 
-**Last reviewed:** 2026-07-13 (**Gridiron front-end — League surface shipped** — the 3rd front-end slice
+**Last reviewed:** 2026-07-13 (**Backend — L0 keying shipped (Improvement-Loop Session 1)** — derived
+parquet is now **scope-partitioned** (NFL-global / scoring-scoped `derived/scoring/<scoring_key>/` /
+league-scoped `derived/league/<league_id>/`) behind `data_layer`, declared by a `leagues.parquet` registry
+(`shared/league_registry.py`) and resolved by `shared/league_resolver` / `data_layer._active_league`; scoped
+read/write default to the is_mine league so callers are unchanged (audit S1.3/S3.1). `transforms/_keys.py`
+homes `scoring_key`/`shape_key`. `ros_outcome_shape` **split** into `ros_player_band` (scoring-scoped,
+roster-free) + `ros_league_view` (league-scoped), rejoined for `ros_synthesis` — which stays **league-scoped**
+because its grades depend on league-relative anchor inputs (audit S3.2). New gate
+`backtest_l0_keying.py` (migration-identity · ROS reconstruction · collision · registry). See the
+Data-Layer "Scope keying" block + the latent-assumptions section below. Frontend `is_me`/`db.js` and the
+fetched-entity re-key are deferred to Session 2. **Prior front-end — Gridiron front-end — League surface
+shipped** — the 3rd front-end slice
 (`DATA_CONTRACT` §4.2): **Your Race + Playoff Picture + Posture Map + Positional Talent.** New `League.jsx`
 (the "whole league at a glance" — a full-width Your Race band over a 3-column dashboard) leans on the
 Teams-cluster `loadStandings` (one source for records/odds/posture). New `queries.js` reads — `loadLeague`
@@ -154,11 +165,21 @@ selector drives the readiness gate (`weeksElapsed = asOfWeek`) and replaced the 
   league exists in the answer key, and the per-roster division map isn't persisted yet (`_division_map`
   returns None → flat seeding). Revisit against a real division league; populate the map from the
   rosters endpoint onto the teams entity when one is onboarded.
-- **`MY_USERNAME` identity hardcode** (still in `queries.js`) resolves "your team" —
-  replace by baking an `is_me` flag into the teams parquet at fetch time.
-- **Single-season file addressing in `db.js`** — multi-season/league requires
-  parameterizing the registered parquet names, now including the two `derived/` parquets
-  (this is the one place to change it).
+- ~~**Single-league keying** (`config.SLEEPER_LEAGUE_ID`, one string; derived parquet keyed by season
+  only → league #2 overwrites #1).~~ **RESOLVED backend-side (L0 keying, audit S1.3/S3.1/S3.2).** A
+  `leagues.parquet` **registry** (`shared/league_registry.py`) + `data_layer._active_league` now key every
+  derived entity by scope: `derived/league/<league_id>/…` (league-scoped), `derived/scoring/<scoring_key>/…`
+  (scoring-scoped: `projection_consensus`, `ros_player_band`), `sleeper/<season>/league/<league_id>/…`.
+  `ros_outcome_shape` split into `ros_player_band` (scoring) + `ros_league_view` (league); `ros_synthesis`
+  is league-scoped (its grades depend on league-relative anchor inputs). Reads/writes default to the
+  is_mine league so callers are unchanged. **Still pending (Session 2):** the *fetched* league entities
+  (teams/roster_positions/league_settings) are not yet re-keyed (no 2nd league's data exists to collide).
+- **`MY_USERNAME` identity hardcode** (still in `queries.js`) resolves "your team" — replace by baking an
+  `is_me` flag into the teams parquet at fetch time. **Slated for the next session (Session 2)** now that
+  the registry exists to key it.
+- **Single-season file addressing in `db.js`** — multi-season/league requires parameterizing the
+  registered parquet names (the derived parquets are now scope-partitioned on the *backend*, but `db.js`
+  still addresses one league's published copy). **Deferred to Session 2** with the multi-league frontend.
 
 **Tuning constants → future config seed:** league-agnostic **magic numbers** kept as named
 constants near the logic that uses them. The form/leakage constants moved into their
@@ -318,6 +339,27 @@ Two storage patterns:
 
 - **cache/** - current state only. Overwritten on every refresh. Use for data where only "right now" matters (roster state, injury status, current odds, current projections).
 - **snapshots/** - time-series, append-only. Each refresh adds a new record without overwriting prior ones. Use for data where trend history matters (weekly stats, market values over time).
+
+**Scope keying (L0, Improvement-Loop Session 1).** Derived entities are partitioned by their scope inside
+`data_layer` (not in the filename), so multiple leagues/scoring profiles coexist without collision:
+
+- **NFL-global** — keyed `season[, week]`: `nfl_stats`, `projections`, `adp_*`, `market_values`,
+  `team_news_*`, `player_news_slice`. One copy, all leagues. Paths unchanged.
+- **Scoring-scoped** — `+ scoring_key` (`ppr`/`half`/`std`/`cust-<8char>`): `projection_consensus`,
+  `ros_player_band`. Path `snapshots/derived/scoring/<scoring_key>/…`. Two leagues on one scoring profile
+  share the file (keeps AI cost flat as leagues grow).
+- **League-scoped** — `+ league_id`: `player_signal`, `production_vor`, `market_vor`, `ros_league_view`,
+  `ros_synthesis`, `true_rank`, `positional_depth`, `bracket_odds`, `team_form`, `team_leakage`,
+  `manager_features`, `manager_dossiers`. Path `snapshots/derived/league/<league_id>/…` (and
+  `snapshots/sleeper/<season>/league/<league_id>/manager_activity`).
+
+The scopes are declared by the **`leagues.parquet` registry** (`league_id · season · scoring_key ·
+shape_key · is_mine · onboarded_at · pilot_cohort`), built by `shared/league_registry.py` as a projection
+of the corpus manifest ∪ the live config league, and resolved by `shared/league_resolver`
+(`resolve_active`) / `data_layer._active_league`. Scoped read/write take a **keyword-only**
+`league_id`/`scoring_key` that **defaults to the is_mine league**, so existing single-league callers are
+unchanged and only the corpus harvester passes explicit keys. `scoring_key`/`shape_key` are pure helpers
+in `transforms/_keys.py` (re-exported by `corpus/_corpus.py`).
 
 ## I/O Architecture
 

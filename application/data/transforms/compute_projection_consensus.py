@@ -271,8 +271,9 @@ def compute(season: int, scoring: dict | None = None) -> pl.DataFrame:
 
 def run(season: int) -> None:
     df = compute(season)
-    data_layer.write_projection_consensus(df, season)
-    print(f"  → snapshots/derived/projection_consensus_{season}.parquet")
+    data_layer.write_projection_consensus(df, season)   # scoring-scoped; defaults to the is_mine profile
+    sk = data_layer._active_league(season)[1]
+    print(f"  → snapshots/derived/scoring/{sk}/projection_consensus_{season}.parquet")
 
 
 if __name__ == "__main__":

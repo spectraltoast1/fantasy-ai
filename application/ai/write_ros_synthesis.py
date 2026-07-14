@@ -1,15 +1,18 @@
 """
 ROS Synthesis — the per-player AI outcome-shape writer (§2 ROS Outcome Shape, interpretation half).
 
-Fuses the quantitative skeleton (compute_ros_outcome_shape.py) with the news layer
-(player_news_slice) into the three §2 grades + narrative + headlines + a confidence flag — the last
-mile the skeleton deferred ("the AI narrative + 1-10 grade roll-up is Phase 6").
+Fuses the quantitative skeleton (compute_ros_player_band + compute_ros_league_view — the L0 split of the
+old ros_outcome_shape) with the news layer (player_news_slice) into the three §2 grades + narrative +
+headlines + a confidence flag — the last mile the skeleton deferred ("the AI narrative + 1-10 grade
+roll-up is Phase 6").
 
 Reuse, not rebuild:
   - ai/client.generate_dossier — the isolation seam (key gate + the single synchronous call).
   - ai/ros_synthesis_prompt — the pure prompt (schema + guardrails + zero-signal fallback). The prompt
     TEXT you iterate on lives there; this file only gathers data and calls the model.
-  - data_layer.read_ros_outcome_shape / read_player_news_slice / read_sleeper_players — the anchors.
+  - data_layer.read_ros_player_band ⋈ read_ros_league_view / read_player_news_slice /
+    read_sleeper_players — the anchors. This writer is league-scoped (its grades depend on league-relative
+    anchor inputs); the two ROS halves rejoin here into the same anchor the pre-split reader saw.
 
 Graceful per-input degradation (design decision): a player is graded on WHATEVER resolves, and the
 output makes the gaps first-class (has_ros_anchor / has_news / anchor_is_prior_season + a confidence
@@ -77,21 +80,36 @@ _SCHEMA = {
 # --------------------------------------------------------------------------- inputs / assembly
 
 def _resolve_anchor_season(season: int, anchor_season) -> int:
-    """The season whose ros_outcome_shape band anchors the read (default: this season if present, else 2025)."""
+    """The season whose ROS band anchors the read (default: this season if present, else 2025)."""
     if anchor_season is not None:
         return anchor_season
-    if data_layer._ros_outcome_shape_path(season).exists():
+    if data_layer.ros_player_band_exists(season):
         return season
     return 2025
 
 
+def _read_anchor(anchor_season: int) -> pl.DataFrame:
+    """The §2 quantitative anchor per player, at the latest as-of: ros_league_view (roster + spectrum /
+    security / direction) joined to ros_player_band (centre / bull / bear / cv + preseason-ADP evidence)
+    — the L0 split of the old ros_outcome_shape, rejoined. Rostered players only (the league view's
+    grain), so has_ros_anchor keeps its pre-split meaning (only a rostered player carries an anchor)."""
+    view = data_layer.read_ros_league_view(anchor_season)    # league-scoped (is_mine), latest as_of
+    band = data_layer.read_ros_player_band(anchor_season)    # scoring-scoped (is_mine profile), latest as_of
+    return view.join(
+        band.select("sleeper_player_id", "ros_center", "ros_bull", "ros_bear", "ros_sigma", "ros_cv",
+                    "n_weeks", "anchor_applied", "adp_ecr", "adp_best", "adp_worst",
+                    "anchor_floor", "anchor_ceiling"),
+        on="sleeper_player_id", how="left",
+    )
+
+
 def _load_inputs(season: int, week: int, anchor_season: int):
-    """(news_slice df for the week, ros band by id, sleeper facts by id). Missing inputs degrade to empty."""
+    """(news_slice df for the week, ros anchor by id, sleeper facts by id). Missing inputs degrade to empty."""
     news_slice = data_layer.read_player_news_slice(season=season, week=week) \
         if data_layer.player_news_slice_exists() else pl.DataFrame()
     try:
-        ros = data_layer.read_ros_outcome_shape(anchor_season)          # latest as_of_week
-        ros = ros.unique(subset=["sleeper_player_id"], keep="first")    # one anchor per player
+        ros = _read_anchor(anchor_season)                              # band ⋈ view, latest as_of_week
+        ros = ros.unique(subset=["sleeper_player_id"], keep="first")   # one anchor per player
     except FileNotFoundError:
         ros = pl.DataFrame()
     facts = data_layer.read_sleeper_players() if data_layer.sleeper_players_exists() else pl.DataFrame()

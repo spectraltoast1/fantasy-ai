@@ -1,6 +1,43 @@
 # STATUS
 
-**Last updated:** 2026-07-14 (**GRIDIRON FRONT-END — MOBILE-RESPONSIVE PASS SHIPPED: the app is now
+**Last updated:** 2026-07-14 (**BACKEND — L0 KEYING SHIPPED + REAL-DATA GATE GREEN (Improvement-Loop Session 1): the unlock —
+every league/scoring-scoped derived parquet is now partitioned by its scope, so league #2 can't silently
+overwrite #1 (audit S1.3), `projection_consensus` is stored per scoring profile not scoring-agnostically
+(S3.1), and `ros_outcome_shape` is split into a scoring-scoped `ros_player_band` + a league-scoped
+`ros_league_view` (S3.2).** **Commit 1** — `transforms/_keys.py` (the `scoring_key`/`shape_key` home,
+re-exported by `corpus/_corpus.py`) + a `leagues.parquet` **league registry** (a projection of the corpus
+manifest ∪ the live config league, built by `shared/league_registry.py`) + a registry-aware
+`league_resolver` (`resolve_active` / registry-first `resolve_league_id`) + `data_layer._active_league`.
+**Commit 2** — the 12 derived read/write pairs re-keyed to `derived/league/<league_id>/…` ·
+`derived/scoring/<scoring_key>/…` · `sleeper/<season>/league/<league_id>/manager_activity` via a
+**default-resolves-active** kwarg (every existing `compute_*`/`backtest_*` caller unchanged — only the
+Session-2 harvester will pass explicit keys; the per-league partition also bounds the O(n²)
+manager_activity/ros_synthesis read-modify-write) + a `backtest_l0_keying` no-regression gate (old-flat ==
+new-keyed frame-for-frame · ROS reconstruction · collision isolation · registry/resolver smoke).
+**Commit 3** — the `ros_outcome_shape` split: `compute_ros_player_band` (scoring-scoped, roster-free, over
+the whole projected pool, **round1-the-centre-before-the-band invariant preserved** so the band reproduces
+the old frame) + `compute_ros_league_view` (league-scoped: roster membership + league-relative
+`spectrum_pos` + situation/security carry-through) + `backtest_ros_player_band` (renamed); `ros_synthesis`
+rewired to anchor off `band ⋈ view` and **kept LEAGUE-scoped** (its grades depend on league-relative
+`spectrum_pos`/`security`/`direction`, so a scoring-agnostic store would re-collide at n=2 same-scoring
+leagues — the spec table's "truly shared" end-state is deferred to the live path, Sessions 7–8).
+**Verified** (synthetic — this remote clone has no runtime/data): `band ⋈ league_view` reconstructs the old
+`ros_outcome_shape` **frame-for-frame**; registry/resolver, collision isolation, and the ros-synthesis
+anchor rewire all pass; 60+ modules import clean. **The real-data frame-for-frame gate PASSED on the 2025
+snapshots (this session, on the runtime host):** registry built (`leagues.parquet`, 278 rows, primary
+`1182…/ppr`); a **byte-preserving copy** migrated the 12 flat entities to keyed paths (never re-run —
+`market_vor`/`manager_dossiers`/`manager_activity` would have drifted, violating "change no number") +
+`ros_player_band`/`ros_league_view` computed; `backtest_l0_keying` **exit 0** — all 12 frame-identical, ROS
+reconstruction green (a lone stale `security` cell in the old `ros_outcome_shape` — player_signal was
+re-run after it was last built — was refreshed from current inputs, confirming the split is lossless), and
+the **collision proof** green. Front end re-verified (Players/Teams render from the keyed paths after the
+`public/data` symlinks were repointed; `db.js`/`queries.js` untouched; console clean); the redundant flat
+parquets were then removed. **Deferred to Session 2** (nothing to collide until league
+#2's data exists): the frontend `MY_USERNAME`→`is_me` swap, re-keying the *fetched* league entities
+(teams/roster_positions/league_settings), and `db.js` multi-league addressing. **Next — the corpus harvester
+(Session 2):** the BFS crawl (`_manager_leagues` + `classify_league`) reading `corpus_manifest`, persisting
+the shape-matrix backfill under the new keyed paths — the first data that exercises the isolation L0 just
+built. — Prior front-end: **GRIDIRON FRONT-END — MOBILE-RESPONSIVE PASS SHIPPED: the app is now
 responsive (it was Web-1280 only — `styles.css` had zero media queries).** A single
 `@media (max-width: 768px)` layer over the existing token/class system; the web layout is the
 untouched base above 768px (verified unchanged at 1280). **Commit 1 — chrome + foundation:** flattened
@@ -72,7 +109,7 @@ TEST 2025**; 2020-21 thin (9,15) ⇒ league-wise k-fold *within* train. (3) unsc
 *rose* once they left. **§7 hypothesis — NO improvement on the real league:** 0/10 managers gained comparables
 (activity identical before/after), so the "thin friend-group" §7 read is genuinely thin, **not** the bug (a real
 finding either way). `check_corpus` exit 0 with a new **HARD floor** that would now FAIL on a suspiciously-empty
-train season — the standing instruction *"a clean zero is a bug"* encoded. **Next = L0 keying (Session 1).** —
+train season — the standing instruction *"a clean zero is a bug"* encoded. **Next was L0 keying (Session 1) — DONE, see top of file.** —
 Prior: **CORPUS §0.5 — the league registry (`corpus_manifest`); its 2020-21=0 / 39.2%-of-2045 / matched-179
 figures were the float32 bug above, now corrected.** — Prior front-end: **GRIDIRON FRONT-END — TEAMS CLUSTER SHIPPED: Teams standings + Team
 detail + Manager Dossier, the 2nd front-end slice against the `DATA_CONTRACT` (§4.4 / §4.5 / §4.8).**
