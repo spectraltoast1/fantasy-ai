@@ -156,13 +156,12 @@ function DetailShell({ onBack, children }) {
 function TopBar({ tab, onTab, weeks, asOfWeek, onWeek, league }) {
   return (
     <header className="gr-topbar">
-      <div className="gr-topbar-left">
-        <div className="gr-brand">
-          <span className="gr-brand-mark">G</span>
-          Gridiron
-        </div>
-        <LeagueSwitcher league={league} />
+      <div className="gr-brand">
+        <span className="gr-brand-mark">G</span>
+        Gridiron
       </div>
+
+      <LeagueSwitcher league={league} />
 
       <nav className="gr-tabs">
         {TABS.map((t) => {
@@ -182,11 +181,10 @@ function TopBar({ tab, onTab, weeks, asOfWeek, onWeek, league }) {
         })}
       </nav>
 
-      <div className="gr-topbar-right">
-        <WeekSwitcher weeks={weeks} value={asOfWeek} onChange={onWeek} />
-        <div className="gr-avatar" title={league?.myOwner ?? 'You'}>
-          {(league?.myOwner ?? 'Y').slice(0, 1).toUpperCase()}
-        </div>
+      <WeekSwitcher weeks={weeks} value={asOfWeek} onChange={onWeek} />
+
+      <div className="gr-avatar" title={league?.myOwner ?? 'You'}>
+        {(league?.myOwner ?? 'Y').slice(0, 1).toUpperCase()}
       </div>
     </header>
   );
