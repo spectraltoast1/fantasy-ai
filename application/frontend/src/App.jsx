@@ -129,7 +129,7 @@ function Surface({ tab, detail, depth, asOfWeek, onOpenPlayer, onOpenTeam, onOpe
   } else if (tab === 'league') {
     content = <League asOfWeek={asOfWeek} onOpenTeam={onOpenTeam} />;
   } else if (tab === 'matchups') {
-    content = <Matchups asOfWeek={asOfWeek} />;
+    content = <Matchups asOfWeek={asOfWeek} onOpenMatchup={onOpenMatchup} />;
   } else {
     content = <Placeholder tab={tab} />;
   }

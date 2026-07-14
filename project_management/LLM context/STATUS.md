@@ -1,6 +1,31 @@
 # STATUS
 
-**Last updated:** 2026-07-13 (**GRIDIRON FRONT-END — MATCHUPS SLICE SHIPPED: the fifth and final
+**Last updated:** 2026-07-14 (**GRIDIRON FRONT-END — MOBILE-RESPONSIVE PASS SHIPPED: the app is now
+responsive (it was Web-1280 only — `styles.css` had zero media queries).** A single
+`@media (max-width: 768px)` layer over the existing token/class system; the web layout is the
+untouched base above 768px (verified unchanged at 1280). **Commit 1 — chrome + foundation:** flattened
+`TopBar` to five grid-area-placed children (brand / league / tabs / week / avatar) so the layout
+regroups per breakpoint without touching the DOM → mobile is a **2-row header** (brand + avatar /
+league-card + week-card) + a **fixed bottom tab bar** (icon-over-label, active = violet); `gr-main`
+gains bottom-nav clearance, `gr-detail` goes full-screen, `html/body` guard against horizontal page
+scroll. **Commit 2 — per-surface reflow:** the **tables keep every column** — they break out to the
+full viewport width with a restored edge gutter, tighter interior padding and **thicker rows** (the
+shared-mockup look); Players fits all 7, Teams (which also carries a sparkline) drops only the
+decorative **Trend** column (the Playoff % number carries the read) + caps the team name, keeping every
+data column, and the owner sub truncates while the **YOU** badge always survives (a `tm-owner` span +
+flex sub). League's Your Race band + 3-col dashboard **stack**; Player card / Team detail (stat blocks →
+2×2, this-week bar stacks) / Matchup detail (rosters → one column) all reflow. **Commit 3 — Matchups
+behavior:** a small **`useIsMobile()`** (matchMedia at 768) switches Matchups between the web
+**two-pane** and a mobile **tap-through** (slate → the full-screen `matchup` stack detail, reusing the
+type already wired); App passes `onOpenMatchup`. Views stay pure; no data-layer change. Verified live
+375px (browser preview): 2-row header + bottom nav (tab tap switches surface, active violet);
+Players/Teams fit all columns with taller rows + YOU preserved; League stacks (Posture Map + Positional
+Talent intact); Player card, Team detail (2×2 + stacked this-week bar + depth), Matchup detail (stacked
+rosters + gauges) reflow with no overflow; Matchups slate → tap → full-screen detail → Back; and at 1280
+the web layout (top segmented tabs, League 3-col, Matchups two-pane) is unchanged; console clean.
+**Next — the (backend-blocked) free-agent value read** that unblocks the Players `Available` filter +
+the League Waiver-Wire strip (also queued: self-hosting the fonts for offline/static-hosting). — Prior
+front-end: **GRIDIRON FRONT-END — MATCHUPS SLICE SHIPPED: the fifth and final
 `DATA_CONTRACT` surface (§4.3), completing the 5-surface contract (Players · Dossier · Teams · League ·
 Matchups).** As-of week N the Matchups tab shows week **N+1**'s head-to-head slate, fully *projected*
 (the app is a season replay — the pairing is known in advance, the scores are the future it's pretending
