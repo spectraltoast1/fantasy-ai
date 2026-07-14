@@ -22,15 +22,11 @@ async function initDB() {
   // Live reads: public/data/*.parquet are symlinks to the real snapshots.
   // season = the weekly join; teams = roster_id → team/owner names;
   // slots = the league's declared starting skill-slot config (for optimal lineups);
-  // form/leakage = pre-computed Team Overview analytics (transforms/compute_team_*.py),
-  // promoted out of the JS seam so the heavy math lives in Python;
   // player_signal = the per-player spike signal-quality read (compute_player_signal.py).
   await registerParquet(db, '/data/season_2025.parquet', 'season.parquet');
   await registerParquet(db, '/data/teams_2025.parquet', 'teams.parquet');
   await registerParquet(db, '/data/lineup_slots_2025.parquet', 'slots.parquet');
   await registerParquet(db, '/data/league_settings_2025.parquet', 'league_settings.parquet');
-  await registerParquet(db, '/data/team_form_2025.parquet', 'team_form.parquet');
-  await registerParquet(db, '/data/team_leakage_2025.parquet', 'team_leakage.parquet');
   await registerParquet(db, '/data/player_signal_2025.parquet', 'player_signal.parquet');
   // Gridiron player reads: Production VOR (2025 frozen roster), Market VOR (cross-time
   // 2026 market), and ROS Synthesis (the AI 1-10 grades; sparse — keyed on the 2026
