@@ -259,32 +259,36 @@ def adp_preseason_exists() -> bool:
 # drafted at positional ADP rank r ACTUALLY produce in realized season points?" Fit by
 # transforms/compute_adp_points_curve.py over prior seasons (preseason positional ADP rank ↔ realized
 # season-total fantasy_points_ppr), one row per (position, pos_ecr_rank) carrying the P10/P50/P90 =
-# floor/center/ceiling. Season-agnostic (pooled history), so a single overwrite file — the current
-# season's anchor reads it directly. Kept in derived/ alongside the other compute_* outputs.
+# floor/center/ceiling. **Persisted PER HELD-OUT TARGET SEASON** (Session 2): `holdout_{S}.parquet`
+# is fit on every season EXCEPT S, so the anchor a season-S band reads has never seen S — a multi-
+# season corpus grading §2 on 2023 must not fit the anchor on 2023's own outcomes (silent optimism).
+# Callers pass the season they are computing as `holdout`. Gated by check_adp_curve_leakage.py.
 
 
-def _adp_points_curve_path() -> Path:
-    return _SNAPSHOT_DIR / "derived" / "adp_points_curve.parquet"
+def _adp_points_curve_path(holdout: int) -> Path:
+    return _SNAPSHOT_DIR / "derived" / "adp_points_curve" / f"holdout_{holdout}.parquet"
 
 
-def write_adp_points_curve(df: pl.DataFrame) -> None:
-    """Write the pooled ADP rank→realized-points curve (overwrite; season-agnostic).
+def write_adp_points_curve(df: pl.DataFrame, holdout: int) -> None:
+    """Write the ADP rank→realized-points curve fit with season `holdout` excluded (overwrite).
 
     Output of transforms/compute_adp_points_curve.py: one row per (position, pos_ecr_rank) with the
     smoothed floor_ppr / center_ppr / ceiling_ppr (P10/P50/P90 of realized full-season PPR over a
-    rolling rank window across the training seasons) and the bin sample count n.
+    rolling rank window across the training seasons) + the bin sample count n + provenance
+    (holdout_season / train_seasons). Written to derived/adp_points_curve/holdout_{holdout}.parquet.
     """
-    path = _adp_points_curve_path()
+    path = _adp_points_curve_path(holdout)
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path)
 
 
-def read_adp_points_curve() -> pl.DataFrame:
-    return pl.read_parquet(_adp_points_curve_path())
+def read_adp_points_curve(holdout: int) -> pl.DataFrame:
+    """The leak-free curve for a season: fit with `holdout` (that season) excluded from the fit."""
+    return pl.read_parquet(_adp_points_curve_path(holdout))
 
 
-def adp_points_curve_exists() -> bool:
-    return _adp_points_curve_path().exists()
+def adp_points_curve_exists(holdout: int) -> bool:
+    return _adp_points_curve_path(holdout).exists()
 
 
 # --- Sleeper Matchups ---

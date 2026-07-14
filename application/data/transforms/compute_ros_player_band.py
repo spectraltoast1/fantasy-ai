@@ -164,14 +164,16 @@ def _load_anchor_inputs(season: int) -> tuple[dict, dict, dict]:
     """(adp_map, curve_lookup, curve_max_rank) for the §2 preseason anchor. Returns empty maps if either
     ADP source is absent (fetchers not run) — every anchor then degrades to the pure-projection band,
     keeping the transform runnable without the ADP pipeline. Both sources are NFL-global (season-keyed)."""
-    if not (data_layer.adp_preseason_exists() and data_layer.adp_points_curve_exists()):
-        print("  [anchor] adp_preseason / adp_points_curve missing — running pure-projection band.")
+    if not (data_layer.adp_preseason_exists() and data_layer.adp_points_curve_exists(holdout=season)):
+        print(f"  [anchor] adp_preseason / adp_points_curve(holdout={season}) missing "
+              f"— running pure-projection band.")
         return {}, {}, {}
     adp_map = {
         r["sleeper_player_id"]: r
         for r in data_layer.read_adp_preseason(season).iter_rows(named=True)
     }
-    curve = data_layer.read_adp_points_curve()
+    # Leak-free: the curve for THIS season was fit with THIS season held out of the fit.
+    curve = data_layer.read_adp_points_curve(holdout=season)
     curve_lookup = {
         (r["position"], r["pos_ecr_rank"]): (r["floor_ppr"], r["center_ppr"], r["ceiling_ppr"])
         for r in curve.iter_rows(named=True)
