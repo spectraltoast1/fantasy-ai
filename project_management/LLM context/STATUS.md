@@ -1,6 +1,52 @@
 # STATUS
 
-**Last updated:** 2026-07-14 (**BACKEND — `team_form` + `team_leakage` RETIRED (Improvement-Loop Session 1.5):
+**Last updated:** 2026-07-14 (**BACKEND — GATE REPAIR + one REPRODUCIBILITY DIAGNOSIS (Improvement-Loop
+Session 1.6): the broken instrument fixed before Sessions 2–3 measure against it.** Baseline measurement
+first corrected the brief: only **3** of the "4 red gates" were actually red (`backtest_ros_player_band` was
+already GREEN at 0.817 — its verdict grades the rostered-freeze population, not the whole pool the brief
+described). **C1 — the two L0-fallout crashes.** `check_market_vor` TypeError: the brief's "give
+`_market_vor_path` a default" mis-diagnosed — **no** `_*_path` helper default-resolves; the public
+`read_*`/`*_exists` wrappers do, and the gate bare-called the private helper. Fixed by routing through
+`market_vor_exists` + reading the FULL tall parquet via the resolved key (`read_market_vor` filters to the
+latest snapshot, so it can't back the recompute-match); **also regenerated the stale 1-snapshot market_vor
+cache to the 33 banked market days** (overlap byte-identical — purely newly-banked days; the recompute-match
+is regenerate-then-verify by design for the daily market). Path-fn audit: only that one call site was
+affected. `check_ros_synthesis` ValueError "No is_mine league for 2026": NOT a scoring-scope error
+(ros_synthesis is deliberately league-scoped) — the news-world season (2026) was used as a league-registry
+season, but the is_mine league is a 2025 redraft league (no 2026 `league_id` exists), and scoring_key
+resolution ALSO goes through `_active_league`. Fixed with **`_active_league_any`**, a season-robust resolver
+(exact is_mine season, else the latest ≤ it) wired into ros_synthesis read/write/exists ONLY (every other
+entity keeps strict `_active_league`); guarded `_resolve_anchor_season`; and **completed the L0 migration
+Session 1 couldn't** (it crashed on `_active_league(2026)`): byte-preserving flat→keyed copy of
+`ros_synthesis_2026.parquet`, `public/data` symlink repointed, flat removed. **C2 — the 4 missing
+`production_vor` rows, PROVEN not patched.** New read-only `--diagnose` mode names them: all one player —
+**Travis Hunter (12530, JAX)** at as_of_week 1-4. Mechanism: `nfl_stats` labels him **CB** (his fantasy
+points are IDP/return), the Sleeper registry labels him **WR** — a two-way rookie. `join_season` is rebuilt
+from the 24h registry via `audit_join`, which keeps a rostered remainder only when the registry then calls
+him a skill position, so his membership in the roster substrate **flips with the registry's label at rebuild
+time**. This is audit S1.1's reproducibility hole, via the ROSTER path (`join_season ← audit_join ←
+registry`), not the direct position join the brief hypothesised (that's `compute_market_vor`'s). Reported +
+fix proposed (freeze `position` into `join_season` at write time, or pin the registry snapshot) in
+`S1_6_FINDING_roster_reproducibility.md` for a follow-up session; **not fixed here** (regenerating would bake
+in a transient registry state). `backtest_roster_shape` stays **honestly RED** with a named, proven reason.
+**C3 — `ros_player_band` calibrated pool (report, don't tune).** Added `in_calibrated_pool` (first-class
+suppression column): per (season, as_of_week) the top-300 skill players by `ros_center` UNION per-position
+floors (QB32/RB80/WR90/TE32), league-agnostic so it keeps the scoring-scope. **BULL_Z UNCHANGED** — proven:
+all 16 pre-existing band columns byte-identical, only the boolean added. Positional composition REPORTED at
+freeze: QB48/RB80/TE55/WR121 (QB over-weight visible). Gate gains a whole-pool vs calibrated-pool coverage
+evidence block. **MEASURED CORRECTION to the brief:** whole-pool coverage does NOT collapse to ~0.70 — at
+freeze under BULL_Z=1.44 it is **0.841** (whole, n=529) vs **0.796** (calibrated, n=304), BOTH calibrated;
+deep-bench fodder has near-zero projections AND near-zero actuals (trivially covered), so the pool
+restriction's value is decision-relevance + suppression, not rescuing a collapse. **Reported gap (wiring
+deferred):** `has_ros_anchor` keys off rostered membership, not `in_calibrated_pool` — 6 rostered players sit
+outside the pool and would still reach the AI with an out-of-pool anchor. **Verified:** `check_market_vor` +
+`check_ros_synthesis` exit 0; `backtest_ros_player_band` still green + evidence; `backtest_roster_shape`
+honestly red (diagnosed); all 8 answer-key gates byte-identical to baseline (scoring_recompute's lone diff is
+pre-existing display-sample non-determinism); front end renders live at 1280px with zero console errors —
+Players table (MKT refreshed), Ja'Marr Chase card shows ROS BULL 9/10 from the repointed ros_synthesis. **No
+`queries.js`/view edits — the seam held.** **Next — Session 2 (substrate backfill) / Session 3 (harvest) can
+start on a trustworthy baseline; queued follow-ups: the roster-reproducibility fix + the `has_ros_anchor`
+rewire.** — Prior: BACKEND — `team_form` + `team_leakage` RETIRED (Improvement-Loop Session 1.5):
 the scope-correction before the corpus harvest.** Two fully-orphaned derived reads — neither a DECISION_READS
 §1–§7 read, their only consumers pre-Gridiron panels imported by nobody — deleted across backend, front end and
 docs (so the harvester won't compute them ~276× for reads that don't exist). `team_leakage` was retired **on
@@ -304,6 +350,42 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**§1.6 — Gate Repair + one reproducibility diagnosis (Improvement-Loop; 3 commits).** Repaired the broken
+gate instrument before Sessions 2–3 measure against it. Baseline measurement corrected the brief: only **3**
+of the "4 red gates" were red — `backtest_ros_player_band` was already GREEN (0.817; its verdict grades the
+rostered-freeze population). **C1 — two L0-fallout crashes.** `check_market_vor` TypeError: no `_*_path`
+helper default-resolves (the public wrappers do); the gate bare-called the private `_market_vor_path`. Fixed
+by routing through `market_vor_exists` + reading the FULL parquet via the resolved key (`read_market_vor`
+filters to the latest snapshot); **regenerated the stale 1-snapshot market_vor to the 33 banked market days**
+(overlap byte-identical — newly-banked days only). `check_ros_synthesis` ValueError "No is_mine league for
+2026": the news-world season is used as a registry season, but the is_mine league is a 2025 redraft league
+(no 2026 `league_id`). Fixed with **`_active_league_any`** (season-robust: exact is_mine season else the
+latest ≤ it), wired into ros_synthesis read/write/exists ONLY; guarded `_resolve_anchor_season`; completed
+the L0 migration Session 1 couldn't (crashed on `_active_league(2026)`) — flat→keyed byte-preserving copy of
+`ros_synthesis_2026.parquet`, `public/data` symlink repointed, flat removed. **C2 — the 4 missing
+`production_vor` rows, PROVEN not patched.** New read-only `--diagnose` mode: all 4 are one player, **Travis
+Hunter (12530, JAX)** at as_of_week 1-4. `nfl_stats` labels him **CB** (IDP/return points), the registry
+labels him **WR** — a two-way rookie; `join_season` (rebuilt from the 24h registry via `audit_join`) keeps a
+rostered remainder only when the registry then calls him skill, so his substrate membership **flips with the
+registry at rebuild time** — audit S1.1's reproducibility hole via the ROSTER path (not the direct position
+join, which is `compute_market_vor`'s). Reported + fix proposed in `S1_6_FINDING_roster_reproducibility.md`
+(freeze `position` into `join_season`, or pin the registry) for a follow-up; **not fixed** (regenerating bakes
+in a transient state). `backtest_roster_shape` stays **honestly RED**, named + proven. **C3 —
+`ros_player_band` calibrated pool (report, don't tune).** Added `in_calibrated_pool` (first-class suppression
+column): per (season, as_of_week) top-300 by `ros_center` UNION per-position floors (QB32/RB80/WR90/TE32),
+league-agnostic. **BULL_Z UNCHANGED** — all 16 band columns byte-identical, only the boolean added.
+Composition reported at freeze QB48/RB80/TE55/WR121. Gate gains whole-pool vs calibrated-pool coverage
+evidence. **MEASURED CORRECTION:** whole-pool coverage does NOT collapse to ~0.70 — 0.841 (whole, n=529) vs
+0.796 (calibrated, n=304), both calibrated (fodder has near-zero projections AND actuals → trivially
+covered); the pool's value is decision-relevance + suppression. **Gap reported (wiring deferred):**
+`has_ros_anchor` keys off rostered membership, not the pool — 6 rostered players sit outside it. **Verified:**
+`check_market_vor` + `check_ros_synthesis` exit 0; band gate green + evidence; roster_shape honestly red;
+8 answer-key gates byte-identical to baseline; front end live at 1280px, zero console errors (Players MKT
+refreshed, Chase card ROS BULL 9/10 from the repointed parquet). No `queries.js`/view edits — seam held.
+**Next — Sessions 2/3 unblocked on a trustworthy baseline; queued: the roster-reproducibility fix + the
+`has_ros_anchor` rewire.**
+
+> earlier build
 **§1.5 — `team_form` + `team_leakage` retired (Improvement-Loop scope correction; 3 commits).** Two fully-orphaned
 derived reads (neither a §1–§7 read; only consumers were pre-Gridiron panels imported by nobody), deleted **before
 the corpus harvest** so they aren't computed ~276× for reads that don't exist. `team_leakage` retired **on
@@ -351,36 +433,6 @@ activity byte-identical before/after, so the "honestly thin friend group" §7 re
 the bug (a real finding either way; dossiers not regenerated — identical). Docs: correction notes added to
 `LEAGUE_CORPUS.md` + `SPIKE_CORPUS_FINDINGS.md` (marked corrected, not rewritten). **Next = L0 keying (Session 1)**
 — consumes the corrected manifest.
-
-> earlier build
-**Gridiron front-end — League surface: Your Race + Playoff Picture + Posture Map + Positional Talent (3rd front-end slice; 3 commits).**
-The "whole league at a glance" surface (DATA_CONTRACT §4.2). Leans on the Teams-cluster `loadStandings` — ONE
-source of records/odds/posture across Teams and League. **(1) Your Race + Playoff Picture:** new
-`queries.loadLeague(asOfWeek)` composes `loadStandings` with the REAL playoff cut + team count from
-`league_settings` (`playoff_teams = 4`, not the prototype's 6). `League.jsx` renders the full-width Your Race
-band (playoff chance + posture chip, Seed N of 10, "top 4 advance", magic number via `magicLine` off
-`bracket_odds` magic_wins/remaining_games) and the 3-column dashboard, Playoff Picture in col 1 (teams by odds,
-YOU badge, magic sublines, posture-toned odds trendlines, a PLAYOFF LINE after seed 4). The this-week
-head-to-head + win% is **deferred honestly** to the Matchups slice (its win prob is an unsurfaced bracket-sim
-read) — a note, not a fake bar. **(2) Posture Map:** an SVG well (reusing the standings) — X = playoff odds,
-Y = all-play % inverted (the §5 shipped axis, not `true_rank`); quadrant tints + the dashed on-pace diagonal +
-posture-palette corner labels; one dot per team at (odds, all-play) colored by posture, my team ringed; a dot →
-Team detail. **(3) Positional Talent:** new `loadPositionalTalent()` sums each team's positive `market_vor` per
-position at the latest market snapshot, ranked per position; a QB/RB/WR/TE toggle over the bars, with the
-**cross-time POC note** (2026 market × 2025 roster — the locked decision). Not week-parameterized (the market is
-current, doesn't replay). The **Waiver Wire strip is deferred** — best-available + THIN/STREAMABLE/DEEP needs a
-free-agent pool entity (none in V1). `App.jsx` renders League for the league tab; **no db.js change** —
-bracket_odds / market_vor / league_settings were already registered. Seam discipline kept (all data access in
-`queries.js`; views are pure renderers). Verified live at 1280px: Your Race 87% / Riding luck / Seed 3 of 10 /
-top 4 advance / Clinch in 6 of next 11; Playoff Picture Bski 91% → 1% with the PLAYOFF LINE after seed 4;
-Posture Map dots placed + colored (Bski contender top-right, my Tet Lasso riding-luck), a dot → Team detail;
-Positional Talent RB/QB toggle re-ranks (QB: Won't you be my Naber 1.0 / Tet Lasso YOU 0.9 — matches the
-parquet); **week switcher replays to wk2** (Your Race 35%, Playoff Picture reshuffles, map dots move) while
-Positional Talent stays constant (current market — honest cross-time); Playoff-row + posture-dot → Team detail →
-Back; console clean on a fresh load (the mid-edit Fast-Refresh transients don't reproduce). **Next — Matchups
-slice (the last surface: the week's slate + head-to-head win prob + score-range bands, off `bracket_sim` +
-`projection_consensus`); plus the mobile-responsive pass + the free-agent value read (unblocks Available/
-waivers).**
 
 > built
     - nflreadpy fetcher

@@ -54,6 +54,37 @@ SKILL_POSITIONS = ["QB", "RB", "WR", "TE"]
 BULL_Z = 1.44
 ANCHOR_W = 0.25
 
+# --- Calibrated pool (S1.6) -------------------------------------------------------------------------
+# The band is emitted for the WHOLE projected skill pool, but a band is only honest *within* the
+# population its width was fit on. `in_calibrated_pool` marks the decision-relevant subset — everyone a
+# manager could plausibly act on: rostered players plus the waiver-wire pickups worth pricing. Defined
+# league-AGNOSTICALLY (this entity is scoring-scoped — coupling it to "rostered" would re-introduce a
+# league dependency and undo the L0 split) as the top POOL_SIZE skill players by projected ROS value
+# (ros_center) per (season, as_of_week), with per-position FLOORS. A flat top-N by raw points over-weights
+# QB and starves TE in most scoring, so the floors guarantee a minimum calibrated depth per position; the
+# composition is REPORTED (not assumed) at compute time. The pool shrinks naturally as the horizon closes
+# (min(POOL_SIZE, available)); a player entering/leaving week to week is correct. Sized to comfortably
+# cover a 14-team league's rostered pool (~210 skill) plus a real waiver buffer. NOTE: this does NOT tune
+# BULL_Z — the constant is deliberately left as-is; re-fitting it to this pool belongs to the Tuner, on the
+# corpus, with holdouts (re-sweeping here would be tuning on the test set).
+POOL_SIZE = 300
+POSITION_FLOORS = {"QB": 32, "RB": 80, "WR": 90, "TE": 32}
+
+
+def _mark_calibrated_pool(df: pl.DataFrame) -> pl.DataFrame:
+    """Add `in_calibrated_pool`: per as-of week, the top min(POOL_SIZE, available) skill players by
+    ros_center, UNIONed with the top POSITION_FLOORS[pos] per position (so no position is starved).
+    Pure — ranks are ordinal by ros_center desc; ties broken deterministically by the ordinal rank."""
+    floor_expr = pl.col("position").replace_strict(POSITION_FLOORS, default=0, return_dtype=pl.Int64)
+    return df.with_columns(
+        (
+            (pl.col("ros_center").rank("ordinal", descending=True).over("as_of_week")
+             <= pl.min_horizontal(pl.lit(POOL_SIZE), pl.len().over("as_of_week")))
+            | (pl.col("ros_center").rank("ordinal", descending=True).over("as_of_week", "position")
+               <= floor_expr)
+        ).alias("in_calibrated_pool")
+    )
+
 
 def _ros_sigma(consensus: pl.DataFrame, remaining_weeks) -> pl.DataFrame:
     """Per player: the accumulated ROS band std over the remaining schedule = √(Σ band_ppr²).
@@ -219,9 +250,9 @@ def compute(season: int) -> pl.DataFrame:
             curve_lookup=curve_lookup, curve_max_rank=curve_max_rank,
         ))
 
-    df = pl.DataFrame(all_rows, infer_schema_length=None).sort(
-        "as_of_week", "position", "ros_bull", descending=[False, False, True]
-    )
+    df = _mark_calibrated_pool(
+        pl.DataFrame(all_rows, infer_schema_length=None)
+    ).sort("as_of_week", "position", "ros_bull", descending=[False, False, True])
     freeze = int(df["as_of_week"].max())
     latest = df.filter(pl.col("as_of_week") == freeze)
     print(f"=== ROS Player Band: season={season}  as_of_week 1..{freeze}  "
@@ -232,6 +263,14 @@ def compute(season: int) -> pl.DataFrame:
         "anchor_floor", "anchor_ceiling"))
     applied = latest.filter(pl.col("anchor_applied")).height
     print(f"  week {freeze} preseason-anchor applied: {applied} of {latest.height}")
+    # Calibrated-pool composition — REPORT it so the QB-over-weight / TE-starve the floors correct for is
+    # visible, not assumed (S1.6). Shown at the freeze (widest pool) and pooled over all as-of weeks.
+    pool = df.filter(pl.col("in_calibrated_pool"))
+    fz_pool = pool.filter(pl.col("as_of_week") == freeze)
+    comp = dict(fz_pool.group_by("position").len().sort("position").iter_rows())
+    print(f"  in_calibrated_pool: freeze week {freeze} = {fz_pool.height}/{latest.height} players "
+          f"(floors {POSITION_FLOORS}, cap {POOL_SIZE}); positional composition {comp}")
+    print(f"  in_calibrated_pool: {pool.height}/{df.height} rows across as_of_weeks 1..{freeze}")
     return df
 
 

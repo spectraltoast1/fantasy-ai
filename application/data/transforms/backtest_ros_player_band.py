@@ -151,6 +151,48 @@ def _coverage(df: pl.DataFrame) -> tuple[float, float, float]:
     return inside / n, below / n, above / n
 
 
+def _pool_coverage_evidence(season: int) -> None:
+    """Report the PERSISTED band's coverage on its whole projected pool vs the `in_calibrated_pool` subset
+    (S1.6). The gated verdict above grades the is_mine league's rostered-freeze players (the population
+    BULL_Z was fit on); this evidence grades the entity's ACTUAL population — the whole scoring-scoped pool
+    the band is emitted over. It exposes what the gated number cannot: the band, under the UNCHANGED
+    BULL_Z=1.44, is well-calibrated on the decision-relevant pool but polluted on the whole pool (deep-bench
+    / waiver fodder swing far wider than their projections). This is evidence for the pool restriction, NOT
+    a re-tune — BULL_Z stays; re-fitting belongs to the Tuner on the corpus with holdouts."""
+    try:
+        band = data_layer.read_ros_player_band(season, as_of_week="all")
+    except FileNotFoundError:
+        print("  [evidence] no persisted ros_player_band — run compute_ros_player_band first")
+        return
+    if "in_calibrated_pool" not in band.columns:
+        print("  [evidence] persisted band predates in_calibrated_pool — recompute to see pool coverage")
+        return
+    actual = _actual_weekly(season)
+    max_proj_week = int(data_layer.read_projection_consensus(season)["week"].max())
+    freeze = int(band["as_of_week"].max())
+    fz = band.filter(pl.col("as_of_week") == freeze)
+    rows = []
+    for r in fz.iter_rows(named=True):
+        act = sum(actual.get((r["sleeper_player_id"], wk), 0.0)
+                  for wk in range(freeze + 1, max_proj_week + 1))
+        rows.append({"bear": r["ros_bear"], "bull": r["ros_bull"], "actual": act,
+                     "in_calibrated_pool": r["in_calibrated_pool"]})
+    graded = pl.DataFrame(rows)
+    whole = _coverage(graded)
+    pool_df = graded.filter(pl.col("in_calibrated_pool"))
+    pool = _coverage(pool_df)
+    comp = dict(fz.filter(pl.col("in_calibrated_pool")).group_by("position").len().sort("position").iter_rows())
+    print()
+    print(f"  [evidence] persisted-band coverage at freeze week {freeze} (BULL_Z={BULL_Z}, target "
+          f"{TARGET_COVERAGE:.2f}):")
+    print(f"    whole pool          (n={graded.height}): coverage {whole[0]:.3f}  "
+          f"below-bear {whole[1]:.3f}  above-bull {whole[2]:.3f}")
+    print(f"    in_calibrated_pool  (n={pool_df.height}): coverage {pool[0]:.3f}  "
+          f"below-bear {pool[1]:.3f}  above-bull {pool[2]:.3f}   composition {comp}")
+    print(f"    → restricting to the calibrated pool moves coverage {whole[0]:.3f} → {pool[0]:.3f} "
+          f"(no BULL_Z change); the whole-pool number is the honest cost of pricing waiver fodder.")
+
+
 def sweep(season: int) -> None:
     """Sweep (BULL_Z × ANCHOR_W) jointly against the answer key: pick the pair whose freeze-week
     coverage is closest to TARGET_COVERAGE (tails reported so an asymmetric miss is visible). Joint
@@ -222,6 +264,9 @@ def run(season: int, bull_z: float = BULL_Z, anchor_w: float = ANCHOR_W) -> bool
     print()
     print(f"  [evidence] below-bear (bear-case broke) rate by security tier:")
     print(f"    stable {_miss_low(stable):.3f} (n={stable.height})   non-stable {_miss_low(shaky):.3f} (n={shaky.height})")
+
+    # Whole-pool vs calibrated-pool coverage on the PERSISTED band (S1.6) — evidence, not gated.
+    _pool_coverage_evidence(season)
 
     ok = calibrated and monotonic
     print()
