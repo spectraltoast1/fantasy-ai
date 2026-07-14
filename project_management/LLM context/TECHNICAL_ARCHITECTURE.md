@@ -2,7 +2,25 @@
 
 > Engineering context document for Claude Code. Describes the stack, folder structure, data layer design, and technical principles. Updated regularly as the project evolves.
 
-**Last reviewed:** 2026-07-14 (**Backend — Gate Repair (Improvement-Loop Session 1.6)** — two technical
+**Last reviewed:** 2026-07-14 (**Backend — Roster Substrate Reproducibility: pin the registry
+(Improvement-Loop Session 1.7)** — the principle to carry: **a rostered player's skill-eligibility is a
+FANTASY question, answered by the Sleeper registry ("what slot does he fill?"), not an NFL question answered
+by nflreadpy ("what did he produce?").** A two-way player (Travis Hunter — nflreadpy CB, Sleeper WR) was
+dropped by the join's SKILL_POSITIONS filter because the *stats* source was answering the *eligibility*
+question, and that answer drifted with the mutable 24h registry across rebuilds. The fix: a **pinned,
+immutable, versioned players snapshot** — `data_layer.ACTIVE_PLAYERS_SNAPSHOT` (git-tracked id;
+`players_snapshot_{id}.parquet` in the gitignored runtime store), `read_pinned_sleeper_players` /
+`write_sleeper_players_snapshot` (write-once) / `capture_players_snapshot`, and a
+`sleeper.py capture-players-snapshot` CLI. Every registry-derived read now resolves against the pin, never
+the live cache: `join_nfl_sleeper_weekly` (eligibility — overrides a stats-position on a registry
+disagreement), `audit_join` (remainder resolution — dormant today, wakes for the corpus), `compute_market_vor`
+(position join), `compute_player_signal` (security/injury axis). Bumping `ACTIVE_PLAYERS_SNAPSHOT` is a
+deliberate versioned event (→ rebuild + no-regression review), never ambient drift. **This makes a
+from-scratch harvest reproducible** — the operation Session 3 runs 276× — which is why it blocks the corpus.
+Determinism proven by a **twice-run byte-identical** rebuild; the movement was bounded to exactly the one
+two-way player. **Audit S1.1 (the roster reproducibility hole) is STRUCK.** Residual (named, not a bug):
+pinning gives determinism, NOT historical accuracy — the registry is current-state, a Session-3 selection
+footnote. — Prior — **Backend — Gate Repair (Improvement-Loop Session 1.6)** — two technical
 decisions worth carrying: (1) **`data_layer._active_league_any`** — a season-robust sibling of
 `_active_league` for **current-world reads whose season outruns the registry's league seasons**
 (`ros_synthesis` is news-season-keyed at 2026, but the is_mine league is a 2025 redraft league with no 2026
