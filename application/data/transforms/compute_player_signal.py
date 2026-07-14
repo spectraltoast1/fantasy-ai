@@ -475,12 +475,15 @@ def _compute_as_of(
 
 
 def _security_map() -> dict:
-    """sleeper_player_id → security category, from the current Sleeper roster cache
+    """sleeper_player_id → security category, from the PINNED Sleeper registry snapshot
     (injury_status, depth_chart_order). This is "now" data, not historical — Sleeper
     doesn't snapshot injury/depth-chart state by week — so the same value applies to
     every as_of_week slice for a given player. A documented simplification, not a bug:
-    the source data has no history to be more precise with."""
-    players = data_layer.read_sleeper_players()
+    the source data has no history to be more precise with. Session 1.7: reads the pinned
+    snapshot, not the live 24h cache, so the security axis is reproducible too (the same
+    registry-drift class the eligibility fix closes; 0 movement at capture since the pin is
+    a copy of the live cache)."""
+    players = data_layer.read_pinned_sleeper_players()
     return {
         row["sleeper_player_id"]: _security(row["injury_status"], row["depth_chart_order"])
         for row in players.iter_rows(named=True)

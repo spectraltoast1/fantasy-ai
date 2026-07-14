@@ -333,6 +333,33 @@ def _print_validation(
 # Entry point
 # ---------------------------------------------------------------------------
 
+def _apply_registry_eligibility(joined: pl.DataFrame) -> pl.DataFrame:
+    """Registry-authoritative skill-eligibility (Session 1.7 — roster reproducibility).
+
+    For a *rostered* player, "what slot does he fill?" is a **fantasy** question answered by the Sleeper
+    registry — not by nflreadpy, which answers "what did he produce?". When the two DISAGREE on
+    skill-eligibility (a two-way player like Travis Hunter: nflreadpy labels him CB from his defensive
+    line, Sleeper rosters him at WR), the **pinned** registry wins: the player is classified by the slot he
+    actually fills and survives the SKILL_POSITIONS filter deterministically. Agreement cases (virtually
+    everyone) are untouched — nothing to arbitrate. The registry is read PINNED, so this classification
+    cannot drift with the 24h players cache. Players with a still-null position (no nflreadpy row) are left
+    for audit_join, which resolves them against the same pinned snapshot.
+    """
+    reg = data_layer.read_pinned_sleeper_players().select(
+        "sleeper_player_id", pl.col("position").alias("_reg_position")
+    )
+    joined = joined.join(reg, on="sleeper_player_id", how="left")
+    conflict = (
+        pl.col("_reg_position").is_in(list(SKILL_POSITIONS))
+        & pl.col("position").is_not_null()
+        & ~pl.col("position").is_in(list(SKILL_POSITIONS))
+    )
+    return joined.with_columns(
+        position=pl.when(conflict).then(pl.col("_reg_position")).otherwise(pl.col("position")),
+        position_group=pl.when(conflict).then(pl.col("_reg_position")).otherwise(pl.col("position_group")),
+    ).drop("_reg_position")
+
+
 def run(season: int, week: int) -> None:
     nfl = _load_nfl_stats(season, week)
     metadata = _build_player_metadata(season)
@@ -347,6 +374,11 @@ def run(season: int, week: int) -> None:
 
     # Final fallback: player_id and pfr_id from id map for players absent from nflreadpy.
     joined = _apply_player_id_map_fallback(joined)
+
+    # Registry-authoritative skill-eligibility (Session 1.7): the pinned Sleeper registry decides the slot a
+    # rostered player fills, overriding a conflicting nflreadpy stats-position for two-way players. Applied
+    # before the pre-filter capture so remainders + the skill filter both see the corrected eligibility.
+    joined = _apply_registry_eligibility(joined)
 
     # Capture pre-filter state for the reconciliation report.
     pre_filter = joined

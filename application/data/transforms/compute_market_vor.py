@@ -67,12 +67,16 @@ MARKET_PROFILE = "redraft-1qb-12t-ppr1"
 
 def _market_pool(season: int, profile: str) -> pl.DataFrame:
     """The market pool for one profile: every non-pick player's value, with position joined from the
-    Sleeper registry (the feed carries no position label). Filtered to skill positions. One row per
-    (snapshot_date, sleeper_player_id) — the value time-series for the whole profile."""
+    PINNED Sleeper registry (the feed carries no position label). Filtered to skill positions. One row per
+    (snapshot_date, sleeper_player_id) — the value time-series for the whole profile.
+
+    Session 1.7: the position join reads the pinned snapshot, not the live 24h cache — closing this entity's
+    slice of the same registry-drift class the join corrects (a two-way player's market position was
+    otherwise non-deterministic across cache refreshes)."""
     market = data_layer.read_leaguelogs_market().filter(
         (pl.col("profile") == profile) & (~pl.col("is_pick"))
     ).select("snapshot_date", "season", "sleeper_player_id", "value")
-    registry = data_layer.read_sleeper_players().select(
+    registry = data_layer.read_pinned_sleeper_players().select(
         "sleeper_player_id", "position"
     ).filter(pl.col("position").is_in(SKILL_POSITIONS))
     return market.join(registry, on="sleeper_player_id", how="inner").rename(

@@ -60,7 +60,7 @@ def diagnose(season: int) -> None:
     print(f"  on-disk rows={on_disk.height}  fresh compute rows={fresh.height}  "
           f"(on-disk-not-fresh={only_disk.height}, fresh-not-on-disk={only_fresh.height})")
 
-    reg = data_layer.read_sleeper_players().select(
+    reg = data_layer.read_pinned_sleeper_players().select(
         "sleeper_player_id", "full_name", "position", "team", "status")
     stats = data_layer.read_nfl_stats(season).select("sleeper_player_id", "week", "position")
     consensus = data_layer.read_projection_consensus(season).select(
