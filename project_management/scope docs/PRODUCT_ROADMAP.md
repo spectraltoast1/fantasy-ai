@@ -48,8 +48,8 @@ What exists today, as the roadmap's starting line:
   `nfl_stats` (usage: target share, air yards, wopr, snaps, EPA — weeks 1–18),
   `sleeper` (rosters, matchups, transactions, player registry), `leaguelogs`
   (daily market value).
-- **Transforms** → derived parquet: join, audit, lineup slots, `compute_team_form`
-  (EWMA trajectory), `compute_team_leakage` (lineup efficiency + coachable/variance).
+- **Transforms** → derived parquet: join, audit, lineup slots, `compute_player_signal`,
+  `compute_production_vor`, and the §2–§7 derived reads.
 - **Front-end** (React + Vite + DuckDB-WASM, client-side; `queries.js` is the
   data seam): League panel (power rankings + team drawer) and **Team Overview
   complete — all 4 lenses** (construction, star dependence, form, where-you-leave-points).
@@ -59,8 +59,8 @@ What exists today, as the roadmap's starting line:
 
 **Read of it:** this is a strong *descriptive* dashboard — it shows your team's
 state. The work ahead is the leap from *showing state* to *grading a decision
-against a prior*. The dashboard isn't a detour; form/leakage/construction become
-the "league context + your-team signal" inputs to the engines.
+against a prior*. The dashboard isn't a detour; its signals become the
+"league context + your-team signal" inputs to the engines.
 
 ---
 
@@ -77,8 +77,8 @@ gap no other tool fills.
 
 **Build:**
 - New transform `compute_player_signal.py` → `snapshots/derived/player_signal_{season}.parquet`
-  (mirror the `compute_team_form`/`leakage` shape: pure functions, injected
-  constants, shared helpers in `_analytics.py`). One row per rostered skill player.
+  (the shared transform shape: pure functions, injected constants, shared helpers in
+  `_analytics.py`). One row per rostered skill player.
 - It splits recent production into **repeatable** (volume/opportunity: target share,
   carries, snap share, air-yards share, routes) vs **regression-prone** (efficiency,
   TD rate, big-play/aDOT spikes, low-volume outliers). Output is a *repeatability

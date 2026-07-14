@@ -1,6 +1,29 @@
 # STATUS
 
-**Last updated:** 2026-07-14 (**BACKEND — L0 KEYING SHIPPED + REAL-DATA GATE GREEN (Improvement-Loop Session 1): the unlock —
+**Last updated:** 2026-07-14 (**BACKEND — `team_form` + `team_leakage` RETIRED (Improvement-Loop Session 1.5):
+the scope-correction before the corpus harvest.** Two fully-orphaned derived reads — neither a DECISION_READS
+§1–§7 read, their only consumers pre-Gridiron panels imported by nobody — deleted across backend, front end and
+docs (so the harvester won't compute them ~276× for reads that don't exist). `team_leakage` was retired **on
+principle**: it graded start/sit against **realized points** — a design-law-1 violation that coached the exact
+spike-week error `Error_Mapping.md` fights; the *process*-graded successor (start/sit vs the
+`projection_consensus` prior knowable at decision time) is recorded as future work in `DECISION_READS.md`, **not
+built**. **Commit 1 (backend):** deleted `compute_team_form.py`/`compute_team_leakage.py` + the six `data_layer`
+read/write/path fns + the persisted parquets; dropped leakage from `backtest_roster_shape` (the frame-eq target
+**and** its synthetic-superflex sub-check — kept production_vor/true_rank/positional_depth + the
+position_pools/VOR checks) and the two entities from `backtest_l0_keying`'s `_LEAGUE_ENTITIES`; **`_analytics.py`
+untouched.** **Commit 2 (front end):** deleted `TeamPanel.jsx`/`LeaguePanel.jsx` + the whole dead `queries.js`
+cluster reachable only from them (loadPowerRankings / loadTeamDetails-**plural** / loadTeamRosters / loadTeams /
+loadTeamPlayers + their SQL consts & row-assemblers), the two `db.js` registrations, and the two `public/data`
+symlinks; **kept** the live **singular** `loadTeamDetail` + `expandSlots`/`optimalLineup`/`teamProjections`.
+**Commit 3 (docs):** DECISION_READS "Retired reads", TECHNICAL_ARCHITECTURE (folder/derived/config-seed/
+Known-Scope-Exclusions — `MIN_GAMES` now in one place), READ_BUILD_ORDER, PRODUCT_ROADMAP. **Verified:**
+`compileall` clean + zero dangling refs; `backtest_l0_keying` still **exit 0**; `backtest_roster_shape` output
+**byte-identical except the removed leakage lines** (deleting a dead read moved **no live number** — standing
+instruction 5); all five front-end surfaces (Players · Teams · League · **Matchups** · Dossier) render live at
+1280px with **zero console errors** and **no fetch** for the retired parquets. **⚠️ Pre-existing (NOT this
+session):** `backtest_roster_shape`'s `production_vor` frame-eq FAILs at baseline — the on-disk derived parquet
+(635 rows) is **stale** vs current compute (631); a shared-store data-regeneration concern, orthogonal to this
+deletion and left unfixed here (regenerating would "move numbers"). **— Prior: BACKEND — L0 KEYING SHIPPED + REAL-DATA GATE GREEN (Improvement-Loop Session 1): the unlock —
 every league/scoring-scoped derived parquet is now partitioned by its scope, so league #2 can't silently
 overwrite #1 (audit S1.3), `projection_consensus` is stored per scoring profile not scoring-agnostically
 (S3.1), and `ros_outcome_shape` is split into a scoring-scoped `ros_player_band` + a league-scoped
@@ -281,6 +304,27 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**§1.5 — `team_form` + `team_leakage` retired (Improvement-Loop scope correction; 3 commits).** Two fully-orphaned
+derived reads (neither a §1–§7 read; only consumers were pre-Gridiron panels imported by nobody), deleted **before
+the corpus harvest** so they aren't computed ~276× for reads that don't exist. `team_leakage` retired **on
+principle** — it graded start/sit against **realized points** (a design-law-1 violation coaching the spike-week
+START/SIT error); the *process*-graded successor (vs the `projection_consensus` prior knowable at decision time)
+is recorded as future work in `DECISION_READS.md`, not built. **C1 backend:** dropped
+`compute_team_form.py`/`compute_team_leakage.py` + the six `data_layer` fns + the persisted parquets; pruned
+leakage from `backtest_roster_shape` (frame-eq target **and** its synthetic-superflex sub-check, keeping the
+VOR/position_pools checks) and `backtest_l0_keying`'s `_LEAGUE_ENTITIES`; **`_analytics.py` untouched**. **C2
+front end:** deleted `TeamPanel.jsx`/`LeaguePanel.jsx` + the whole dead `queries.js` cluster only they reached +
+the two `db.js` registrations + the two `public/data` symlinks; **kept** the live **singular** `loadTeamDetail` +
+`expandSlots`/`optimalLineup`/`teamProjections`. **C3 docs:** DECISION_READS "Retired reads" +
+TECHNICAL_ARCHITECTURE / READ_BUILD_ORDER / PRODUCT_ROADMAP. **Verified:** `compileall` clean, zero dangling refs;
+`backtest_l0_keying` **exit 0**; `backtest_roster_shape` byte-identical **bar the removed leakage lines** (no live
+number moved — standing instruction 5); all five surfaces (Players · Teams · League · **Matchups** · Dossier)
+render live at 1280px, zero console errors, no retired-parquet fetch. **⚠️ Pre-existing (NOT this session):**
+`backtest_roster_shape`'s `production_vor` frame-eq FAILs at baseline (on-disk 635 rows **stale** vs 631
+recomputed) — a shared-store data-regeneration concern, orthogonal to this deletion, left unfixed (regenerating
+would move numbers). **Next — the corpus harvester (Session 2).**
+
+> earlier build
 **§0.6 — the `_scoring` float32 tolerance fix (a live engine bug the corpus caught) + corpus re-select.**
 `scoring_profile` classified league scoring by `abs(w−std) > _TOL` with `_TOL=1e-9`, but Sleeper serves
 weights at **float32** (a `0.1` arrives as `0.10000000149…`, drift ~1.5e-9), so **every drifted standard
@@ -337,38 +381,6 @@ Back; console clean on a fresh load (the mid-edit Fast-Refresh transients don't 
 slice (the last surface: the week's slate + head-to-head win prob + score-range bands, off `bracket_sim` +
 `projection_consensus`); plus the mobile-responsive pass + the free-agent value read (unblocks Available/
 waivers).**
-
-> earlier build
-**Gridiron front-end — Teams cluster: Teams standings + Team detail + Manager Dossier (2nd front-end slice; 3 commits).**
-Continues the slice-by-slice build against `DATA_CONTRACT.md` (§4.4 / §4.5 / §4.8). **New shared `src/posture.js`**
-— the contract §5 posture derivation (`derivePosture(playoffOddsPct, allPlayPct)`, locked `BAND=9` / `LEVEL_CUT=60`,
-`POSTURE_TONE` map) in ONE pure home, so the Teams chips (now) and the League posture MAP (later) read the same
-rule. **(1) Teams standings:** `queries.loadStandings(asOfWeek)` — per team the real record + **all-play "true
-record"** (score vs every team every week, luck-stripped, reusing the `loadTeamDetails` all-play loop) + `bracket_odds`
-playoff % (a **0–1 fraction ×100**) with its weekly series for the trendline + the derived posture; `Teams.jsx`
-renders the standings sorted by odds (rank · team+YOU · record · true rec · posture chip · playoff % · odds sparkline).
-**(2) Team detail:** `loadTeamDetail(rosterId, asOfWeek)` — 4 stat blocks (record, all-play true rec, playoff %+seed,
-pts/wk), **positional depth** per QB/RB/WR/TE (`positional_depth`: starter value, league-relative spectrum, rank,
-SURPLUS/EVEN/GAP shape) via a new **`DepthBar`** mark (fill = spectrum, median tick), and the roster split
-starters/bench with each player's **Production + Market VOR weekly series** behind a **PROD/MKT VOR toggle**
-(MKT flagged cross-time POC); `TeamDetail.jsx` + a Manager Dossier button. The **this-week matchup bar is deferred
-honestly** to the Matchups slice (it needs `bracket_sim` win prob) — an in-place note, never fabricated. **(3) Manager
-Dossier:** `loadManagerDossier(rosterId)` — the cleanest 1:1 map; the `manager_dossiers` row already carries the
-feature counts (no 2nd fetch); `Dossier.jsx` = headline + the 5 tendency fields + a Signal-Depth footer
-(deep/moderate/thin → HIGH/MED/THIN badge + league/season/move counts + confidence note) + model/date provenance;
-`is_zero_signal` → the honest "no intel" state. `App.jsx` gains a **detail nav-stack** (push/pop) so multi-level
-drills (team → player, team → dossier) get a correct one-level "‹ Back"; tab-switch clears it. `db.js` registers
-bracket_odds / positional_depth / manager_dossiers (public/data symlinks added in main). **Seam discipline kept** —
-all new data access in `queries.js`; views are pure renderers. Verified live at 1280px (browser preview): standings
-ranked by odds with correct posture chips (Bski Contender 91% / my team Riding luck 87% odds × 61% all-play) + tone
-trendlines; **week switcher replays back to wk2** (records/odds/depth all shift, ranks reshuffle); team detail blocks
-(3-1, 22-14, 87% seed 3, 146.2), depth bars/chips/ranks, PROD⇄MKT toggle switches values + shows the POC note, roster
-player → Player card → Back returns to team detail (stack pops one level); Bski dossier all 5 fields + MED badge + `1
-league · 1 season · 24 moves` + `claude-haiku-4-5 · 2026-07-13`; full Back chain dossier → team → standings pops one
-level each. Numbers spot-checked against the parquet (odds 91/87/84%, my positional depth QB 294.7/RB 488.8/…); no
-console errors. **Next — League slice (Your Race / Playoff Picture / Posture MAP reusing `posture.js` / Positional
-Talent, off `bracket_odds` + `true_rank` + `market_vor`), then Matchups; + the mobile-responsive pass + the free-agent
-value backend read (unblocks Available/waivers).**
 
 > built
     - nflreadpy fetcher

@@ -320,3 +320,27 @@ showing its reasoning, never fused into a single number.
 
 *Open flags carried forward:* ROS dynamic-update model + 1-10 precision display (§2); redraft/
 format-matched market source (§4).*
+
+---
+
+## Retired reads
+
+Reads built earlier and deliberately **removed** — recorded so the reasoning survives and nobody
+rebuilds the same mistake.
+
+- **`team_leakage`** (lineup efficiency / "coachable points left") — **retired on principle (design
+  law 1).** It graded start/sit decisions against **realized points**, so it produced advice like
+  *"start the waiver fringe player over your stud — he outscored him,"* when the truth was a
+  below-average week from the stud and an above-average week from the fringe guy. That is the exact
+  spike-week START/SIT error `Error_Mapping.md` names, coached rather than caught. **No constant fixes
+  an outcome-graded read** (the `COACHABLE_RATE_MARGIN` season-rate split couldn't and can't). It was
+  built in Phase 0/1, before `projection_consensus` existed, when realized points were the only
+  available "truth." **A legitimate successor is different in kind:** grade a start/sit against the
+  **prior knowable when the decision was made** (*"you started A when B was projected higher on Sunday
+  morning"*) — never against what happened next. That is now buildable and is genuine future work; it
+  was not before.
+- **`team_form`** — an EWMA "heating up / cooling off" team trajectory. Retired as **recency noise**,
+  close to the bias `Error_Mapping.md` exists to fight.
+
+Both were fully orphaned (neither is a §1–§7 read; their only consumers were pre-Gridiron panels
+imported by nobody). Removed in the Session 1.5 scope-correction — see `STATUS.md`.

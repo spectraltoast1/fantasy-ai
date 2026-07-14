@@ -125,39 +125,39 @@ here for scope tagging only; the canonical list lives in PRODUCT_ROADMAP.
 
 **Zero-stat row context:** Rostered players who did not play (injured, suspended, inactive, not yet activated) appear in the join output with all stat columns at 0.0. No signal is provided for why they scored 0. Requires a separate Sleeper injury/status endpoint fetch to resolve. Treat 0-stat rows as "rostered, did not contribute" without assuming a specific reason.
 
+**Retired reads — `team_leakage` and `team_form`:** removed in the Session 1.5 scope-correction. `team_leakage` graded start/sit against **realized points** (a design-law-1 violation — it coached the spike-week error); `team_form` was an EWMA recency trend (noise). Both were fully orphaned. The *process*-graded successor to leakage — grading a start/sit against the projection prior knowable at decision time (`projection_consensus`) — is legitimate future work, not built. See `DECISION_READS.md` → Retired reads.
+
 ---
 
 ## Front-end shaping — portability & latent assumptions
 
-The heaviest analytics (trajectory + lineup leakage) now live in **Python transforms**
-that pre-compute parquet (`compute_team_form.py` / `compute_team_leakage.py` → `derived/`);
-`src/queries.js` is the thin seam that reads them and the lighter construction/consistency
-shaping it still computes inline (depth, star dependence, lineup/hole signals, all-play,
-spectrums). Panels stay pure renderers. Three classes of portability to keep straight:
+The heaviest analytics live in **Python transforms** that pre-compute parquet
+(`compute_production_vor.py`, `compute_true_rank.py`, `compute_positional_depth.py`,
+`compute_player_signal.py`, … → `derived/`); `src/queries.js` is the thin seam that reads them
+and the lighter shaping it still computes inline (all-play, spectrums, the optimal-lineup
+projection). Views stay pure renderers. Three classes of portability to keep straight:
 
 **Data-driven, portable (self-correcting — needs no code change):** scoring (baked into
 `sleeper_points` upstream), team count, week count, and lineup-slot config all come from
-the parquets (`season`, `teams`, `lineup_slots`), not code. Week-windowed reads (EWMA
-form, leakage) derive `n` dynamically and widen as weeks append; a new standard Sleeper
-league means new parquets + a transform re-run, not new logic.
+the parquets (`season`, `teams`, `lineup_slots`), not code. Week-windowed reads derive `n`
+dynamically and widen as weeks append; a new standard Sleeper league means new parquets + a
+transform re-run, not new logic.
 
-**Season-replay seam (`as_of_week`):** the three derived parquets are **tall** — one slice
-per as-of week N. A global "As of" **week selector** lives in the App shell (`App.jsx`):
-`App.jsx` owns the `asOfWeek` state and passes it to both panels, so one active week applies
-across League + Team and persists across tab switches. It threads through `queries.js` via two
-helpers — `asOfSlice(table, n)` parameterises the derived reads' inner `max(as_of_week)` (pick
-week N's slice; `n == null` ⇒ latest, the default), and `weekCutoff(n)` adds `WHERE week ≤ N`
-to the still-in-JS SQL reads (power rankings, construction, vitals, all-play — including
-`SQL_CURRENT_TEAM`'s `arg_max(roster_id, week)`, the front-end half of roster-as-of-N).
-`loadWeeks()` feeds the dropdown (weeks 1..latest; default = latest, travels back only). The
-selector drives the readiness gate (`weeksElapsed = asOfWeek`) and replaced the temporary
-`?weeksOverride` QA param. This is the one place "which week am I viewing" lives behind the seam.
+**Season-replay seam (`as_of_week`):** the derived parquets are **tall** — one slice per
+as-of week N. A global "As of" **week selector** lives in the App shell (`App.jsx`): `App.jsx`
+owns the `asOfWeek` state and passes it to the views, so one active week applies across all
+surfaces and persists across tab switches. It threads through `queries.js` via two helpers —
+`asOfSlice(table, n)` parameterises the derived reads' inner `max(as_of_week)` (pick week N's
+slice; `n == null` ⇒ latest, the default), and `weekCutoff(n)` adds `WHERE week ≤ N` to the
+still-in-JS SQL reads (standings/all-play, players, matchups). `loadWeeks()` feeds the dropdown
+(weeks 1..latest; default = latest, travels back only). The selector drives the readiness gate
+(`weeksElapsed = asOfWeek`) and replaced the temporary `?weeksOverride` QA param. This is the
+one place "which week am I viewing" lives behind the seam.
 
 **Latent assumptions (won't self-correct — silent wrong output, not an error):**
-- ~~**Standard lineup shape.**~~ **RESOLVED (any-league piece 2).** `compute_team_leakage.py`'s
-  swap-class split and `compute_production_vor.py`'s replacement pools now derive from the league's
-  `lineup_slots` via shared `_analytics.position_pools` (superflex pools QB with the flex; standard is
-  byte-identical). Gated by `backtest_roster_shape.py`. *(The remaining shape latent is **TE-premium
+- ~~**Standard lineup shape.**~~ **RESOLVED (any-league piece 2).** `compute_production_vor.py`'s
+  replacement pools now derive from the league's `lineup_slots` via shared `_analytics.position_pools`
+  (superflex pools QB with the flex; standard is byte-identical). Gated by `backtest_roster_shape.py`. *(The remaining shape latent is **TE-premium
   lineup shape** beyond scoring — but TE-premium **scoring** is handled by the any-league scoring
   engine; a dedicated 2-TE slot config already flows through `lineup_slots` + `position_pools`.)*
 - **Division playoff seeding is synthetic-gated only** (any-league piece 3). `compute_bracket_sim`
@@ -182,19 +182,14 @@ selector drives the readiness gate (`weeksElapsed = asOfWeek`) and replaced the 
   still addresses one league's published copy). **Deferred to Session 2** with the multi-league frontend.
 
 **Tuning constants → future config seed:** league-agnostic **magic numbers** kept as named
-constants near the logic that uses them. The form/leakage constants moved into their
-transforms (`HALF_LIFE_WK`, `DIRECTION_BAND` in `compute_team_form.py`; `MIN_GAMES`,
-`COACHABLE_RATE_MARGIN`, `HABITUAL_STARTER_THRESHOLD` in `compute_team_leakage.py`;
-`compute_player_signal.py` owns its own signal set — `SHRINK_K`, `MIN_GAMES`,
-`SPIKE_BAND`/`STICKY_BAND`, `POS_MEAN_MIN_OPP`, `OPP_HALF_LIFE_WK`,
-`DIRECTION_HALF_LIFE_WK`/`DIRECTION_BAND`); `queries.js` still holds its own `MIN_GAMES` and
-the 10%/15% construction-signal thresholds for the inline depth/signals read. Candidates to
-become league/user-configurable one day — document the seam, don't build the config now
-(premature flexibility is its own debt). Lift to a shared config object when that seam is
-built. (Note: `MIN_GAMES` is currently defined in **three** places for three independent
-consumers — `compute_player_signal.py` (=3, the per-player games gate),
-`compute_team_leakage.py` (=2), and `queries.js` (=2, the inline construction read) — same
-name, independent values and semantics; fold into shared config when it exists.)
+constants near the logic that uses them. `compute_player_signal.py` owns its signal set —
+`SHRINK_K`, `MIN_GAMES`, `SPIKE_BAND`/`STICKY_BAND`, `POS_MEAN_MIN_OPP`, `OPP_HALF_LIFE_WK`,
+`DIRECTION_HALF_LIFE_WK`/`DIRECTION_BAND`. Candidates to become league/user-configurable one
+day — document the seam, don't build the config now (premature flexibility is its own debt).
+Lift to a shared config object when that seam is built. (Note: `MIN_GAMES` now lives in
+exactly **one** place — `compute_player_signal.py` (=3, the per-player games gate). Its former
+duplicates in the retired `compute_team_leakage.py` (=2) and in `queries.js`'s deleted inline
+reads (=2) are gone with the `team_form`/`team_leakage` retirement.)
 
 ---
 
@@ -222,7 +217,7 @@ fantasy-ai/
 └── application/
     ├── frontend/                   # production front-end — React + Vite + DuckDB-WASM (Node). Being recreated to the Gridiron design (Web-first); new-shell-with-placeholders migration
     │   ├── src/                     #   App.jsx (Gridiron 4-surface shell: brand + league switcher, segmented tabs, week selector, detail routing via a push/pop nav-stack), Players.jsx + PlayerCard.jsx (Players surface + its detail — wired), Teams.jsx + TeamDetail.jsx + Dossier.jsx (Teams surface + team detail + manager dossier — wired), League.jsx (League surface: Your Race band + Playoff Picture + Posture Map + Positional Talent — wired), Placeholder.jsx (coming-soon slot for Matchups), icons.jsx (SVG glyphs), charts.jsx (Sparkline/TrendLine/GradeBar/RangeGauge/DepthBar), posture.js (the §5 posture rule — derivePosture/POSTURE_TONE), queries.js (data-access seam — loadLeagueMeta/loadPlayers/loadPlayerCard/loadStandings/loadTeamDetail/loadManagerDossier/loadLeague/loadPositionalTalent + prior team reads), db.js (DuckDB-WASM loader — registers production_vor/market_vor/ros_synthesis/bracket_odds/positional_depth/manager_dossiers + season/teams/slots/league_settings), readiness.jsx (per-panel gate), posColors.js, styles.css (Gridiron tokens). LeaguePanel.jsx/TeamPanel.jsx = retired from the shell (kept, unimported) until their data re-homes
-    │   └── public/data/             #   symlinks → season_2025 + teams_2025 + lineup_slots_2025 + league_settings_2025 + team_form_2025 + team_leakage_2025 + player_signal_2025 + production_vor_2025 + market_vor_2025 + ros_synthesis_2026 parquet (gitignored)
+    │   └── public/data/             #   symlinks → season_2025 + teams_2025 + lineup_slots_2025 + league_settings_2025 + player_signal_2025 + production_vor_2025 + market_vor_2025 + ros_synthesis_2026 parquet (gitignored)
     ├── data/
         ├── data_layer.py           # ✅ built — centralized read/write module
     │   ├── fetchers/               # one Python script per source (tracked in git)
@@ -242,9 +237,7 @@ fantasy-ai/
     │   │   └── sleeper/
     │   │       └── players.parquet    # Sleeper /players/nfl registry, refreshed ≤ once/day — 10 cols incl. injury_status/depth_chart_order/practice_participation (Phase 1 refinement)
     │   └── snapshots/              # time-series parquet (gitignored)
-            ├── derived/                                 # pre-computed analytics (compute_*.py output); team/player analytics + production_vor + true_rank + positional_depth are tall, grain (season, as_of_week, entity); projection_consensus is per (season, week, player)
-            │   ├── team_form_2025.parquet               # per (as_of_week, team) trajectory: slope, direction, spectrum, weekly series
-            │   ├── team_leakage_2025.parquet            # per (as_of_week, team) leakage: efficiency %, coachable/variance, named fixes
+            ├── derived/                                 # pre-computed analytics (compute_*.py output); player_signal + production_vor + true_rank + positional_depth are tall, grain (season, as_of_week, entity); projection_consensus is per (season, week, player)
             │   ├── player_signal_2025.parquet           # per (as_of_week, team, player) spike signal: opp vs efficiency split, regression_risk, read
             │   ├── projection_consensus_2025.parquet    # per (week, player) forward prior: borrowed center + p25/p50/p75 spread band (width = residual std, skew = residual skewness, both shrunk to positional prior — §3's 3 components); disagreement_ppr null till a 2nd source
             │   ├── production_vor_2025.parquet          # per (as_of_week, roster, player) §4 read: ROS value (borrowed centers summed over remaining weeks) over the waiver line, normalized by pool spread; QB pool + pooled flex line
@@ -289,8 +282,6 @@ fantasy-ai/
         ├── join_nfl_sleeper_weekly.py # ✅ built
         ├── audit_join.py              # ✅ built — resolves unknown-position remainders
         ├── derive_lineup_slots.py     # ✅ built — roster_positions → lineup_slots (starting skill slots)
-        ├── compute_team_form.py       # ✅ built — EWMA trajectory analytics → derived/team_form
-        ├── compute_team_leakage.py    # ✅ built — lineup-leakage analytics → derived/team_leakage
         ├── compute_player_signal.py   # ✅ built — spike signal-quality read (Phase 1) → derived/player_signal
         ├── backtest_player_signal.py  # ✅ built — validates the shipped signal vs naive baseline on the full-2025 answer key
         ├── compute_projection_consensus.py  # ✅ built — projection consensus + spread band, all 3 §3 components incl. archetype skew (Phase 2) → derived/projection_consensus
@@ -349,7 +340,7 @@ Two storage patterns:
   `ros_player_band`. Path `snapshots/derived/scoring/<scoring_key>/…`. Two leagues on one scoring profile
   share the file (keeps AI cost flat as leagues grow).
 - **League-scoped** — `+ league_id`: `player_signal`, `production_vor`, `market_vor`, `ros_league_view`,
-  `ros_synthesis`, `true_rank`, `positional_depth`, `bracket_odds`, `team_form`, `team_leakage`,
+  `ros_synthesis`, `true_rank`, `positional_depth`, `bracket_odds`,
   `manager_features`, `manager_dossiers`. Path `snapshots/derived/league/<league_id>/…` (and
   `snapshots/sleeper/<season>/league/<league_id>/manager_activity`).
 
@@ -411,11 +402,9 @@ now. Everything in **parquet** goes through data_layer.
 - internal
 | nfl_sleeper_weekly_joined transform | snapshots/nfl_sleeper_weekly_joined/ | Joined output — one file per season (season_{season}.parquet), each week appended with a (season, week) dedup guard
 | derive_lineup_slots transform | snapshots/sleeper/{season}/ | lineup_slots_{season}.parquet — starting skill-slot requirements (slot, count, eligible) derived from the league's raw roster_positions; declares the QB/RB/WR/TE + FLEX config so the front-end "perfect lineup" / efficiency calc is exact, not inferred |
-| compute_team_form transform | snapshots/derived/ | team_form_{season}.parquet — **tall, grain (as_of_week, roster_id)** (Season-replay): per as-of week N=1..maxweek, one row per roster_id with the EWMA scoring slope, direction, recent record, league-relative spectrum pos, per-week series — all recomputed on weeks ≤ N. Pre-computed so the front-end seam just reads it (no JS trajectory math) |
-| compute_team_leakage transform | snapshots/derived/ | team_leakage_{season}.parquet — **tall, grain (as_of_week, roster_id)**: per as-of week N, lineup efficiency %, season points-left, coachable/variance split, named fixes, per-week leak, spectrum pos — cumulative ledger over weeks ≤ N. Roster-as-of-N: a player's "current team" resolves to his latest week ≤ N. Feeds both the Team Overview leakage lens and the League drawer's efficiency read |
 | compute_player_signal transform | snapshots/derived/ | player_signal_{season}.parquet — **tall, grain (as_of_week, roster_id, player)**: per as-of week N, one row per rostered skill player with the spike signal-quality read (Phase 1), recomputed on weeks ≤ N (roster-as-of-N applies). Decomposes recent production into sticky opportunity (opp_g, EWMA-windowed via injected half-life — ships cumulative, backtest-tuned) vs fragile efficiency (ppo, shrunk toward the league positional mean); headline regression_risk + a sample-gated read (too_early/spike/mixed/sticky), td_share as evidence, per-week series. The first decision-critique engine slice; not a forward projection. **Phase 1 refinement + §1 Quality axis (710 #3, 2026-07-10):** added fields close the DECISION_READS.md §1 gap, kept separate from the validated core read (not fused) — **quality_rate = expected fantasy points per opportunity** (`exp_pts_g/opp_g`) from ffverse's ff_opportunity component model re-scored under league settings (`_scoring.expected_points_expr`), the full multi-component EV read §1 specifies (was the TD-only `xtd` proxy); **point_correlation** = pearson(weekly actual, weekly expected full points); **luck** = recent − expected ppg (over/under-performance residual); plus direction/reliability (Trust axis) + security (Sleeper injury/depth-chart). The core forecast (regression_risk) still shrinks efficiency toward the positional mean — the exp_ppo shrink target was tested and rejected by the answer key (see backtest) |
 | compute_projection_consensus transform | snapshots/derived/ | projection_consensus_{season}.parquet — **per (season, week, player)** over the whole skill pool. **NOT tall over as_of_week** (unlike the three above): a projection for week W is a fixed forward statement whose band uses only weeks < W, so it's keyed on `week` like the projections entity it reads — read via `read_projection_consensus(season, week=None)`. Borrowed consensus center (median `proj_pts_ppr` across sources) + a p25/p50/p75 spread band — **all three §3 components**: center (borrowed), **width** = the player's residual std (actual − proj) shrunk toward a full-pool positional prior (`SHRINK_K`), and **archetype skew** = a Cornish-Fisher quantile shift `SKEW_GAIN·(g/6)·(BAND_Z²−1)` on p25/p75 from the player's residual *skewness* `g` shrunk to a positional prior (`SKEW_SHRINK_K`); p50 stays the borrowed center, floored at 0. **Skew driver resolved by the answer key, not §3's literal wording:** the projection's TD-dependence archetype does *not* track residual skew (measured 2026-07-09); the player's own residual 3rd moment does — the exact parallel to the width's 2nd moment. Because `BAND_Z<1`, a right-skewed residual shifts both breakpoints *down* (the borrowed center sits above the realized median), giving a slightly longer *lower* gap — reversing §3's right-skew illustration (pre-data intuition about raw scores). `disagreement_ppr` (cross-source std) is null under a single source. The Phase-2 forward prior / law-2 confidence band (DECISION_READS §3), calibration-gated by backtest_projection_consensus.py — **per-tail** (25–75 coverage ~0.50 AND below-p25/above-p75 ~0.25 each); `BAND_Z × SKEW_GAIN` swept jointly → (0.55, 1.5) on the 2025 answer key. **Coverage nuance:** a null `proj_pts_ppr` (Sleeper doesn't project a player who's OUT/inactive — components are null too) means no band and no residual for that player-week, by design — so the pool is projected-and-playing players, not every roster spot. Consumed by Production VOR (below) and later ROS reads; the front end reads the current week's slice and filters to rostered players |
-| compute_true_rank transform | snapshots/derived/ | true_rank_{season}.parquet — **tall, grain (as_of_week, roster_id)**: per as-of week N, one row per team with the DECISION_READS §5 (first half) True Rank read. **roster_strength** = the sum of each team's **optimal-lineup** ros_value — fill the declared starting slots (QB/RB/WR/TE + FLEX) from the roster by ros_value, most-constrained slot first, sum the optimal starters. **Record-independent** (reads no wins/standings): it measures how good the roster *is*. **No new engine** — it re-aggregates `production_vor` over the lineup rules (`read_production_vor(season, as_of_week="all")`), reusing the shared `_analytics.expand_slots`/`optimal_lineup` (the slot-aware greedy lifted out of compute_team_leakage). Also carries **bench_value** (rostered ros_value not in the optimal lineup — a §6 depth/trade-capital hint, evidence not folded into the rank), a within-cohort dense **rank** (1 = strongest), and a league-relative 0–1 **spectrum_pos**. Roster-as-of-N is inherited free from the VOR slice (already resolved there). **Slot-aware, not a roster-sum:** a roster hoarding two elite QBs ranks by its one *startable* QB (the 2nd rides the bench), so True Rank rewards a balanced startable lineup over capped-position hoarding. Calibration-gated by backtest_true_rank.py (projected strength tracks the actual ROS ceiling — management-independent optimal lineup on realized points — at Pearson 0.802 / Spearman 0.842, freeze wk4, n=10 teams; exit 0). The **integration precursor** the Phase-4 bracket-math Monte Carlo (§5 full) sits on; **value, not WAR** — roster_strength is in ROS-projected-points units, the rank is ordinal roster quality, no wins conversion here |
+| compute_true_rank transform | snapshots/derived/ | true_rank_{season}.parquet — **tall, grain (as_of_week, roster_id)**: per as-of week N, one row per team with the DECISION_READS §5 (first half) True Rank read. **roster_strength** = the sum of each team's **optimal-lineup** ros_value — fill the declared starting slots (QB/RB/WR/TE + FLEX) from the roster by ros_value, most-constrained slot first, sum the optimal starters. **Record-independent** (reads no wins/standings): it measures how good the roster *is*. **No new engine** — it re-aggregates `production_vor` over the lineup rules (`read_production_vor(season, as_of_week="all")`), reusing the shared `_analytics.expand_slots`/`optimal_lineup` (the slot-aware greedy in `_analytics`). Also carries **bench_value** (rostered ros_value not in the optimal lineup — a §6 depth/trade-capital hint, evidence not folded into the rank), a within-cohort dense **rank** (1 = strongest), and a league-relative 0–1 **spectrum_pos**. Roster-as-of-N is inherited free from the VOR slice (already resolved there). **Slot-aware, not a roster-sum:** a roster hoarding two elite QBs ranks by its one *startable* QB (the 2nd rides the bench), so True Rank rewards a balanced startable lineup over capped-position hoarding. Calibration-gated by backtest_true_rank.py (projected strength tracks the actual ROS ceiling — management-independent optimal lineup on realized points — at Pearson 0.802 / Spearman 0.842, freeze wk4, n=10 teams; exit 0). The **integration precursor** the Phase-4 bracket-math Monte Carlo (§5 full) sits on; **value, not WAR** — roster_strength is in ROS-projected-points units, the rank is ordinal roster quality, no wins conversion here |
 | compute_positional_depth transform | snapshots/derived/ | positional_depth_{season}.parquet — **tall, grain (as_of_week, roster_id, position)** (position = **fine** QB/RB/WR/TE, not VOR's QB/FLEX pool): per as-of week N, one row per team per position with the DECISION_READS §6 read. **No new engine** — it re-slices `production_vor` (`read_production_vor(season, as_of_week="all")`) per position, **net of the position's dedicated starting requirement**. `starter_need` from `lineup_slots` (`_starter_needs`: QB1/RB2/WR2/TE1; the shared FLEX×2 is *excluded*, so flex-worthy depth surfaces as **surplus** — which is what makes it trade capital). Fields: **starter_value** (top-`starter_need` ros_value), **surplus_value** + **surplus_startable** (beyond-need players clearing the waiver line, vor>0 = real depth), **marginal_vor** (the last dedicated starter's VOR — the **gap indicator**, ≤0 = starting replacement level; null when the roster can't fill the slots), **spectrum_pos** (league-relative 0–1 of starter_value **within that position's cohort** — the spec's "vs league" benchmark), and an **advisory** `shape` ∈ {surplus, adequate, gap} off marginal_vor + spectrum_pos (evidence-first: numbers lead, the manager adjudicates — per the advisory-framing principle). **One row per (team, position) even at zero roster count**, so a body-count gap isn't invisible in a rostered-only frame. Roster-as-of-N inherited from the VOR slice. The re-slice is **lossless** (per-position rostered_value sums to the team's total VOR ros_value). Calibration-gated by backtest_positional_depth.py (per position, projected starter_value tracks the actual ROS ceiling — top-need by realized points — mean corr 0.861 across QB/RB/WR/TE, freeze wk4 n=10/pos; exit 0). Decision homes: trade shape + waiver/FAAB. Closes the Phase-3 read set |
 | compute_bracket_sim transform | snapshots/derived/ | bracket_odds_{season}.parquet — **tall, grain (as_of_week, roster_id)**: per as-of week N, one row per team with the DECISION_READS §5 **bracket-math** read (the second half of Posture; True Rank is the first). A **Monte Carlo season simulation**: each team's weekly score distribution — mean μ from the optimal-lineup borrowed projection (`projection_consensus.center_ppr`), std σ from the §3 band (`band_ppr`) — drives analytic per-matchup win probabilities Φ((μA−μB)/√(σA²+σB²)); `SIMS`=10k runs draw weekly scores ~N(μ,σ²), pair by the **real remaining schedule** (matchup_id from the all-18-weeks matchup snapshots, read via `read_season_matchups`), accumulate onto the actual as-of-N standings, and seed the top-`PLAYOFF_TEAMS` (`_seed_table` — **division-aware**: division winners seeded ahead of wildcards when a roster→division map is present, else the flat wins/points-for seed; synthetic-gated latent, see below) → **playoff_odds** (Σ across the league = exactly `PLAYOFF_TEAMS`, a hard invariant), **proj_wins/proj_points**, **avg_seed**, **magic_wins** (a clinch proxy), plus current wins/points. **numpy** (fixed seed) is the one compute dependency — **now truly deterministic** run-to-run (any-league piece 3 sorted the schedule pairings + roster player lists; polars group_by order + zero-score bye ties had made the fixed seed non-reproducible). **Playoff config** (reg-season-end + playoff-teams) is read from the persisted `league_settings` via `_playoff_config` (`playoff_week_start−1`, `playoff_teams`) — **not** hardcoded; the sim raises if settings are absent. For this league that's a **4-team** playoff starting wk16 (reg season ends wk15), which corrected an earlier wrong schedule-inferred "6". The gate is config-light (independent of the cut). Calibration-gated by backtest_bracket_sim.py (win-prob Brier 0.224 beats the 0.25 coin-flip; expected-wins Spearman 0.756 vs actual; top-4 by odds = 3/4 actual playoff teams; exit 0). **Simplifications:** starter independence (no covariance), Normal draw (no §3 skew), frozen-roster byes reduce μ. Decision home: posture + urgency (shown adjacent to True Rank — the front-end presentation is the deferred half) |
 | compute_production_vor transform | snapshots/derived/ | production_vor_{season}.parquet — **tall, grain (as_of_week, roster_id, player)**: per as-of week N, one row per rostered skill player with the DECISION_READS §4 Production VOR read. **ros_value** = sum of the borrowed weekly consensus centers (projection_consensus.center_ppr) over the *remaining* schedule (weeks > N) — borrows the projection (law 3), builds only the anchor+normalization. **vor** = (ros_value − waiver_line) / (pool_top − waiver_line): waiver line = 0, pool top ≈ 1, negative = dead weight; §4's settled normalization (divide by pool spread, not the waiver value). **Pools from lineup_slots** via shared `_analytics.position_pools` (not hard-coded): dedicated QB slot = its own pool, flex-eligible RB/WR/TE = one pooled waiver line (§4 flex reconciliation); **superflex pools QB with the flex automatically** (any-league piece 2 — the old `_pool_of` matched only a slot named `FLEX`). Roster-as-of-N (latest team ≤ N, the shared arg_max idiom); roster frozen wks 1–4 so N bounded there, projection horizon → wk 18. Calibration-gated by backtest_production_vor.py (projected ROS tracks actual at corr ~0.95 per pool; VOR tiers monotonic in realized production — exit 0); superflex pooling gated by backtest_roster_shape.py. **Documented simplification:** the pooled flex line doesn't model dedicated-slot scarcity (a scarce TE is measured vs the flex replacement). **Market VOR (LeagueLogs) + the Production−Market trade gap are now BUILT** — see the `market_vor_{season}.parquet` row above (same engine on the borrowed market value; cross-time gap) |
@@ -576,26 +565,24 @@ via data_layer.py, performs a single join, and writes via data_layer.py.
   resolution becomes "latest week ≤ N", so a mid-season trade/add changes *who is on the
   team* at week N, not just the numbers. League-relative spectra (and the player-signal
   positional efficiency mean) are recomputed within each N cohort. **Windowing (Part 2)
-  is per-analytic, decoupled from the cutoff, by the stationarity principle:** leakage
-  cumulative (ledger), form EWMA half-life 2wk (trend), player-opportunity through an
-  injected EWMA half-life (`OPP_HALF_LIFE_WK`, shared `_weighted_rates`) — backtest-tuned
-  and shipping **cumulative** (the 2025 sweep showed recency hurts rest-of-season MAE).
-  `data_layer.read_team_form/leakage/player_signal` take an optional `as_of_week`
-  (default = latest), and `queries.js` carries a default-latest guard, so existing
-  callers and the front end are unchanged until the Session-B week selector lands.
+  is per-analytic, decoupled from the cutoff, by the stationarity principle:**
+  player-opportunity reads through an injected EWMA half-life (`OPP_HALF_LIFE_WK`, shared
+  `_weighted_rates`) — backtest-tuned and shipping **cumulative** (the 2025 sweep showed
+  recency hurts rest-of-season MAE). `data_layer.read_player_signal` takes an optional
+  `as_of_week` (default = latest), and `queries.js` carries a default-latest guard, so
+  existing callers and the front end are unchanged until the Session-B week selector lands.
 
-- `compute_team_form.py` / `compute_team_leakage.py` — **derived-analytics transforms.** They read the season join (+ lineup_slots for leakage) and write one pre-computed row per (as_of_week, roster_id) to `snapshots/derived/`. These promote the heaviest Team Overview math out of the front-end seam (`queries.js`): the EWMA trajectory read and the optimal-lineup / leakage read, respectively, plus the tuning constants and signal thresholds they own (`HALF_LIFE_WK`/`DIRECTION_BAND`; `MIN_GAMES`/`COACHABLE_RATE_MARGIN`/`HABITUAL_STARTER_THRESHOLD`). Rationale: a Python server is the eventual architecture, so the analytics live in Python now — the front end reads pre-shaped parquet, and the server migration becomes "transform → API serves same parquet" rather than "rewrite JS math in Python." Re-run with `--season` after a join refresh. Faithful ports of the prior JS; output reconciles exactly. Accept `--season` as a required CLI arg.
-
-  **SOLID shape (per principle #9):** each per-team analytic is a pure function
-  (`_team_form`, `_team_leakage`) that **receives its tuning constants as injected
-  keyword args** — `compute(season)` is the composition root that owns the module
-  constants and passes them down (DIP: the pure logic depends on parameters, not
-  globals, so it tests in isolation at any parameterisation). Shared numeric helpers
-  (`round1`, `mean`, `median`, the league-relative `spectrum_positions`
-  normaliser — the Python mirror of the front-end's old `attachSpectrumPos` — `pearson`,
-  added for the Phase 1 point-correlation refinement, and the slot-aware greedy lineup
-  engine `expand_slots`/`optimal_lineup`, lifted here when True Rank became its 2nd
-  consumer) live once in **`transforms/_analytics.py`** rather than being copy-pasted per transform.
+- **Derived-analytics transforms — SOLID shape (per principle #9).** Each analytic (e.g.
+  `compute_player_signal`, `compute_production_vor`) is a pure function that **receives its tuning
+  constants as injected keyword args** — `compute(season)` is the composition root that owns the module
+  constants and passes them down (DIP: the pure logic depends on parameters, not globals, so it tests in
+  isolation at any parameterisation). The analytics live in **Python** (not the JS seam) because a Python
+  server is the eventual architecture, so the migration becomes "transform → API serves same parquet"
+  rather than "rewrite JS math in Python." Re-run with `--season` after a join refresh. Shared numeric
+  helpers (`round1`, `mean`, `median`, the league-relative `spectrum_positions` normaliser — the Python
+  mirror of the front-end's old `attachSpectrumPos` — `pearson` for the point-correlation refinement,
+  and the slot-aware greedy lineup engine `expand_slots`/`optimal_lineup`) live once in
+  **`transforms/_analytics.py`** rather than being copy-pasted per transform.
 
 - `compute_player_signal.py` — **the first decision-critique engine slice (Product
   Roadmap Phase 1): the spike signal-quality read.** Reads the (frozen) season join,
@@ -739,9 +726,9 @@ via data_layer.py, performs a single join, and writes via data_layer.py.
   `pts`, so the greedy most-constrained-first fill maximises summed ROS value → `roster_strength`;
   `_rank_cohort` attaches the dense rank + shared `spectrum_positions`. SOLID shape: pure helpers +
   `compute()` composition root looping as_of_week. **The optimal-lineup engine (`expand_slots`/
-  `optimal_lineup`) was lifted from `compute_team_leakage` into `_analytics`** (pure, points-agnostic,
-  now two consumers — the "shared helper has one home" move); leakage imports them aliased, so its
-  behavior is unchanged. Record-independent (no wins read); slot-aware so a capped-position stud
+  `optimal_lineup`) lives in `_analytics`** (pure, points-agnostic — the "shared helper has one home"
+  move), consumed by True Rank, Production VOR and the bracket sim. Record-independent (no wins read);
+  slot-aware so a capped-position stud
   surplus doesn't inflate the rank. Consumed by the Phase-4 bracket-math Monte Carlo (§5 full); no UI
   yet (data + gate, like VOR).
 

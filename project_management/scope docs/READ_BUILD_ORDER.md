@@ -142,9 +142,10 @@ build detail — its former home in STATUS.md's "V1 Dashboard Build Order" secti
 - **Season-replay week selector** — global "As of" week dropdown in the App shell; one selection drives
   League + Team and persists across tabs; threads through `queries.js` (`asOfSlice` / `weekCutoff`),
   drives the readiness gate, retired the `?weeksOverride` QA param. Default = latest; travels back only.
-- **Architecture refactor** — the heavy Team Overview math (form + leakage) was extracted from
-  `queries.js` into Python transforms (`compute_team_form.py` / `compute_team_leakage.py` → `derived/`);
-  `queries.js` slimmed to a thin read + assemble seam.
+- **Architecture refactor** — the heavy analytics were extracted from `queries.js` into Python
+  transforms (`compute_*.py` → `derived/`), slimming `queries.js` to a thin read + assemble seam.
+  *(The original form/leakage transforms this pattern started with were retired in Session 1.5 — see
+  STATUS.md; the pattern carries the surviving reads.)*
 
 ## Unbuilt + Blocked
 
@@ -152,7 +153,7 @@ Each with the reason it isn't built. Ordered roughly by how soon it matters.
 
 - **Front-end surfacing of the gated backend reads** — UNBUILT; **now the immediate next work** (Market
   VOR closed the backend read layer — every §1–§7 read is built + gated). The front end surfaces only
-  `team_form` / `team_leakage` / `player_signal`. No UI yet for `production_vor` / `market_vor` (§4),
+  `player_signal` (via the legacy panels, since retired). No UI yet for `production_vor` / `market_vor` (§4),
   `true_rank` / `bracket_odds`
   (§5), `positional_depth` (§6), `ros_outcome_shape` + `ros_synthesis` (§2), `projection_consensus`
   (§3), `manager_features` / `manager_dossiers` (§7). Includes the posture *presentation* (True Rank +
