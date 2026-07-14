@@ -2,7 +2,19 @@
 
 > Engineering context document for Claude Code. Describes the stack, folder structure, data layer design, and technical principles. Updated regularly as the project evolves.
 
-**Last reviewed:** 2026-07-13 (**Backend — L0 keying shipped (Improvement-Loop Session 1)** — derived
+**Last reviewed:** 2026-07-14 (**Backend — Gate Repair (Improvement-Loop Session 1.6)** — two technical
+decisions worth carrying: (1) **`data_layer._active_league_any`** — a season-robust sibling of
+`_active_league` for **current-world reads whose season outruns the registry's league seasons**
+(`ros_synthesis` is news-season-keyed at 2026, but the is_mine league is a 2025 redraft league with no 2026
+`league_id`): it resolves the exact is_mine season else the latest ≤ it, and is wired into `ros_synthesis`
+read/write/exists ONLY — every other entity keeps strict `_active_league` (a missing season stays an error).
+(2) **`in_calibrated_pool`** on `ros_player_band` — the project's **first suppression rule**, built as a
+reusable first-class boolean column (the `is_cross_time`/`has_ros_anchor` honesty-column idiom): per (season,
+as_of_week) the top-300 skill players by `ros_center` ∪ per-position floors, marking the decision-relevant
+population a band is honest within; consumers suppress bands outside it. BULL_Z untouched. (Known follow-ups
+recorded in STATUS: the roster-substrate reproducibility fix — a two-way player's `join_season` membership
+flips with the 24h registry — and wiring `has_ros_anchor` to respect `in_calibrated_pool`.) **Prior — L0
+keying shipped (Improvement-Loop Session 1)** — derived
 parquet is now **scope-partitioned** (NFL-global / scoring-scoped `derived/scoring/<scoring_key>/` /
 league-scoped `derived/league/<league_id>/`) behind `data_layer`, declared by a `leagues.parquet` registry
 (`shared/league_registry.py`) and resolved by `shared/league_resolver` / `data_layer._active_league`; scoped

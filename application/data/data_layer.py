@@ -1105,6 +1105,11 @@ def ros_league_view_exists(season: int, *, league_id=None) -> bool:
 # inputs (spectrum_pos / security / direction), so a scoring-agnostic store would collide at n=2 same-
 # scoring leagues (audit S3.2). One file per (league, season); REPLACE-BY (season, week,
 # sleeper_player_id) so a single-player re-run overwrites just his row (news_content_hash is the seam).
+# Season-scope note (S1.6): the file's `season` is the NEWS world (e.g. 2026), which OUTRUNS the
+# registry's latest league season — a redraft league gets a new Sleeper league_id each year, so there is
+# no 2026 league to key on. The read's league membership is inherited from its prior-season anchor (2025),
+# so these three accessors resolve via `_active_league_any` (falls back to the latest is_mine season ≤
+# the news season), NOT strict `_active_league` — which correctly stays strict for every per-season entity.
 
 
 def _ros_synthesis_path(season: int, league_id) -> Path:
@@ -1120,7 +1125,7 @@ def write_ros_synthesis(df: pl.DataFrame, *, league_id=None) -> None:
     """
     for season in df.select("season").unique().to_series().to_list():
         part = df.filter(pl.col("season") == season)
-        lid = league_id or _active_league(season)[0]
+        lid = league_id or _active_league_any(season)[0]
         path = _ros_synthesis_path(season, lid)
         path.parent.mkdir(parents=True, exist_ok=True)
         keys = part.select("season", "week", "sleeper_player_id").unique()
@@ -1134,7 +1139,7 @@ def write_ros_synthesis(df: pl.DataFrame, *, league_id=None) -> None:
 def read_ros_synthesis(season: int, week: int | None = None,
                        sleeper_player_id: str | None = None, *, league_id=None) -> pl.DataFrame:
     """Read the per-player §2 ROS synthesis for a league season, optionally one week / player."""
-    league_id = league_id or _active_league(season)[0]
+    league_id = league_id or _active_league_any(season)[0]
     df = pl.read_parquet(_ros_synthesis_path(season, league_id))
     if week is not None:
         df = df.filter(pl.col("week") == week)
@@ -1144,7 +1149,7 @@ def read_ros_synthesis(season: int, week: int | None = None,
 
 
 def ros_synthesis_exists(season: int, *, league_id=None) -> bool:
-    league_id = league_id or _active_league(season)[0]
+    league_id = league_id or _active_league_any(season)[0]
     return _ros_synthesis_path(season, league_id).exists()
 
 
@@ -1370,4 +1375,30 @@ def _active_league(season: int) -> tuple[str, str]:
     if df.is_empty():
         raise ValueError(f"No is_mine league for season {season} in leagues.parquet.")
     r = df.row(0, named=True)
+    return str(r["league_id"]), str(r["scoring_key"])
+
+
+def _active_league_any(season: int) -> tuple[str, str]:
+    """(league_id, scoring_key) for the is_mine league that OWNS a *current-world* read whose `season`
+    may exceed the registry's latest league season. Unlike `_active_league` (strict per-season), this
+    resolves the is_mine row for `season` if present, else falls back to the most-recent is_mine season
+    **not exceeding it**. A redraft league is a continuing entity — a NEW Sleeper `league_id` each year —
+    so a 2026 news-world read anchored on the 2025 league legitimately resolves to that 2025 league, and
+    there is no 2026 `league_id` to key on. Used ONLY by ros_synthesis (news-season-keyed, its league
+    membership inherited from its prior-season anchor); every other entity keeps `_active_league`'s strict
+    resolution so a genuinely missing season stays a hard error, not a silently-masked one."""
+    if not leagues_exists():
+        raise ValueError(
+            "leagues.parquet not found — run `python3 -m application.shared.league_registry build` "
+            "before reading/writing scoped derived entities."
+        )
+    mine = read_leagues().filter(pl.col("is_mine"))
+    exact = mine.filter(pl.col("season") == season)
+    if not exact.is_empty():
+        r = exact.row(0, named=True)
+        return str(r["league_id"]), str(r["scoring_key"])
+    prior = mine.filter(pl.col("season") <= season).sort("season", descending=True)
+    if prior.is_empty():
+        raise ValueError(f"No is_mine league at or before season {season} in leagues.parquet.")
+    r = prior.row(0, named=True)
     return str(r["league_id"]), str(r["scoring_key"])

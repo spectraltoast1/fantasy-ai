@@ -52,11 +52,15 @@ def _ok(msg: str) -> None:
 
 
 def check(season: int) -> bool:
-    path = data_layer._market_vor_path(season)
-    if not path.exists():
+    # Resolve the is_mine league the same way every read/write wrapper does (via `_active_league`), then
+    # read the FULL tall parquet — the recompute-match compares every banked snapshot against compute(),
+    # so we deliberately bypass `read_market_vor`'s latest-snapshot-only default. This fixes the L0-keying
+    # fallout (the bare `_market_vor_path(season)` call that crashed) while preserving the original
+    # full-frame semantics; mirrors backtest_l0_keying's explicit-key path read.
+    if not data_layer.market_vor_exists(season):
         _fail(f"no market_vor parquet for {season} — run compute_market_vor first")
         return False
-    df = pl.read_parquet(path)
+    df = pl.read_parquet(data_layer._market_vor_path(season, data_layer._active_league(season)[0]))
     passed = True
 
     # 1. Recompute match — the persisted read IS the shipped compute, frame-for-frame.
