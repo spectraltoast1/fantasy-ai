@@ -111,8 +111,17 @@ fixed a `_scoring` **float32-tolerance bug** the corpus caught (a drifted standa
 manifest **365 rows** (matched **221**, six seasons), split **TRAIN 2020-2023 · DEV 2024 · TEST 2025** (2020-21
 thin, k-folded within train); unscoreable **45.4%/1,765**. No-regression proven; §7 comparability on the real
 league unchanged (thin friend-group is genuine). See `engine improvement/SESSION_0_6_SCORING_TOLERANCE_FIX.md`.
-**Next: L0 keying** (`league_id` + `scoring_key`, partition derived parquet by league, split `ros_outcome_shape`)
-— keys against the corrected manifest; then Session 4 harvest → L2 ledger backfill.
+**Session 1 (L0 keying) — DONE:** `league_id` + `scoring_key`, derived parquet partitioned by scope
+(`derived/league/…`, `derived/scoring/…`), `leagues.parquet` registry, `ros_outcome_shape` split into
+`ros_player_band` (scoring-scoped) + `ros_league_view` (league-scoped). **Session 1.5** retired
+`team_form`/`team_leakage`; **Session 1.6** repaired the gate instrument. **Session 2 (NFL substrate
+backfill) — DONE:** `projections` backfilled 2020–2024 (was 2025-only); `projection_consensus` +
+`ros_player_band` built for **{ppr,half}×2020–2025** via `_scoring.standard_scoring(key)` + `--scoring-key`
++ `build_substrate.py`. Leakage fixed: `adp_points_curve` now persisted **per held-out season**
+(`holdout_{S}.parquet`, `check_adp_curve_leakage.py` hard gate); the `ros_player_band` wk-4 freeze retired
+(full-season range) with `write_ros_synthesis._read_anchor` pinned so the live 2026 anchor holds. First
+multi-season calibration reported (BAND_Z=0.55 generalizes; SKEW_GAIN=1.5 fragile) — reported, not tuned.
+See `engine improvement/SESSION_2_NFL_SUBSTRATE_BACKFILL.md`. **Next: Session 3 harvest** → L2 ledger backfill.
 
 ## Built — Frontend
 

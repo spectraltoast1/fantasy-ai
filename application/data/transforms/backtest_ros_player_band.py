@@ -151,7 +151,7 @@ def _coverage(df: pl.DataFrame) -> tuple[float, float, float]:
     return inside / n, below / n, above / n
 
 
-def _pool_coverage_evidence(season: int) -> None:
+def _pool_coverage_evidence(season: int, freeze: int) -> None:
     """Report the PERSISTED band's coverage on its whole projected pool vs the `in_calibrated_pool` subset
     (S1.6). The gated verdict above grades the is_mine league's rostered-freeze players (the population
     BULL_Z was fit on); this evidence grades the entity's ACTUAL population — the whole scoring-scoped pool
@@ -169,8 +169,14 @@ def _pool_coverage_evidence(season: int) -> None:
         return
     actual = _actual_weekly(season)
     max_proj_week = int(data_layer.read_projection_consensus(season)["week"].max())
-    freeze = int(band["as_of_week"].max())
+    # Grade at the DECISION week (the roster freeze the gated verdict uses), NOT the band's max as-of.
+    # Session 2 widened the persisted band to the full projected season, so band.max() is now deep in the
+    # year (a ~1-week ROS horizon); grading there would make this evidence incomparable to the verdict.
+    # Pinning to `freeze` keeps it a like-for-like companion and byte-stable across the range change.
     fz = band.filter(pl.col("as_of_week") == freeze)
+    if not fz.height:
+        print(f"  [evidence] persisted band has no as-of week {freeze} slice — skipping pool evidence")
+        return
     rows = []
     for r in fz.iter_rows(named=True):
         act = sum(actual.get((r["sleeper_player_id"], wk), 0.0)
@@ -266,7 +272,8 @@ def run(season: int, bull_z: float = BULL_Z, anchor_w: float = ANCHOR_W) -> bool
     print(f"    stable {_miss_low(stable):.3f} (n={stable.height})   non-stable {_miss_low(shaky):.3f} (n={shaky.height})")
 
     # Whole-pool vs calibrated-pool coverage on the PERSISTED band (S1.6) — evidence, not gated.
-    _pool_coverage_evidence(season)
+    # Graded at the same decision (freeze) week as the verdict, not the band's full-season max as-of.
+    _pool_coverage_evidence(season, freeze)
 
     ok = calibrated and monotonic
     print()

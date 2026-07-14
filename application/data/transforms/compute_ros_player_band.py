@@ -28,12 +28,14 @@ Preseason anchor, time decay, and the pure band helpers are unchanged from the p
 math did not change — only the storage scope did). Roster-free means the band is emitted for the WHOLE
 projected skill pool, not just rostered players; the league view selects the rostered subset.
 
-Tall over as_of_week 1..freeze (the season-join freeze week Production VOR also stops at, so the
-"latest" anchor the AI reads stays the freeze). Output:
+Tall over as_of_week 1..(max projected week − 1) — the FULL resolved projected season (Session 2
+retired the wk-4 roster freeze; the band is roster-free, so the corpus grades §2 at every as-of week).
+The live 2026 AI anchor is pinned separately in write_ros_synthesis._read_anchor to the league-view's
+freeze as-of, so the wider range does not move the served synthesis. Output:
 snapshots/derived/scoring/<scoring_key>/ros_player_band_{season}.parquet.
 
 Usage:
-    python3 -m application.data.transforms.compute_ros_player_band --season 2025
+    python3 -m application.data.transforms.compute_ros_player_band --season 2025 [--scoring-key ppr]
 """
 
 import argparse
@@ -234,18 +236,21 @@ def _band_as_of(consensus: pl.DataFrame, n: int, max_proj_week: int, season: int
     return rows
 
 
-def compute(season: int) -> pl.DataFrame:
-    consensus = data_layer.read_projection_consensus(season).select(
+def compute(season: int, scoring_key: str | None = None) -> pl.DataFrame:
+    consensus = data_layer.read_projection_consensus(season, scoring_key=scoring_key).select(
         "week", "sleeper_player_id", "position", "center_ppr", "band_ppr"
     ).filter(pl.col("position").is_in(SKILL_POSITIONS))
     max_proj_week = int(consensus["week"].max())
-    # as-of range = 1..freeze, the season-join freeze week Production VOR also stops at (max_roster_week),
-    # so the AI's "latest" anchor stays the freeze. join_season is season-keyed (roster-free).
-    freeze_week = int(data_layer.read_join_season(season)["week"].max())
+    # as-of range = the FULL resolved projected season (Session 2 retired the wk-4 roster freeze). The band
+    # is scoring-scoped and roster-free, so it has no reason to stop at the roster's freeze — the corpus
+    # grades §2 at EVERY as-of week of a completed season. The live 2026 AI anchor is protected separately:
+    # write_ros_synthesis._read_anchor pins the band read to the league-view's freeze as-of, so widening
+    # the range here does not move the served synthesis. Removing the join_season read also drops the
+    # band's last roster-path dependency (it no longer touches the roster substrate at all).
     adp_map, curve_lookup, curve_max_rank = _load_anchor_inputs(season)
 
     all_rows = []
-    for n in range(1, freeze_week + 1):
+    for n in range(1, max_proj_week + 1):
         all_rows.extend(_band_as_of(
             consensus, n, max_proj_week, season, bull_z=BULL_Z, anchor_w=ANCHOR_W,
             total_weeks=max_proj_week, adp_map=adp_map,
@@ -255,37 +260,44 @@ def compute(season: int) -> pl.DataFrame:
     df = _mark_calibrated_pool(
         pl.DataFrame(all_rows, infer_schema_length=None)
     ).sort("as_of_week", "position", "ros_bull", descending=[False, False, True])
-    freeze = int(df["as_of_week"].max())
-    latest = df.filter(pl.col("as_of_week") == freeze)
-    print(f"=== ROS Player Band: season={season}  as_of_week 1..{freeze}  "
+    last_asof = int(df["as_of_week"].max())   # deepest as-of week that still has remaining projected weeks
+    latest = df.filter(pl.col("as_of_week") == last_asof)
+    print(f"=== ROS Player Band: season={season}  as_of_week 1..{last_asof}  "
           f"(ROS horizon → week {max_proj_week}; BULL_Z={BULL_Z}; ANCHOR_W={ANCHOR_W}; rows={df.height}) ===")
-    print(f"  week {freeze} widest ranges (top bull ceilings):")
+    print(f"  as-of week {last_asof} widest ranges (top bull ceilings):")
     print(latest.head(6).select(
         "sleeper_player_id", "position", "ros_bear", "ros_center", "ros_bull", "ros_sigma",
         "anchor_floor", "anchor_ceiling"))
     applied = latest.filter(pl.col("anchor_applied")).height
-    print(f"  week {freeze} preseason-anchor applied: {applied} of {latest.height}")
+    print(f"  as-of week {last_asof} preseason-anchor applied: {applied} of {latest.height}")
     # Calibrated-pool composition — REPORT it so the QB-over-weight / TE-starve the floors correct for is
-    # visible, not assumed (S1.6). Shown at the freeze (widest pool) and pooled over all as-of weeks.
+    # visible, not assumed (S1.6). Shown at the earliest full-ROS as-of (week 1) and pooled over all weeks.
     pool = df.filter(pl.col("in_calibrated_pool"))
-    fz_pool = pool.filter(pl.col("as_of_week") == freeze)
-    comp = dict(fz_pool.group_by("position").len().sort("position").iter_rows())
-    print(f"  in_calibrated_pool: freeze week {freeze} = {fz_pool.height}/{latest.height} players "
+    w1 = df.filter(pl.col("as_of_week") == 1)
+    w1_pool = pool.filter(pl.col("as_of_week") == 1)
+    comp = dict(w1_pool.group_by("position").len().sort("position").iter_rows())
+    print(f"  in_calibrated_pool: as-of week 1 = {w1_pool.height}/{w1.height} players "
           f"(floors {POSITION_FLOORS}, cap {POOL_SIZE}); positional composition {comp}")
-    print(f"  in_calibrated_pool: {pool.height}/{df.height} rows across as_of_weeks 1..{freeze}")
+    print(f"  in_calibrated_pool: {pool.height}/{df.height} rows across as_of_weeks 1..{last_asof}")
     return df
 
 
-def run(season: int) -> None:
-    df = compute(season)
-    data_layer.write_ros_player_band(df, season)   # scoring-scoped; defaults to the is_mine profile
-    sk = data_layer._active_league(season)[1]
+def run(season: int, scoring_key: str | None = None) -> None:
+    df = compute(season, scoring_key=scoring_key)
+    if scoring_key is None:
+        data_layer.write_ros_player_band(df, season)   # scoring-scoped; defaults to the is_mine profile
+        sk = data_layer._active_league(season)[1]
+    else:
+        data_layer.write_ros_player_band(df, season, scoring_key=scoring_key)
+        sk = scoring_key
     print(f"  → snapshots/derived/scoring/{sk}/ros_player_band_{season}.parquet")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Compute the ROS player band (scoring-scoped §2 half).")
     parser.add_argument("--season", type=int, required=True)
+    parser.add_argument("--scoring-key", choices=["ppr", "half", "std"], default=None,
+                        help="build for an explicit standard profile (default = the is_mine league's)")
     args = parser.parse_args()
-    run(args.season)
+    run(args.season, args.scoring_key)
     sys.exit(0)
