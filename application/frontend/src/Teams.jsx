@@ -68,7 +68,7 @@ export default function Teams({ asOfWeek, onOpenTeam }) {
                   <td className="tm-l">
                     <span className="tm-name">{t.name}</span>
                     <span className="tm-sub">
-                      {t.owner ?? '—'}
+                      <span className="tm-owner">{t.owner ?? '—'}</span>
                       {t.isMe ? <span className="pl-you">YOU</span> : null}
                     </span>
                   </td>
