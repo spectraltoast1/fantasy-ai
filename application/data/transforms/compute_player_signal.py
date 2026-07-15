@@ -490,11 +490,11 @@ def _security_map() -> dict:
     }
 
 
-def compute(season: int) -> pl.DataFrame:
+def compute(season: int, *, league_id=None) -> pl.DataFrame:
     # Full (frozen) join; usage/score columns can be null for a player who didn't record
     # that stat type, so treat as zero so opportunity and points are well-defined.
-    scoring = data_layer.read_scoring_settings(season)
-    full = data_layer.read_join_season(season).filter(
+    scoring = data_layer.read_scoring_settings(season, league_id=league_id)
+    full = data_layer.read_join_season(season, league_id=league_id).filter(
         pl.col("position").is_in(SKILL_POSITIONS)
     ).with_columns(
         [
@@ -541,10 +541,11 @@ def compute(season: int) -> pl.DataFrame:
     return df
 
 
-def run(season: int) -> None:
-    df = compute(season)
-    data_layer.write_player_signal(df, season)
-    print(f"  → snapshots/derived/player_signal_{season}.parquet")
+def run(season: int, *, league_id=None) -> None:
+    df = compute(season, league_id=league_id)
+    data_layer.write_player_signal(df, season, league_id=league_id)
+    lid = league_id or data_layer._active_league(season)[0]
+    print(f"  → snapshots/derived/league/{lid}/player_signal_{season}.parquet")
 
 
 if __name__ == "__main__":

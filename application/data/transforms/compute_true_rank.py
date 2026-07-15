@@ -111,11 +111,11 @@ def _compute_as_of(vor_slice: pl.DataFrame, slots: list, season: int, n: int) ->
     ]
 
 
-def compute(season: int) -> pl.DataFrame:
-    vor = data_layer.read_production_vor(season, as_of_week="all").select(
+def compute(season: int, *, league_id=None) -> pl.DataFrame:
+    vor = data_layer.read_production_vor(season, league_id=league_id, as_of_week="all").select(
         "as_of_week", "roster_id", "position", "ros_value"
     )
-    slots = expand_slots(data_layer.read_lineup_slots(season).to_dicts())
+    slots = expand_slots(data_layer.read_lineup_slots(season, league_id=league_id).to_dicts())
 
     all_rows = []
     for n in sorted(vor["as_of_week"].unique().to_list()):
@@ -131,10 +131,11 @@ def compute(season: int) -> pl.DataFrame:
     return df
 
 
-def run(season: int) -> None:
-    df = compute(season)
-    data_layer.write_true_rank(df, season)
-    print(f"  → snapshots/derived/true_rank_{season}.parquet")
+def run(season: int, *, league_id=None) -> None:
+    df = compute(season, league_id=league_id)
+    data_layer.write_true_rank(df, season, league_id=league_id)
+    lid = league_id or data_layer._active_league(season)[0]
+    print(f"  → snapshots/derived/league/{lid}/true_rank_{season}.parquet")
 
 
 if __name__ == "__main__":

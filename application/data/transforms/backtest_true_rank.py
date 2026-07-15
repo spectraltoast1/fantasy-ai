@@ -96,13 +96,13 @@ def _actual_strength(players: list, remaining: list, slots: list, actual: dict) 
     return total
 
 
-def _test_points(season: int):
+def _test_points(season: int, *, league_id=None):
     """One row per (as_of_week N, roster_id): projected roster_strength (shipped pure path) + the
     actual ROS ceiling over the same remaining weeks. Returns (rows, freeze_week)."""
-    vor = data_layer.read_production_vor(season, as_of_week="all").select(
+    vor = data_layer.read_production_vor(season, league_id=league_id, as_of_week="all").select(
         "as_of_week", "roster_id", "sleeper_player_id", "position", "ros_value"
     )
-    slots = expand_slots(data_layer.read_lineup_slots(season).to_dicts())
+    slots = expand_slots(data_layer.read_lineup_slots(season, league_id=league_id).to_dicts())
     actual = _actual_weekly(season)
 
     weeks = sorted(vor["as_of_week"].unique().to_list())
@@ -131,8 +131,8 @@ def _test_points(season: int):
     return rows, freeze
 
 
-def run(season: int) -> bool:
-    rows, freeze = _test_points(season)
+def run(season: int, *, league_id=None) -> bool:
+    rows, freeze = _test_points(season, league_id=league_id)
     tp = pl.DataFrame(rows)
     print(f"=== True Rank backtest: season={season}  test points={tp.height} "
           f"(team × as-of week; freeze week={freeze}) ===")

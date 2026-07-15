@@ -58,14 +58,14 @@ def _actual_ros(season: int) -> pl.DataFrame:
     )
 
 
-def _test_points(season: int) -> pl.DataFrame:
+def _test_points(season: int, *, league_id=None, scoring_key=None) -> pl.DataFrame:
     """One row per (as_of_week N, rostered player): projected ros_value + vor from the shipped
     pure functions, and the actual ROS production over the same remaining weeks (N+1..end)."""
-    consensus = data_layer.read_projection_consensus(season).select(
+    consensus = data_layer.read_projection_consensus(season, scoring_key=scoring_key).select(
         "week", "sleeper_player_id", "position", "center_ppr"
     ).filter(pl.col("position").is_in(SKILL_POSITIONS))
-    season_df = data_layer.read_join_season(season).filter(pl.col("position").is_in(SKILL_POSITIONS))
-    pool_of = _pool_of(data_layer.read_lineup_slots(season))
+    season_df = data_layer.read_join_season(season, league_id=league_id).filter(pl.col("position").is_in(SKILL_POSITIONS))
+    pool_of = _pool_of(data_layer.read_lineup_slots(season, league_id=league_id))
     actual = _actual_ros(season)
 
     max_proj_week = int(consensus["week"].max())
@@ -107,8 +107,8 @@ def _test_points(season: int) -> pl.DataFrame:
     return pl.DataFrame(rows)
 
 
-def run(season: int) -> bool:
-    tp = _test_points(season)
+def run(season: int, *, league_id=None, scoring_key=None) -> bool:
+    tp = _test_points(season, league_id=league_id, scoring_key=scoring_key)
     print(f"=== Production VOR backtest: season={season}  test points={tp.height} "
           f"(rostered player × as-of week) ===")
 

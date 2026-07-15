@@ -61,12 +61,12 @@ SEED = 20260709
 MAGIC_ODDS = 0.90          # "clinch" threshold for the magic-number proxy
 
 
-def _playoff_config(season: int) -> tuple:
+def _playoff_config(season: int, *, league_id=None) -> tuple:
     """(reg_season_end_week, playoff_teams) from the league's real Sleeper settings — NOT hardcoded.
     `playoff_week_start` is the first postseason week, so the regular season ends the week before;
     `playoff_teams` is the championship-bracket size (the top-K that make the playoffs). Raises with a
     clear message if league_settings hasn't been fetched — never silently fall back to a guess."""
-    s = data_layer.read_playoff_settings(season)
+    s = data_layer.read_playoff_settings(season, league_id=league_id)
     if "playoff_week_start" not in s or "playoff_teams" not in s:
         raise RuntimeError(
             "league_settings missing playoff config — run "
@@ -77,7 +77,7 @@ def _playoff_config(season: int) -> tuple:
     return int(s["playoff_week_start"]) - 1, int(s["playoff_teams"])
 
 
-def _division_map(season: int):
+def _division_map(season: int, *, league_id=None):
     """roster_id → division label, when the league runs divisions AND the per-roster assignment is
     persisted. Today the teams entity carries no `division` column (Sleeper keeps that assignment on
     the rosters endpoint; persisting it is a documented follow-up), so this returns None and the
@@ -87,7 +87,7 @@ def _division_map(season: int):
 
     NB — division seeding is **synthetic-gated only** (no real division league in the answer key); see
     backtest_bracket_sim.py. Revisit against real division standings when such a league is added."""
-    teams = data_layer.read_sleeper_teams(season)
+    teams = data_layer.read_sleeper_teams(season, league_id=league_id)
     if "division" not in teams.columns:
         return None
     m = {int(r["roster_id"]): r["division"] for r in teams.iter_rows(named=True) if r["division"] is not None}
@@ -283,10 +283,10 @@ def _compute_as_of(n, roster_pids, cons_by_week, slots, matchups, season,
     return rows
 
 
-def compute(season: int) -> pl.DataFrame:
-    reg_season_end, playoff_teams = _playoff_config(season)
+def compute(season: int, *, league_id=None, scoring_key=None) -> pl.DataFrame:
+    reg_season_end, playoff_teams = _playoff_config(season, league_id=league_id)
 
-    cons = data_layer.read_projection_consensus(season).filter(
+    cons = data_layer.read_projection_consensus(season, scoring_key=scoring_key).filter(
         pl.col("position").is_in(SKILL_POSITIONS)
     ).select("week", "sleeper_player_id", "position", "center_ppr", "band_ppr")
     cons_by_week: dict = {}
@@ -295,10 +295,10 @@ def compute(season: int) -> pl.DataFrame:
             float(r["center_ppr"]), float(r["band_ppr"] or 0.0), r["position"]
         )
 
-    season_df = data_layer.read_join_season(season).filter(pl.col("position").is_in(SKILL_POSITIONS))
-    slots = expand_slots(data_layer.read_lineup_slots(season).to_dicts())
-    matchups = data_layer.read_season_matchups(season, through_week=reg_season_end)
-    div_map = _division_map(season)  # None for a no-division league → flat seeding (unchanged)
+    season_df = data_layer.read_join_season(season, league_id=league_id).filter(pl.col("position").is_in(SKILL_POSITIONS))
+    slots = expand_slots(data_layer.read_lineup_slots(season, league_id=league_id).to_dicts())
+    matchups = data_layer.read_season_matchups(season, through_week=reg_season_end, league_id=league_id)
+    div_map = _division_map(season, league_id=league_id)  # None for a no-division league → flat seeding (unchanged)
     max_roster_week = int(season_df["week"].max())
 
     all_rows = []
@@ -328,10 +328,11 @@ def compute(season: int) -> pl.DataFrame:
     return df
 
 
-def run(season: int) -> None:
-    df = compute(season)
-    data_layer.write_bracket_odds(df, season)
-    print(f"  → snapshots/derived/bracket_odds_{season}.parquet")
+def run(season: int, *, league_id=None, scoring_key=None) -> None:
+    df = compute(season, league_id=league_id, scoring_key=scoring_key)
+    data_layer.write_bracket_odds(df, season, league_id=league_id)
+    lid = league_id or data_layer._active_league(season)[0]
+    print(f"  → snapshots/derived/league/{lid}/bracket_odds_{season}.parquet")
 
 
 if __name__ == "__main__":

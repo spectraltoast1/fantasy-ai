@@ -166,14 +166,14 @@ def _compute_as_of(consensus: pl.DataFrame, season_df: pl.DataFrame, n: int, max
     return rows
 
 
-def compute(season: int) -> pl.DataFrame:
-    consensus = data_layer.read_projection_consensus(season).select(
+def compute(season: int, *, league_id=None, scoring_key=None) -> pl.DataFrame:
+    consensus = data_layer.read_projection_consensus(season, scoring_key=scoring_key).select(
         "week", "sleeper_player_id", "position", "center_ppr"
     ).filter(pl.col("position").is_in(SKILL_POSITIONS))
-    season_df = data_layer.read_join_season(season).filter(
+    season_df = data_layer.read_join_season(season, league_id=league_id).filter(
         pl.col("position").is_in(SKILL_POSITIONS)
     )
-    pool_of = _pool_of(data_layer.read_lineup_slots(season))
+    pool_of = _pool_of(data_layer.read_lineup_slots(season, league_id=league_id))
 
     max_proj_week = int(consensus["week"].max())
     max_roster_week = int(season_df["week"].max())  # roster data frozen here (season join)
@@ -201,10 +201,11 @@ def compute(season: int) -> pl.DataFrame:
     return df
 
 
-def run(season: int) -> None:
-    df = compute(season)
-    data_layer.write_production_vor(df, season)
-    print(f"  → snapshots/derived/production_vor_{season}.parquet")
+def run(season: int, *, league_id=None, scoring_key=None) -> None:
+    df = compute(season, league_id=league_id, scoring_key=scoring_key)
+    data_layer.write_production_vor(df, season, league_id=league_id)
+    lid = league_id or data_layer._active_league(season)[0]
+    print(f"  → snapshots/derived/league/{lid}/production_vor_{season}.parquet")
 
 
 if __name__ == "__main__":
