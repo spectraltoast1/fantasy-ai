@@ -1402,6 +1402,28 @@ def corpus_manifest_exists() -> bool:
     return _corpus_manifest_path().exists()
 
 
+# corpus_two_way_flags (Session 2.5): the ~4-6/season cross-position "two-way" players — rostered at a
+# SKILL position by the pinned registry but scored under a NON-skill nfl_stats line (Hunter: WR / CB).
+# A FLAG reference (not an exclusion), so the scorer can slice their cross-position answer-key points out.
+def _corpus_two_way_flags_path() -> Path:
+    return _SNAPSHOT_DIR / "corpus" / "corpus_two_way_flags.parquet"
+
+
+def write_corpus_two_way_flags(df: pl.DataFrame) -> None:
+    """One row per (season, sleeper_player_id) material two-way player; overwrite."""
+    path = _corpus_two_way_flags_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
+
+def read_corpus_two_way_flags() -> pl.DataFrame:
+    return pl.read_parquet(_corpus_two_way_flags_path())
+
+
+def corpus_two_way_flags_exists() -> bool:
+    return _corpus_two_way_flags_path().exists()
+
+
 # --- League registry (Improvement-Loop L0 keying) ---
 # The single source of truth for "which leagues exist and how each is keyed", replacing the implicit
 # config.SLEEPER_LEAGUE_ID single-league assumption (audit S1.3 — league #2 silently overwriting #1).

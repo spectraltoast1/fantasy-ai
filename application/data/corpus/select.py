@@ -32,12 +32,14 @@ from application.data.transforms import _scoring
 _SKILL = {"QB", "RB", "WR", "TE"}
 MATCHED_CAP_PER_SEASON = 60
 MATCHED_TARGET = 300
-GENERALIZATION_TARGET = 75
 DEFAULT_ID_THRESHOLD = 90.0        # % skill players resolving to gsis_id
 UNDERFULL_FRAC = 0.5
 _PASS = 0.87                        # Session-0 pass rate — size the filter pool to fill caps after loss
 _MATCHED_FILTER_MARGIN = 1.4
-_GEN_FILTER_POOL = 110             # generalization candidates to filter (target 75 at ~87% + spread margin)
+# Generalization is selected PER SEASON now (Session 2.5 — the season-collapse fix). Aim GEN_PER_SEASON_TARGET
+# passes/season out of a GEN_SEASON_POOL candidate pool; the gate hard-requires ≥ _corpus.GEN_SEASON_MIN each.
+GEN_PER_SEASON_TARGET = 8
+GEN_SEASON_POOL = 18               # max candidates filtered per season (target 8 at ~87% + margin)
 
 _MANIFEST_COLS = [
     "league_id", "season", "scoring_key", "shape_key", "num_teams", "qb_structure",
@@ -177,10 +179,44 @@ def _preselect_matched(disc_rows):
     return {s: rows[:budget] for s, rows in per_season.items()}
 
 
+_GEN_AXES = ["exotic_size", "division", "superflex", "custom"]
+
+
+def _gen_axis(r):
+    """The robustness axis a generalization candidate exercises (mutually exclusive, priority order:
+    divisions > exotic size > superflex > custom scoring)."""
+    nt = r["num_teams"] or 0
+    if r["has_divisions"]:
+        return "division"
+    if nt >= 16 or nt < 10:
+        return "exotic_size"
+    if r["qb_structure"] == "sf":
+        return "superflex"
+    if r["scoring_profile"] == "custom":
+        return "custom"
+    return None
+
+
 def _preselect_generalization(disc_rows, mine):
-    """A deliberate spread across the robustness axes (superflex · divisions · custom-scoreable ·
-    exotic size incl. a 32-team). Round-robins the axes so no single one dominates."""
-    buckets = defaultdict(list)
+    """PER-SEASON candidate pools for the generalization stratum (Session 2.5 — the season-collapse fix).
+
+    The old selection round-robined the robustness axes but was **season-blind**, so the whole stratum
+    collapsed into the seasons with the most discovered leagues (2023-24) — leaving the *test* season
+    (2025) empty. Now each season gets its own ordered pool so the selection loop can guarantee every
+    season is represented. Within a season the order is:
+    Ordering: the four axes ROUND-ROBIN within a season so every code path — including custom scoring /
+    TE-premium — is represented (a season filled purely from standard shape leagues would leave the
+    custom-scoring path untested). WITHIN the three shape axes, standard-scored leagues sort first, so a
+    superflex/division/exotic slot is filled at ZERO custom-key cost; the dedicated custom axis is what
+    spends the GEN_CUSTOM_KEY_CAP budget (enforced in the selection loop). Deterministic: league_id order
+    within each axis, fixed axis cycle → two runs produce identical pools.
+
+    Returns {season: [(axis, row), …]} capped at GEN_SEASON_POOL per season.
+    """
+    def _key(r):
+        return _corpus.scoring_key(r["scoring_profile"], json.loads(r["scoring_settings_json"]))
+
+    per_season = defaultdict(lambda: {a: [] for a in _GEN_AXES})
     for r in sorted(disc_rows, key=lambda x: str(x["league_id"])):
         if r["league_id"] in mine:
             continue
@@ -190,28 +226,26 @@ def _preselect_generalization(disc_rows, mine):
         if not _corpus.is_generalization_eligible(r["scoring_profile"], r["qb_structure"],
                                                   r["has_divisions"], r["num_teams"]):
             continue
-        nt = r["num_teams"] or 0
-        if r["has_divisions"]:
-            buckets["division"].append(r)
-        elif nt >= 16 or nt < 10:
-            buckets["exotic_size"].append(r)
-        elif r["qb_structure"] == "sf":
-            buckets["superflex"].append(r)
-        elif r["scoring_profile"] == "custom":
-            buckets["custom"].append(r)
-    # round-robin the axes (exotic-size first so a 32-teamer is never crowded out)
-    picked, seen = [], set()
-    order = ["exotic_size", "division", "superflex", "custom"]
-    idx = {k: 0 for k in order}
-    while len(picked) < _GEN_FILTER_POOL and any(idx[k] < len(buckets[k]) for k in order):
-        for k in order:
-            if idx[k] < len(buckets[k]) and len(picked) < _GEN_FILTER_POOL:
-                r = buckets[k][idx[k]]
-                idx[k] += 1
-                if r["league_id"] not in seen:
-                    picked.append((k, r))
-                    seen.add(r["league_id"])
-    return picked
+        a = _gen_axis(r)
+        if a is None:
+            continue
+        per_season[r["season"]][a].append(r)
+
+    pools = {}
+    for season, axes in per_season.items():
+        # within each SHAPE axis, standard-scored leagues sort first (conserve the custom-key budget); the
+        # custom axis is custom by definition and keeps league_id order.
+        for a in ("exotic_size", "division", "superflex"):
+            axes[a].sort(key=lambda r: (str(_key(r)).startswith("cust"), str(r["league_id"])))
+        idx = {a: 0 for a in _GEN_AXES}
+        ordered = []
+        while any(idx[a] < len(axes[a]) for a in _GEN_AXES):
+            for a in _GEN_AXES:               # round-robin the four axes so custom scoring is covered
+                if idx[a] < len(axes[a]):
+                    ordered.append((a, axes[a][idx[a]]))
+                    idx[a] += 1
+        pools[season] = ordered[:GEN_SEASON_POOL]
+    return pools
 
 
 def run(id_threshold, verbose):
@@ -318,17 +352,31 @@ def run(id_threshold, verbose):
             if filter_and_classify(r, "matched") and manifest[r["league_id"]]["stratum"] == "matched":
                 matched_selected[s] += 1
 
-    # generalization: spread across axes
-    gen_pool = _preselect_generalization(disc_rows, mine)
-    gen_selected = 0
-    print(f"filtering generalization pool ({len(gen_pool)} candidates)…")
-    for axis, r in gen_pool:
-        if gen_selected >= GENERALIZATION_TARGET:
-            break
-        if r["league_id"] in manifest:
-            continue
-        if filter_and_classify(r, "generalization") and manifest[r["league_id"]]["stratum"] == "generalization":
-            gen_selected += 1
+    # generalization: SEASON-BALANCED + custom-key-capped (Session 2.5). Fill each season to
+    # GEN_PER_SEASON_TARGET, opening a NEW custom scoring_key only while under GEN_CUSTOM_KEY_CAP
+    # (reused keys are free — their substrate is shared). Seasons processed in order → deterministic.
+    gen_pools = _preselect_generalization(disc_rows, mine)
+    gen_by_season = Counter()
+    custom_keys_used = set()
+    total_cands = sum(len(v) for v in gen_pools.values())
+    print(f"filtering generalization pool ({total_cands} candidates over {len(gen_pools)} seasons; "
+          f"target {GEN_PER_SEASON_TARGET}/season, custom-key cap {_corpus.GEN_CUSTOM_KEY_CAP})…")
+    for season in sorted(gen_pools):
+        for axis, r in gen_pools[season]:
+            if gen_by_season[season] >= GEN_PER_SEASON_TARGET:
+                break
+            if r["league_id"] in manifest:
+                continue
+            key = _corpus.scoring_key(r["scoring_profile"], json.loads(r["scoring_settings_json"]))
+            is_custom = key.startswith("cust")
+            # custom-key budget: never open a NEW custom key past the cap (a reused key costs no substrate)
+            if is_custom and key not in custom_keys_used and len(custom_keys_used) >= _corpus.GEN_CUSTOM_KEY_CAP:
+                continue
+            if filter_and_classify(r, "generalization") and manifest[r["league_id"]]["stratum"] == "generalization":
+                gen_by_season[season] += 1
+                if is_custom:
+                    custom_keys_used.add(key)
+    gen_selected = sum(gen_by_season.values())
 
     # ---- write manifest ----
     flush_cache()
@@ -346,8 +394,27 @@ def run(id_threshold, verbose):
     for s in sorted(_corpus.SEASONS):
         note = " (THIN)" if sel_by_season.get(s, 0) < 20 else ""
         print(f"  {s}: {sel_by_season.get(s,0)}{note}")
-    print(f"  matched total selected: {sum(sel_by_season.values())} (target ~{MATCHED_TARGET}); "
-          f"generalization: {gen_selected} (target ~{GENERALIZATION_TARGET})")
+    print(f"  matched total selected: {sum(sel_by_season.values())} (target ~{MATCHED_TARGET})")
+
+    # ---- generalization report (Session 2.5): per-season spread + custom-key budget + shape matrix ----
+    gen_rows = [row for row in manifest.values() if row["stratum"] == "generalization"]
+    gen_seasons = Counter(row["season"] for row in gen_rows)
+    gen_custom_keys = sorted({row["scoring_key"] for row in gen_rows if str(row["scoring_key"]).startswith("cust")})
+    print("\n=== generalization spread (SELECTED) per season ===")
+    for s in sorted(_corpus.SEASONS):
+        note = "" if gen_seasons.get(s, 0) >= _corpus.GEN_SEASON_MIN else f" ⚠ < min {_corpus.GEN_SEASON_MIN}"
+        print(f"  {s}: {gen_seasons.get(s, 0)}{note}")
+    print(f"  generalization total: {gen_selected} | distinct custom keys: {len(gen_custom_keys)} "
+          f"(cap {_corpus.GEN_CUSTOM_KEY_CAP})")
+    print("\n=== generalization shape matrix (coverage, not representativeness) ===")
+    def _size_band(nt):
+        nt = nt or 0
+        return "<10" if nt < 10 else ("10-14" if nt <= 14 else ("15-16" if nt <= 16 else ">16"))
+    shape = Counter((row["scoring_key"] if not str(row["scoring_key"]).startswith("cust") else "cust",
+                     row["qb_structure"], "div" if row["has_divisions"] else "nodiv",
+                     _size_band(row["num_teams"])) for row in gen_rows)
+    for (sc, qb, dv, sz), n in sorted(shape.items()):
+        print(f"  scoring={sc:<5} qb={qb:<4} {dv:<5} size={sz:<5} : {n}")
 
 
 def main():

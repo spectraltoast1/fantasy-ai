@@ -11,6 +11,14 @@ SEASONS = list(range(2025, 2019, -1))   # 2025 .. 2020
 MATCHED_SCORINGS = ("ppr", "half")
 MATCHED_TEAMS_MIN, MATCHED_TEAMS_MAX = 10, 14
 
+# The generalization stratum's SHARED budget constants (Session 2.5). Single source of truth so
+# select.py (which enforces them) and check_corpus.py (which gates them) can never drift — the
+# _manager.py / _scoring.py precedent. The gen set exercises CODE PATHS (superflex / divisions /
+# custom scoring / exotic sizes), not representativeness, so *shape* coverage matters and volume
+# does not; the custom-key cap keeps the scoring-scoped substrate compute bounded.
+GEN_SEASON_MIN = 6          # every season 2020-2025 must carry ≥ this many gen leagues (hard-gated)
+GEN_CUSTOM_KEY_CAP = 12     # distinct custom scoring_keys in the gen stratum ≤ this (substrate budget)
+
 
 def is_matched_eligible(scoring_profile, qb_structure, league_format, num_teams) -> bool:
     """Classification-only matched predicate (the filter + scoreability are applied later).
