@@ -1,6 +1,24 @@
 # STATUS
 
-**Last updated:** 2026-07-14 (**BACKEND — ROSTER SUBSTRATE REPRODUCIBILITY: the registry PINNED as the
+**Last updated:** 2026-07-15 (**BACKEND — SESSION 2.5 PRODUCER CODE COMMITTED + MERGED (re-run): the
+corpus-finalization producers now live on main at `51940eb`.** The 2026-07-14 run shipped the artifacts (frozen
+in the store) but committed the code only on an unmerged branch, so main had no producers — this re-run
+**adopted that branch's 3 commits** (`26bf6d7` C1 season-aware + key-capped generalization re-select & gate
+teeth · `5827e37` C2 8-key generalization substrate · `148d705` C3 `corpus_two_way_flags`) and **regenerated all
+three artifacts from the committed code to prove reproducibility:** manifest identical to the frozen store modulo
+`selected_at` (tie-breaks recovered exactly · twice-run deterministic · zero Sleeper calls); generalization band
+substrate **byte-identical** + consensus **value-identical** (only on-disk row order differs — a Session-2
+non-unique `(week,center_ppr)` sort, within-env deterministic, left as-is per report-don't-tune); two-way flags
+identical (10 rows). Bundle internally consistent (manifest ⋈ substrate keys ⋈ flags); `check_corpus` PASS with
+the season-spread + key-cap teeth proven to bite. **Docs otherwise kept at main's state** (the prior branch's
+STATUS/LEAGUE_CORPUS/READ_BUILD_ORDER rewrites deliberately NOT ported). **Two carry-forwards for Session 3:**
+(1) two-way material count is **~2/season (4 in 2025), BELOW the brief's "~4-6/season"** — the post-1.7 pinned
+registry yields only 2-7 raw skill∧non-skill conflicts/season (not 28-37), ≥20-PPR floor keeps 10; honest +
+reproduced, not a regression. (2) two generalization keys are **float32-vs-float64 duplicates** of the same
+scoring (distinct JSON-hash, identical substrate) — a minor L0 keying inefficiency, within the cap. **Cleanup:**
+main pushed to origin; the stale prior-run `claude/backend-engine-improvement-2-5` worktree/branch (`f864715`,
+local-only, redundant) pruned. **Next = Session 3a (corpus harvest, MULTI-PART) — scoped, NOT started; its
+worktree is on old main and must re-setup on `51940eb`.** — Prior: **BACKEND — ROSTER SUBSTRATE REPRODUCIBILITY: the registry PINNED as the
 authority for rostered skill-eligibility (Improvement-Loop Session 1.7); the determinism the corpus +
 ledger rest on.** The 1.6 finding is RESOLVED. **Reframe, not patch:** for a rostered player,
 skill-eligibility ("what slot does he fill?") is a **fantasy** question (Sleeper registry); stats ("what did
