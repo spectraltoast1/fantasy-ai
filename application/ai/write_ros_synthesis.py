@@ -101,8 +101,14 @@ def _read_anchor(anchor_season: int) -> pl.DataFrame:
     security / direction) joined to ros_player_band (centre / bull / bear / cv + preseason-ADP evidence)
     — the L0 split of the old ros_outcome_shape, rejoined. Rostered players only (the league view's
     grain), so has_ros_anchor keeps its pre-split meaning (only a rostered player carries an anchor)."""
-    view = data_layer.read_ros_league_view(anchor_season)    # league-scoped (is_mine), latest as_of
-    band = data_layer.read_ros_player_band(anchor_season)    # scoring-scoped (is_mine profile), latest as_of
+    view = data_layer.read_ros_league_view(anchor_season)    # league-scoped (is_mine), latest as_of = roster freeze
+    # PIN the band to the league view's as-of week. The scoring-scoped band now spans the FULL projected
+    # season (Session 2 retired its freeze), so its own "latest" as-of runs deep into the year — but the
+    # roster/anchor the served synthesis reads must stay at the roster freeze the league view sits at, or
+    # the 2026 synthesis would silently re-anchor onto a mid-season band. Widening the band must not move
+    # the served read: this pin is what keeps it byte-identical.
+    fz = int(view["as_of_week"][0]) if view.height else None
+    band = data_layer.read_ros_player_band(anchor_season, as_of_week=fz)  # scoring-scoped, pinned to the view's as_of
     return view.join(
         band.select("sleeper_player_id", "ros_center", "ros_bull", "ros_bear", "ros_sigma", "ros_cv",
                     "n_weeks", "anchor_applied", "adp_ecr", "adp_best", "adp_worst",

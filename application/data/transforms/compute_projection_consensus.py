@@ -66,7 +66,9 @@ import polars as pl
 
 from application.data import data_layer
 from application.data.transforms._analytics import round1, skewness, stdev
-from application.data.transforms._scoring import scoring_profile, projection_points_expr, actual_points_expr
+from application.data.transforms._scoring import (
+    scoring_profile, projection_points_expr, actual_points_expr, standard_scoring,
+)
 
 # Variance-shrink weight, in "games of prior": the player's residual variance is pooled
 # with the positional prior as (n·player_var + K·pos_var)/(n + K). Mirrors
@@ -269,15 +271,25 @@ def compute(season: int, scoring: dict | None = None) -> pl.DataFrame:
     return df
 
 
-def run(season: int) -> None:
-    df = compute(season)
-    data_layer.write_projection_consensus(df, season)   # scoring-scoped; defaults to the is_mine profile
-    sk = data_layer._active_league(season)[1]
+def run(season: int, scoring_key: str | None = None) -> None:
+    # scoring_key=None → the is_mine league's profile (single-league default, unchanged). Session 2 (the
+    # corpus substrate) passes an EXPLICIT standard key so it builds {ppr,half} independently of any
+    # league — and historical seasons have no is_mine league for `_active_league` to resolve.
+    if scoring_key is None:
+        df = compute(season)
+        data_layer.write_projection_consensus(df, season)
+        sk = data_layer._active_league(season)[1]
+    else:
+        df = compute(season, scoring=standard_scoring(scoring_key))
+        data_layer.write_projection_consensus(df, season, scoring_key=scoring_key)
+        sk = scoring_key
     print(f"  → snapshots/derived/scoring/{sk}/projection_consensus_{season}.parquet")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Compute the weekly projection consensus + spread band.")
     parser.add_argument("--season", type=int, required=True)
+    parser.add_argument("--scoring-key", choices=["ppr", "half", "std"], default=None,
+                        help="build for an explicit standard profile (default = the is_mine league's)")
     args = parser.parse_args()
-    run(args.season)
+    run(args.season, args.scoring_key)

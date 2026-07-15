@@ -15,12 +15,15 @@ P90 (= floor / center / ceiling) are read off a **rolling window over rank** (pe
 too thin alone: one player per exact rank per season). The freeze/target season is held out of the
 fit so the anchor it feeds carries no leakage.
 
-Output: snapshots/derived/adp_points_curve.parquet — one row per (position, pos_ecr_rank):
-floor_ppr / center_ppr / ceiling_ppr + bin count n. Season-agnostic (pooled history), overwrite.
+Output: snapshots/derived/adp_points_curve/holdout_{S}.parquet — one row per (position, pos_ecr_rank):
+floor_ppr / center_ppr / ceiling_ppr + bin count n + provenance (holdout_season / train_seasons).
+**One curve per held-out target season S**, fit on every season EXCEPT S — so a multi-season corpus
+grading §2 on season S reads an anchor that never saw S (the leak the flat pooled curve hid). Gated by
+check_adp_curve_leakage.py.
 
 Usage:
-    python3 -m application.data.transforms.compute_adp_points_curve
-    python3 -m application.data.transforms.compute_adp_points_curve --holdout 2025
+    python3 -m application.data.transforms.compute_adp_points_curve --holdout 2025   # one season
+    python3 -m application.data.transforms.compute_adp_points_curve --all            # every season
 """
 
 import argparse
@@ -132,13 +135,20 @@ def _fit_curve(pairs: pl.DataFrame) -> pl.DataFrame:
     return pl.DataFrame(out_frames).sort("position", "pos_ecr_rank")
 
 
-def compute(holdout: int | None = None) -> pl.DataFrame:
-    """Fit the curve on every season that has BOTH preseason ADP and realized nfl_stats, holding out
-    `holdout` (default = the latest such season, i.e. the freeze/target) so the anchor is leak-free."""
+def _available_seasons() -> list[int]:
+    """Seasons with BOTH preseason ADP and realized nfl_stats — the fittable/holdout-able set."""
     adp_seasons = set(data_layer.read_adp_preseason()["season"].unique().to_list())
     available = sorted(s for s in adp_seasons if data_layer._nfl_stats_path(s).exists())
     if not available:
         raise RuntimeError("No season has both adp_preseason and nfl_stats — run the fetchers first.")
+    return available
+
+
+def compute(holdout: int | None = None) -> pl.DataFrame:
+    """Fit the curve on every season that has BOTH preseason ADP and realized nfl_stats, holding out
+    `holdout` (default = the latest such season, i.e. the freeze/target) so the anchor is leak-free.
+    Provenance columns holdout_season / train_seasons ride on every row (the leak gate reads them)."""
+    available = _available_seasons()
     if holdout is None:
         holdout = max(available)
     train = [s for s in available if s != holdout]
@@ -146,7 +156,12 @@ def compute(holdout: int | None = None) -> pl.DataFrame:
         raise RuntimeError(f"No training seasons left after holding out {holdout}.")
 
     pairs = _training_pairs(train)
-    curve = _fit_curve(pairs)
+    curve = _fit_curve(pairs).with_columns(
+        pl.lit(holdout, dtype=pl.Int64).alias("holdout_season"),
+    )
+    curve = curve.with_columns(
+        pl.Series("train_seasons", [sorted(train)] * curve.height, dtype=pl.List(pl.Int64)),
+    )
 
     print(f"=== ADP points curve: train={train}  holdout={holdout}  "
           f"(pairs={pairs.height}; ranks fit to {MAX_RANK}, window ±{HALF_WINDOW}) ===")
@@ -164,14 +179,27 @@ def compute(holdout: int | None = None) -> pl.DataFrame:
 
 
 def run(holdout: int | None = None) -> None:
+    if holdout is None:
+        holdout = max(_available_seasons())
     curve = compute(holdout)
-    data_layer.write_adp_points_curve(curve)
-    print(f"  → snapshots/derived/adp_points_curve.parquet ({curve.height} rows)")
+    data_layer.write_adp_points_curve(curve, holdout)
+    print(f"  → snapshots/derived/adp_points_curve/holdout_{holdout}.parquet ({curve.height} rows)")
+
+
+def run_all() -> None:
+    """One leak-free curve per held-out target season — every season with both ADP and nfl_stats."""
+    for s in _available_seasons():
+        run(s)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fit the historical ADP rank→realized-points curve.")
     parser.add_argument("--holdout", type=int, default=None,
                         help="season to exclude from the fit (default = latest = the freeze/target)")
+    parser.add_argument("--all", action="store_true",
+                        help="write one curve per held-out season (every fittable season)")
     args = parser.parse_args()
-    run(args.holdout)
+    if args.all:
+        run_all()
+    else:
+        run(args.holdout)

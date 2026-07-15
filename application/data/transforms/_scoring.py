@@ -124,6 +124,21 @@ def scoring_profile(scoring: dict) -> str:
     return _REC_TO_PROFILE[rec]
 
 
+_STANDARD_REC = {"ppr": 1.0, "half": 0.5, "std": 0.0}
+
+
+def standard_scoring(key: str) -> dict:
+    """The canonical scoring dict for a standard profile key ("ppr" | "half" | "std") — the inverse of
+    `scoring_profile` (which round-trips it back to `key`). Lets the NFL-global substrate
+    (projection_consensus / ros_player_band) be built for a scoring profile INDEPENDENTLY of any
+    league's settings — the Session-2 corpus computes {ppr, half} directly, and historical seasons have
+    no is_mine league to read settings from. Only the profile matters for a standard key (the canned
+    pts_ppr/half/std columns are selected), so the minimal shape-defining dict suffices."""
+    if key not in _STANDARD_REC:
+        raise ValueError(f"standard_scoring: key must be one of {sorted(_STANDARD_REC)}, got {key!r}")
+    return {**_STANDARD, "rec": _STANDARD_REC[key]}
+
+
 def _reject_unsupported(scoring: dict) -> None:
     """Raise if the league has an active skill-scoring key the projections can't score a center for."""
     bad = []
