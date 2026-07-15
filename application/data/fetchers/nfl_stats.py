@@ -174,6 +174,99 @@ def _fetch_and_save(year: int, week: int | None = None) -> None:
     print(f"  Wrote {len(stats)} rows → snapshots/nflreadpy/nfl_stats_{year}.parquet")
 
 
+# --- Expected-points additive backfill (Session 3c) ----------------------------------------------
+# The 2020–2024 nfl_stats parquets were built BEFORE _load_ff_opportunity was added to the fetcher, so they
+# carry none of the *_exp components the §1 Quality axis reads; 2025 was built after and has all 14. Rather
+# than re-pull the whole season (the moving-source trap — realized stats/positions drift, which would move
+# the FROZEN corpus and invalidate the 3b spine, §1.7), these functions ADDITIVELY append the components
+# onto the existing parquets: every pre-existing column stays byte-identical, only the *_exp columns are
+# added. The join mirrors _fetch_and_save exactly (left join on (player_id/gsis_id, week) + fill_null(0.0)).
+
+_EXP_BACKFILL_SEASONS = (2020, 2021, 2022, 2023, 2024)   # 2025 already carries *_exp (built post-join)
+_EXP_MAX_NULL_RATE = 0.02   # a served-but-mostly-null component is as bad as an absent one (std instr 1)
+
+
+def precheck_exp(years=_EXP_BACKFILL_SEASONS) -> dict:
+    """Feasibility pre-check (Session 2's schema-honesty discipline): confirm ff_opportunity SERVES all 14
+    EXP_COMPONENT_COLS, populated, for every year — BEFORE any additive write. A season that doesn't serve
+    them (or serves them mostly-null) would silently re-create the exact TEST-only Quality gap under a new
+    guise (standing instruction 1 — a clean zero is a bug). Reads the RAW source (not _load_ff_opportunity,
+    whose select assumes every component present) so a missing column is reported, not crashed on. Reports
+    per-year presence + worst null-rate; returns the per-year dict plus a top-level `ok`. No writes."""
+    report = {}
+    for yr in years:
+        raw = nflreadpy.load_ff_opportunity(yr, stat_type="weekly").filter(
+            pl.col("player_id").is_not_null() & (pl.col("week") <= 18)
+        )
+        present = [c for c in _scoring.EXP_COMPONENT_COLS if c in raw.columns]
+        missing = [c for c in _scoring.EXP_COMPONENT_COLS if c not in raw.columns]
+        null_rates = {c: float(raw[c].is_null().mean()) for c in present}
+        worst = max(null_rates.values()) if null_rates else 1.0
+        report[yr] = {
+            "rows": raw.height, "present": len(present), "missing": missing,
+            "worst_null_rate": round(worst, 4), "ok": (not missing) and (worst <= _EXP_MAX_NULL_RATE),
+        }
+    all_ok = all(r["ok"] for r in report.values())
+    n = len(_scoring.EXP_COMPONENT_COLS)
+    print("=== ff_opportunity *_exp feasibility pre-check ===")
+    for yr, r in report.items():
+        print(f"  {yr}: {r['present']}/{n} components present, worst null-rate {r['worst_null_rate']:.4f}  "
+              f"{'OK' if r['ok'] else '✗ FAIL'}" + (f"  MISSING {r['missing']}" if r["missing"] else ""))
+    print(f"  → {'ALL SEASONS SERVE THE COMPONENTS' if all_ok else 'STOP — a season is unserved/mostly-null'}")
+    report["ok"] = all_ok
+    return report
+
+
+def backfill_exp(year: int) -> dict:
+    """Additively append the 14 ff_opportunity expected-points components onto the EXISTING nfl_stats season
+    parquet, WITHOUT re-pulling player stats / snaps / team-rates / red-zone (the moving-source trap, §1.7).
+    Left-join _load_ff_opportunity on (player_id==gsis_id, week) + fill_null(0.0) — the same join the fetcher
+    does at _fetch_and_save — preserving the EXISTING row order (a byte-identical additive backfill, not a
+    rebuild). Every pre-existing column is ASSERTED byte-identical and the row count unchanged; only the
+    *_exp columns are added. Idempotent (a re-run drops the prior *_exp and re-adds the same values)."""
+    existing = data_layer.read_nfl_stats(year)
+    exp_present = [c for c in _scoring.EXP_COMPONENT_COLS if c in existing.columns]
+    base = existing.drop(exp_present)              # clean slate so a re-run is idempotent
+    pre_cols = base.columns
+
+    ff = _load_ff_opportunity(year).with_columns(
+        pl.col("week").cast(base.schema["week"])   # match the stored week dtype (Int32) for the join key
+    )
+    augmented = base.join(
+        ff, left_on=["player_id", "week"], right_on=["gsis_id", "week"], how="left",
+        maintain_order="left",
+    ).with_columns([pl.col(c).fill_null(0.0) for c in _scoring.EXP_COMPONENT_COLS])
+
+    # Additive-only guarantees (standing instruction 2, inverted — the ONLY change may be the 14 appended
+    # columns): no row added/removed, and every pre-existing column byte-identical to what was on disk.
+    if augmented.height != base.height:
+        raise RuntimeError(f"backfill_exp({year}): row count {base.height}→{augmented.height} "
+                           f"(non-unique ff_opportunity (gsis, week) key) — aborting, not additive")
+    moved = [c for c in pre_cols if not augmented[c].equals(existing[c])]
+    if moved:
+        raise RuntimeError(f"backfill_exp({year}): pre-existing columns moved {moved[:5]} — NOT additive")
+
+    data_layer.write_nfl_stats(augmented, year)
+    added = list(_scoring.EXP_COMPONENT_COLS)
+    nonzero = {c: round(float((augmented[c] != 0.0).mean()), 3) for c in ("receptions_exp", "rush_touchdown_exp")}
+    print(f"  {year}: +{len(added)} *_exp cols ({base.width}→{augmented.width}); {augmented.height} rows "
+          f"unchanged; nonzero% {nonzero}")
+    return {"year": year, "rows": augmented.height, "added": len(added),
+            "cols_before": base.width, "cols_after": augmented.width}
+
+
+def backfill_exp_all(years=_EXP_BACKFILL_SEASONS) -> None:
+    """Pre-check THEN backfill (Session 2's discipline: don't write a partial substrate). Aborts before ANY
+    write if the pre-check fails for a season."""
+    report = precheck_exp(years)
+    if not report["ok"]:
+        raise SystemExit("Feasibility pre-check FAILED — no *_exp written (standing instruction 1).")
+    print("\n=== additive *_exp backfill (2020–2024) ===")
+    for yr in years:
+        backfill_exp(yr)
+    print("  done — 2025 left untouched (already carries *_exp).")
+
+
 def backfill(year: int) -> None:
     """Pull the full season for a given year and write to snapshots."""
     print(f"Backfilling {year}...")
@@ -198,7 +291,8 @@ def refresh() -> None:
 
 
 if __name__ == "__main__":
-    usage = "Usage: python3 -m application.data.fetchers.nfl_stats {backfill <year> | refresh}"
+    usage = ("Usage: python3 -m application.data.fetchers.nfl_stats "
+             "{backfill <year> | refresh | precheck-exp | backfill-exp <year|all>}")
     if len(sys.argv) < 2:
         print(usage)
         sys.exit(1)
@@ -211,6 +305,16 @@ if __name__ == "__main__":
         backfill(int(sys.argv[2]))
     elif cmd == "refresh":
         refresh()
+    elif cmd == "precheck-exp":
+        precheck_exp()
+    elif cmd == "backfill-exp":
+        if len(sys.argv) < 3:
+            print(usage)
+            sys.exit(1)
+        if sys.argv[2] == "all":
+            backfill_exp_all()
+        else:
+            backfill_exp(int(sys.argv[2]))
     else:
         print(usage)
         sys.exit(1)

@@ -1,6 +1,63 @@
 # STATUS
 
-**Last updated:** 2026-07-15 (**BACKEND — MATCHED MEASUREMENT SPINE COMPUTED (Improvement-Loop Session 3b):
+**Last updated:** 2026-07-15 (**BACKEND — EXPECTED-POINTS SUBSTRATE BACKFILL: §1 `player_signal` Quality lit
+across the whole matched corpus (Improvement-Loop Session 3c).** 3b surfaced that the §1 Quality axis
+(`quality_rate` / `luck` / `point_correlation`) was TEST-only — 100% null for 2020–24, populated only for
+2025 — because the pre-2025 `nfl_stats` parquets were built *before* `_load_ff_opportunity` was added to the
+fetcher, so they carried **0/14** `*_exp` components (2025 has all 14). A stale-substrate gap (the class
+Session 2 fixed for `projections`), NOT a 3b bug; 3b correctly held the axis null (law 2). Fix is **additive
++ data-only** — a wholesale re-pull would risk 1.7-style drift (a moving source) that would move the FROZEN
+corpus and invalidate the 3b spine, so the 14 `*_exp` are **appended** onto the frozen substrate and
+`player_signal` re-run, everything else proven byte-identical. **C1 — `nfl_stats.py` gains `precheck_exp`
+(schema-honesty pre-check: confirm ff_opportunity SERVES all 14 `EXP_COMPONENT_COLS`, populated, for 2020–24
+before ANY write — 14/14, 0.0000 worst null-rate, PASS) + `backfill_exp(year)` (left-join
+`_load_ff_opportunity` on (player_id/gsis_id, week) + `fill_null(0.0)`, preserving existing row order — a
+byte-identical additive backfill, not a rebuild; asserts every pre-existing column byte-identical + row
+count unchanged; idempotent) + `backfill_exp_all` (pre-check THEN backfill).** Result: 2020–24 `nfl_stats`
+153→167 cols, rows unchanged, receptions_exp nonzero ~24% (matches 2025's 23.3%); **independent before/after
+proof — pre-existing columns byte-identical for 2020–24, 2025 fully byte-identical (untouched); twice-run
+byte-identical.** **C2 — new driver `corpus/backfill_expected_points.py`:** (1) append `*_exp` onto each
+matched 2020–24 `join_season` (keyed on **gsis/(player_id, week)** — faithful AND safe: each row already
+carries the gsis of the nfl row that supplied its stats, (gsis, week) is unique ⇒ no cartesian expansion;
+mirrors `harvest._apply_two_way` — additive, idempotent, rewrite-only-when-changed; does NOT re-run the join
+logic, avoiding the 1.7 pinned-registry path); (2) re-run `player_signal` for the **160 non-degenerate**
+matched 2020–24 leagues (the degenerate `1124876463083261952` 2024 has no spine — stays flagged). Run: 161
+targets, joins added 158/unchanged 3, player_signal recomputed 160, flagged 1, **0 errors, 35.8s.** Verified
+over all 161 vs a captured 3b baseline: **join pre-existing columns byte-identical + `*_exp` added;
+`player_signal` CORE columns byte-identical; §1 Quality LIT — `quality_rate` null-rate 1.000→0.000; twice-run
+byte-identical; blast radius contained — `production_vor`/`true_rank`/`positional_depth`/`bracket_odds` files
+byte-identical to 3b (SHA unchanged).** Cross-season consistent (`quality_rate`/`luck` 0% null,
+`point_correlation` structurally null ~0.2–0.29, same dtypes as 2025). **`compute_player_signal.py` is
+UNCHANGED — it is already `has_exp`-aware (`all(c in join.columns for c in EXP_COMPONENT_COLS)`), so the
+columns landing in the join light up Quality with no read-code edit.** **C3 — sibling gate
+`corpus/check_expected_points.py`, GREEN with teeth:** (1) `*_exp` present + populated 2020–2025 (no
+null/missing season), (2) matched joins carry `*_exp` (the consumer sees it — std instr 7), (3)
+`player_signal` recompute byte-identical + §1 Quality lit, (4) blast radius — the 4 reads recompute
+value-identical to 3b (they read neither `*_exp` nor `player_signal`); **all 4 prove-bites fire** (stripped
+`*_exp` fails check 1; all-null Quality fails check 3; the value predicate bites, order-insensitively).
+**Checks 3+4 compare recompute-vs-persisted ORDER-INSENSITIVELY** (`_frame_eq` = sort + frame-eq) — surfaced
+a **pre-existing 3b finding: `compute_production_vor` has a tied-row-ordering non-determinism** (polars'
+multi-threaded `group_by` reorders tied rows ~8%/run — VALUES byte-identical, only on-disk row order moves;
+confirmed order-insensitive frame-equal), so a byte-level recompute check flakes. NOT a 3c regression
+(player_signal re-run is 0/12 flaky; the 4 reads were untouched); the project's sanctioned fix is a unique
+sort tie-break + re-persist, deferred (touching the frozen spine is out of 3c scope) — **`check_spine`'s own
+byte-based determinism check is correspondingly flaky (a 3b gate, ~8%/sampled-league); re-run to confirm
+green.** `check_spine` (value-wise) **intact** (220 present + 1 flagged); the **2025 answer-key `backtest_player_signal` PASS** (Quality axis
+`quality_rate`/exp_ppo beats realized efficiency, MAE 0.311 vs 0.506 — 2025 unchanged). **Seam held —
+`queries.js` / frontend untouched (0 diff); is_mine 2025 (what the app renders) byte-identical/untouched.**
+**Key facts:** `EXP_COMPONENT_COLS` = **14** (the brief's "12" is stale — used the authoritative constant);
+`has_exp` keys off the **join** columns, and only matched-stratum joins were appended, so the **is_mine +
+generalization leagues stay UNCHANGED even on recompute** (their joins still lack `*_exp`) — the clean 3d
+handoff (`nfl_stats` already carries the components; 3d/the app additively backfill their joins the same
+way). The stale, provably-unconsumed `xtd` column (2020–24 only, the retired TD-proxy) was **left untouched**
+per the additive discipline (it never leaks into `player_signal` — derived reads select by name). **Next —
+Session 3d: the generalization robustness pass (the 48 `never_tune` leagues through the 5-read spine —
+superflex `position_pools`, division `_seed_table`/`_division_map`, custom `_scoring.recompute_custom_points`;
+budget it for bugs; inherits the `*_exp` fix for free) — SCOPED, NOT STARTED; then the L2 ledger. Queued
+(not this session): the degenerate `1124876463083261952` (a `reg_end` floor + targeted re-harvest); the
+stale `xtd` cleanup; **`compute_production_vor`'s tied-row-ordering non-determinism (a unique sort tie-break
++ re-persist — the 1.7/3b tie-break pattern; makes `check_spine`'s byte-determinism check flake ~8%)**;
+optionally lighting is_mine historical Quality.**) — Prior: **BACKEND — MATCHED MEASUREMENT SPINE COMPUTED (Improvement-Loop Session 3b):
 the 5 graded reads threaded league-keyed and computed for the 221-league matched tuning corpus.** 3a
 league-keyed the raw+join layer; the compute side was still unkeyed (every `compute_*.compute(season)`
 implicitly resolved is_mine). **C1 — keys threaded:** an explicit keyword-only `league_id` (+ `scoring_key`

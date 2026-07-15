@@ -139,9 +139,18 @@ flagged-degenerate), with a league-stable `bracket_sim` seed, unique sort tie-br
 `production_vor`; gated by `corpus/check_spine.py` (green, teeth). **`ros_league_view` + `manager_features`
 are DESCOPED from the corpus** — narrative/behavioral reads with no answer key, consumed only by the AI
 writers; they stay live/is_mine-only (so the `manager_activity` cross-league fetch is not needed). See
-`engine improvement/SESSION_3B_MATCHED_SPINE.md`. **Next: Session 3c** (the 48 `never_tune` generalization
+`engine improvement/SESSION_3B_MATCHED_SPINE.md`. **Session 3c (expected-points substrate backfill) — DONE:**
+the §1 Quality axis was TEST-only (100% null 2020–24) because the pre-2025 `nfl_stats` predated the
+`ff_opportunity` join. Fixed **additively** (not a re-pull — moving-source drift would move the frozen
+corpus): `nfl_stats.backfill_exp(year)` appended the 14 `*_exp` components onto 2020–24 (every pre-existing
+column byte-identical); `corpus/backfill_expected_points.py` appended them onto the matched `join_season`s
+(gsis-keyed, mirroring `harvest._apply_two_way`) and re-ran `player_signal` over the 160 non-degenerate
+matched 2020–24 leagues — so **§1 Quality (`quality_rate`/`luck`/`point_correlation`) now spans the whole
+matched corpus**, the rest of the 3b spine byte-identical. `compute_player_signal` needed NO edit (already
+`has_exp`-aware). Gated by `corpus/check_expected_points.py` (green, teeth). See `engine
+improvement/SESSION_3C_EXPECTED_POINTS_BACKFILL.md`. **Next: Session 3d** (the 48 `never_tune` generalization
 leagues through the same spine — the synthetic-gated shape paths meet real superflex/division/custom shapes;
-budget it for bugs) → then L2 ledger backfill.
+budget it for bugs; inherits the `*_exp` fix for free) → then L2 ledger backfill.
 
 ## Built — Frontend
 
