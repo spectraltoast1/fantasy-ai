@@ -2,7 +2,11 @@
 
 **Created:** 2026-07-12 · **Status:** **VALIDATED (Session 0) → REGISTRY BUILT (Session 0.5) → FINAL/harvest-ready
 (Session 2.5) → RAW HARVESTED (Session 3a, 2026-07-15): 271 leagues' raw + per-league `join_season` persisted
-league-keyed; the read spine is Session 3b.**
+league-keyed → MEASUREMENT SPINE COMPUTED (Session 3b, 2026-07-15): the 5 graded reads (`production_vor`,
+`true_rank`, `positional_depth`, `bracket_odds`, `player_signal`) threaded league-keyed + computed for the 221
+matched leagues (220 computed + 1 flagged-degenerate; `check_spine` green). The narrative reads
+(`ros_league_view`, `manager_features`) are DESCOPED from the corpus (no answer key). Session 3c = the 48
+`never_tune` generalization leagues through the same spine (scoped, not started); then the L2 ledger.**
 **Companions:** [`IMPROVEMENT_LOOP.md`](./IMPROVEMENT_LOOP.md) · [`PILOT_2026.md`](./PILOT_2026.md) ·
 [`SESSION_0_5_CORPUS_SELECTION.md`](./SESSION_0_5_CORPUS_SELECTION.md) ·
 [`LLM context/SPIKE_CORPUS_FINDINGS.md`](../LLM%20context/SPIKE_CORPUS_FINDINGS.md) ·

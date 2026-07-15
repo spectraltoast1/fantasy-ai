@@ -131,8 +131,17 @@ exclude). **Session 3a (raw harvest) — DONE:** the deferred half of L0 — the
 by `league_id` (`sleeper/<season>/league/<id>/…`, `nfl_sleeper_weekly_joined/league/<id>/…`), the is_mine league
 migrated byte-identical; a new `corpus/harvest.py` pulled all 271 leagues' raw + per-league `join_season` (with
 the `is_two_way` flag riding through), gated by `corpus/check_harvest.py`. See
-`engine improvement/SESSION_3A_RAW_HARVEST.md`. **Next: Session 3b** (the league-scoped read spine +
-10k-Monte-Carlo bracket sim, matched-first) → then L2 ledger backfill.
+`engine improvement/SESSION_3A_RAW_HARVEST.md`. **Session 3b (matched measurement spine) — DONE:** explicit
+`league_id`/`scoring_key` threaded through the **5 graded reads** (`production_vor` → {`true_rank`,
+`positional_depth`, `bracket_odds`}, `player_signal`) + their backtests, defaulting to the active league so
+the seam holds; a new `corpus/compute_spine.py` computed them for the 221 matched leagues (220 computed + 1
+flagged-degenerate), with a league-stable `bracket_sim` seed, unique sort tie-breaks, and `is_two_way` on
+`production_vor`; gated by `corpus/check_spine.py` (green, teeth). **`ros_league_view` + `manager_features`
+are DESCOPED from the corpus** — narrative/behavioral reads with no answer key, consumed only by the AI
+writers; they stay live/is_mine-only (so the `manager_activity` cross-league fetch is not needed). See
+`engine improvement/SESSION_3B_MATCHED_SPINE.md`. **Next: Session 3c** (the 48 `never_tune` generalization
+leagues through the same spine — the synthetic-gated shape paths meet real superflex/division/custom shapes;
+budget it for bugs) → then L2 ledger backfill.
 
 ## Built — Frontend
 

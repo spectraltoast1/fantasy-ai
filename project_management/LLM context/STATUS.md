@@ -1,6 +1,46 @@
 # STATUS
 
-**Last updated:** 2026-07-15 (**BACKEND — L0 RAW-LAYER KEYING + CORPUS RAW HARVEST shipped (Improvement-Loop
+**Last updated:** 2026-07-15 (**BACKEND — MATCHED MEASUREMENT SPINE COMPUTED (Improvement-Loop Session 3b):
+the 5 graded reads threaded league-keyed and computed for the 221-league matched tuning corpus.** 3a
+league-keyed the raw+join layer; the compute side was still unkeyed (every `compute_*.compute(season)`
+implicitly resolved is_mine). **C1 — keys threaded:** an explicit keyword-only `league_id` (+ `scoring_key`
+where a scoring-scoped read is consumed), defaulting to the active league, on `compute()`/`run()` for the
+**5 measurement reads** — `production_vor` (scoring_key→consensus, league_id→join/slots/write),
+`true_rank`/`positional_depth` (league_id→vor/slots/write), `bracket_sim` (scoring_key→consensus,
+league_id→roster/matchups/slots/playoff-config/division-map/write), `player_signal` (league_id→join/scoring)
+— and through their 5 backtest gates. **`ros_league_view` + `manager_features` are DESCOPED from the
+corpus** (narrative/behavioral reads with no answer key — only the AI writers consume them, per the revised
+brief's product call), so the `manager_activity` cross-league fetch is not needed; both stay
+live/is_mine-only/untouched. is_mine 2025 **byte-identical** (threading moves no number); 5 backtests green.
+**C2 — computed (`corpus/compute_spine.py`, mirrors harvest.py):** matched stratum (221), resolve
+`(league_id, season, scoring_key)` from the manifest, compute the 5 in dependency order
+(`production_vor → {true_rank·positional_depth·bracket_odds}`; `player_signal` independent),
+idempotent/resumable (skip a league whose 5 reads are on disk), per-league isolation, budget report. Three
+value-preserving hardenings: (1) **league-stable `bracket_sim` seed** — base `SEED` for is_mine
+(byte-identical odds), a `blake2b(league_id)` hash for each corpus league (same league reproducible on
+re-run, different leagues independent MC draws — one global SEED shared one stream across all 221, which the
+ledger's calibration can't average away); (2) **unique tie-break** on the new sorts (production_vor /
+player_signal +`sleeper_player_id`, true_rank / bracket_odds +`roster_id`; positional_depth already unique)
+— the 1.7 parallelism lesson, now byte-stable; (3) **`is_two_way` rides `production_vor`** from 3a's join
+(is_mine count=4). **220/221 computed** (5 reads each, league-keyed); **1 FLAGGED not dropped**
+(`1124876463083261952` 2024: `playoff_week_start` unset=0 ⇒ `reg_season_end=-1`, only week-1 harvested — no
+season to simulate; a clean zero NAMED, standing instruction 1 — the degenerate raw is a 3a-harvest latent
+for a re-harvest follow-up). **ff_opportunity substrate is 2025-only** (`EXP_COMPONENT_COLS` absent
+pre-2025), so `player_signal`'s §1 Quality axis (`quality_rate` / `luck` / `point_correlation`) is held
+**null** for 2020–24 (law 2 — null when the substrate can't support the read), Float64-typed; the graded
+core read (regression_risk / expected_ppg / the categorical read) is unaffected. **Budget:** `bracket_odds`
+50.1s + `player_signal` 43.3s dominate, **104.5s total for 220**, incremental re-run ≈0. **C3 —
+`corpus/check_spine.py` gate, GREEN with teeth over all 221:** spine present (220 + 1 flagged-degenerate) ·
+cohort consistent (every team at every as-of week; bracket_odds a contiguous prefix — it legitimately can't
+simulate from the final week, no remaining games) · playoff_odds∈[0,1] · **spent playoff mass == slot
+count** every as-of week · production_vor ⊆ join skill players (no invented mass, 99.0% coverage) ·
+**determinism recompute byte-identical incl. the league-stable seed** · `is_two_way` present+boolean (66
+two-way rows across the corpus). Prove-bites all fire (missing read detected; mass≠slots rejected; seed a
+pure fn of league_id). **No constant changed (report-don't-tune); substrate/manifest frozen;
+`queries.js`/views + the narrative reads untouched — the seam held. Next — Session 3c (the 48 `never_tune`
+generalization leagues through the same spine — superflex `position_pools`, division
+`_seed_table`/`_division_map`, custom `_scoring.recompute_custom_points`; budget it for bugs) — SCOPED, NOT
+STARTED; then the L2 ledger.**) — Prior: **BACKEND — L0 RAW-LAYER KEYING + CORPUS RAW HARVEST shipped (Improvement-Loop
 Session 3a): the deferred half of L0 closed, and the first real data pulled through the collision isolation.**
 Session 1 keyed the *derived* league layer but deferred the *raw* fetched + join layer — which was still
 season-keyed only, so a second league pulled into a season would **overwrite the first** (audit S1.3). **C1 —
