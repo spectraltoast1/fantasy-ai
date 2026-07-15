@@ -564,8 +564,13 @@ def _import_manager_helpers():
     return _manager
 
 
-def backfill(league_id: str, year: int) -> None:
-    """Fetch all completed regular-season weeks and write parquet snapshots."""
+def backfill(league_id: str, year: int, *, pace: float = 0.5) -> None:
+    """Fetch all completed regular-season weeks and write parquet snapshots.
+
+    `pace` is a per-week courtesy sleep for the single-league CLI (default 0.5s). The corpus harvest passes
+    `pace=0.0` because it already spaces every call through the `_http` process throttle (set_throttle) — the
+    two would otherwise stack and double the fan-out wall-clock.
+    """
     print(f"Backfilling Sleeper data for league {league_id} ({year})...")
 
     state = _get_nfl_state()
@@ -587,7 +592,8 @@ def backfill(league_id: str, year: int) -> None:
                        data_layer.write_sleeper_transactions, year, week, f"transactions week {week}",
                        league_id=league_id)
 
-        time.sleep(0.5)
+        if pace:
+            time.sleep(pace)
 
     print(f"Backfill complete for league {league_id} ({year}).")
 

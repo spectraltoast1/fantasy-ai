@@ -19,6 +19,7 @@ Usage:
 import argparse
 import json
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 import polars as pl
@@ -26,6 +27,26 @@ import polars as pl
 from application.data import data_layer
 
 SKILL_POSITIONS = {"QB", "RB", "WR", "TE"}
+
+
+# Per-process caches for the week-invariant reads. join.run is called once per (season, week); over a
+# season's ~17 weeks that otherwise re-reads the full nfl_stats board (~18k rows) twice each, plus the
+# pinned registry (~12k) and the id-map, every week. Caching them makes the corpus harvest's per-league
+# join ~an order of magnitude cheaper. The frames are read-only (callers filter/select, never mutate), so
+# sharing one instance is safe; frozen inputs (pinned registry) don't change within a run.
+@lru_cache(maxsize=8)
+def _nfl_stats_cached(season: int) -> pl.DataFrame:
+    return data_layer.read_nfl_stats(season)
+
+
+@lru_cache(maxsize=1)
+def _pinned_players_cached() -> pl.DataFrame:
+    return data_layer.read_pinned_sleeper_players()
+
+
+@lru_cache(maxsize=1)
+def _player_id_map_cached() -> pl.DataFrame:
+    return data_layer.read_player_id_map()
 
 # Identity columns sourced from nflreadpy — used to enrich unmatched Sleeper rows.
 _IDENTITY_COLS = [
@@ -58,7 +79,7 @@ def _load_nfl_stats(season: int, week: int) -> pl.DataFrame:
     Filtering to SKILL_POSITIONS happens after the join so that K rows
     come through matched (position='K') and are dropped cleanly at the end.
     """
-    df = data_layer.read_nfl_stats(season)
+    df = _nfl_stats_cached(season)
     return df.filter(
         (pl.col("season") == season) & (pl.col("week") == week)
     )
@@ -70,7 +91,7 @@ def _build_player_metadata(season: int) -> pl.DataFrame:
     Built from the full-season nflreadpy file so players who were inactive
     in the target week but played in other weeks are still resolvable.
     """
-    df = data_layer.read_nfl_stats(season)
+    df = _nfl_stats_cached(season)
     return (
         df.select(_IDENTITY_COLS + ["sleeper_player_id"])
         .filter(pl.col("sleeper_player_id").is_not_null())
@@ -241,7 +262,7 @@ def _apply_player_id_map_fallback(joined: pl.DataFrame) -> pl.DataFrame:
     filter and flagged in the reconciliation report.
     """
     id_map = (
-        data_layer.read_player_id_map()
+        _player_id_map_cached()
         .select(["sleeper_player_id", "gsis_id", "pfr_id"])
         .filter(pl.col("sleeper_player_id").is_not_null())
         .with_columns(pl.col("sleeper_player_id").cast(pl.Utf8))
@@ -345,7 +366,7 @@ def _apply_registry_eligibility(joined: pl.DataFrame) -> pl.DataFrame:
     cannot drift with the 24h players cache. Players with a still-null position (no nflreadpy row) are left
     for audit_join, which resolves them against the same pinned snapshot.
     """
-    reg = data_layer.read_pinned_sleeper_players().select(
+    reg = _pinned_players_cached().select(
         "sleeper_player_id", pl.col("position").alias("_reg_position")
     )
     joined = joined.join(reg, on="sleeper_player_id", how="left")

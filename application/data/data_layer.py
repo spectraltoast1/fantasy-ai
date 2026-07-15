@@ -481,6 +481,24 @@ def read_join_season(season: int, *, league_id=None) -> pl.DataFrame:
     return pl.read_parquet(_join_season_path(season, league_id))
 
 
+def write_join_season(df: pl.DataFrame, season: int, *, league_id=None) -> None:
+    """Overwrite the whole season join file (all weeks) for a league.
+
+    Unlike `write_join_nfl_sleeper_weekly` (per-week append with a dedup guard), this replaces the entire
+    file — used by the corpus harvest to carry an added column (e.g. the `is_two_way` flag) across every
+    week of an already-built join without re-running the per-week join.
+    """
+    league_id = league_id or _active_league(season)[0]
+    path = _join_season_path(season, league_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
+
+def join_season_exists(season: int, *, league_id=None) -> bool:
+    league_id = league_id or _active_league(season)[0]
+    return _join_season_path(season, league_id).exists()
+
+
 def read_join_nfl_sleeper_weekly(season: int, week: int, *, league_id=None) -> pl.DataFrame:
     """Read a single week's slice from the season join file."""
     return read_join_season(season, league_id=league_id).filter(
