@@ -628,7 +628,7 @@ if __name__ == "__main__":
         "Usage: python3 -m application.data.fetchers.sleeper <command>  (run from repo root)\n"
         "  commands: backfill <year> | refresh | fetch-players | fetch-teams <year> | "
         "fetch-roster-positions <year> | fetch-league-config <year> | "
-        "projections <season> [week] | "
+        "projections <season> [week] | capture-players-snapshot | "
         "fetch-manager-activity <season> [--me] [--limit N] [--throttle S]"
     )
 
@@ -649,6 +649,14 @@ if __name__ == "__main__":
             fetch_projections(_season, int(sys.argv[3]))
         else:
             fetch_projections_season(_season)
+        sys.exit(0)
+
+    # capture-players-snapshot pins the live registry into the active immutable snapshot (Session 1.7).
+    # League-agnostic — handled before the league_resolver import; ensures players.parquet is fresh first.
+    if cmd == "capture-players-snapshot":
+        fetch_players()  # refresh the live cache if stale (≤24h no-op), then pin it
+        path = data_layer.capture_players_snapshot()
+        print(f"  pinned players snapshot {data_layer.ACTIVE_PLAYERS_SNAPSHOT!r} → {path}")
         sys.exit(0)
 
     # league_resolver lives in application/shared/ (imported here — only the CLI modes need it)

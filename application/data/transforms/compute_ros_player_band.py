@@ -76,7 +76,12 @@ POSITION_FLOORS = {"QB": 32, "RB": 80, "WR": 90, "TE": 32}
 def _mark_calibrated_pool(df: pl.DataFrame) -> pl.DataFrame:
     """Add `in_calibrated_pool`: per as-of week, the top min(POOL_SIZE, available) skill players by
     ros_center, UNIONed with the top POSITION_FLOORS[pos] per position (so no position is starved).
-    Pure — ranks are ordinal by ros_center desc; ties broken deterministically by the ordinal rank."""
+    Pure — ranks are ordinal by ros_center desc; ros_center TIES at the pool boundary break
+    deterministically by sleeper_player_id. (An `ordinal` rank otherwise breaks ties by the frame's
+    row order, which polars' multi-threaded group_by upstream leaves non-deterministic — flipping the
+    suppression flag on boundary players run-to-run, a reproducibility hole the corpus/ledger can't have.
+    The pre-sort pins the tie order.)"""
+    df = df.sort(["as_of_week", "ros_center", "sleeper_player_id"], descending=[False, True, False])
     floor_expr = pl.col("position").replace_strict(POSITION_FLOORS, default=0, return_dtype=pl.Int64)
     return df.with_columns(
         (

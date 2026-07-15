@@ -27,6 +27,8 @@ from application.data.transforms._analytics import position_pools
 from application.data.transforms import compute_production_vor as vor
 from application.data.transforms import compute_true_rank as tr
 from application.data.transforms import compute_positional_depth as depth
+from application.data.transforms import compute_market_vor as mv
+from application.data.transforms import compute_bracket_sim as bracket
 
 _STD_SLOTS = [
     {"slot": "QB", "count": 1, "eligible": "QB"}, {"slot": "RB", "count": 2, "eligible": "RB"},
@@ -39,6 +41,41 @@ _SF_SLOTS = _STD_SLOTS + [{"slot": "SUPER_FLEX", "count": 1, "eligible": "QB,RB,
 def _check(label, ok, results, extra=""):
     results.append(ok)
     print(f"    {label:56} {'PASS' if ok else 'FAIL'}{('  ' + extra) if extra else ''}")
+
+
+def _named_entity_diff(name, fresh, on_disk, keys) -> None:
+    """Print the FULL changed row-set between a fresh compute and the on-disk parquet — rows on one side
+    only, plus value-changed rows — each tagged with its player/roster id. The bounded-movement instrument
+    the frame-eq bool lacks: it lets "moves only the named two-way players" be proven, not asserted. Floats
+    are rounded before comparison; value diffs use a null-safe per-column filter (never a join on float
+    columns, whose NaN/-0.0 semantics manufacture phantom diffs)."""
+    on_disk = on_disk.select(fresh.columns)
+    fc = [c for c in fresh.columns if fresh[c].dtype in (pl.Float64, pl.Float32)]
+    fr = fresh.with_columns([pl.col(c).round(6) for c in fc])
+    od = on_disk.with_columns([pl.col(c).round(6) for c in fc])
+    only_fresh = fr.join(od.select(keys), on=keys, how="anti")
+    only_disk = od.join(fr.select(keys), on=keys, how="anti")
+    common = fr.join(od, on=keys, how="inner", suffix="_od")
+    valcols = [c for c in fresh.columns if c not in keys]
+    expr = None
+    for c in valcols:
+        e = pl.col(c).ne_missing(pl.col(f"{c}_od"))
+        expr = e if expr is None else (expr | e)
+    val_changed = common.filter(expr) if expr is not None else common.head(0)
+    idcol = "sleeper_player_id" if "sleeper_player_id" in fresh.columns else keys[-1]
+
+    def ids(df):
+        return sorted({str(x) for x in df[idcol].to_list()}) if df.height else []
+
+    total = only_fresh.height + only_disk.height + val_changed.height
+    print(f"  {name:16} fresh={fresh.height:5} disk={on_disk.height:5}  fresh_only={only_fresh.height} "
+          f"disk_only={only_disk.height} val_changed={val_changed.height}  [{'CLEAN' if total == 0 else str(total) + ' changed'}]")
+    if only_fresh.height:
+        print(f"       fresh_only {idcol}: {ids(only_fresh)}")
+    if only_disk.height:
+        print(f"       disk_only  {idcol}: {ids(only_disk)}")
+    if val_changed.height:
+        print(f"       val_changed {idcol}: {ids(val_changed)}")
 
 
 def diagnose(season: int) -> None:
@@ -60,7 +97,7 @@ def diagnose(season: int) -> None:
     print(f"  on-disk rows={on_disk.height}  fresh compute rows={fresh.height}  "
           f"(on-disk-not-fresh={only_disk.height}, fresh-not-on-disk={only_fresh.height})")
 
-    reg = data_layer.read_sleeper_players().select(
+    reg = data_layer.read_pinned_sleeper_players().select(
         "sleeper_player_id", "full_name", "position", "team", "status")
     stats = data_layer.read_nfl_stats(season).select("sleeper_player_id", "week", "position")
     consensus = data_layer.read_projection_consensus(season).select(
@@ -97,9 +134,12 @@ def diagnose(season: int) -> None:
                 two_way = bool(stat_pos) and all(p not in vor.SKILL_POSITIONS for p in stat_pos) \
                     and reg_pos in vor.SKILL_POSITIONS
                 cause = ("roster-side drop: absent from join_season — "
-                         + ("registry⇄nfl_stats POSITION CONFLICT (two-way player; audit_join keeps him only "
-                            "when the 24h registry labels him a skill position → REGISTRY-DRIFT reproducibility "
-                            "hole)" if two_way else "roster resolution changed"))
+                         + ("registry⇄nfl_stats POSITION CONFLICT (two-way player): nflreadpy labels him "
+                            "non-skill, so the join skill-filter drops him before the remainder step. "
+                            "Session 1.7 makes the PINNED registry authoritative for eligibility, so he is "
+                            "reclassified to his fantasy slot and kept — deterministically. If still absent, "
+                            "the pinned snapshot lacks him or predates his skill classification"
+                            if two_way else "roster resolution changed"))
                 if two_way:
                     drift_suspects += 1
             elif pool is None:
@@ -114,15 +154,36 @@ def diagnose(season: int) -> None:
 
     print()
     if drift_suspects:
-        print(f"  MECHANISM: registry-drift reproducibility hole confirmed for {drift_suspects} player(s). "
-              "The roster substrate (join_season) is rebuilt from the 24h Sleeper current-state registry via "
-              "audit_join; a two-way player enters/leaves depending on the registry's label at rebuild time, "
-              "so production_vor is NOT reproducible across registry refreshes.")
-        print("  ACTION (follow-up session — do NOT regenerate here; that bakes in a transient registry "
-              "state): pin/version the registry snapshot, or freeze `position` into join_season at write "
-              "time so derived reads never depend on the moving cache. The gate stays honestly RED.")
+        print(f"  MECHANISM: registry⇄nfl_stats position conflict for {drift_suspects} two-way player(s). "
+              "Skill-eligibility is a FANTASY question (Sleeper registry), but nflreadpy (a stats source) was "
+              "answering it — a two-way player is labelled non-skill by his defensive line and dropped by the "
+              "join skill-filter, so his membership drifted with the mutable registry across rebuilds.")
+        print("  RESOLUTION (Session 1.7): the PINNED registry snapshot is authoritative for rostered "
+              "skill-eligibility (join_nfl_sleeper_weekly + audit_join + market_vor read it), so this is "
+              "deterministic. A non-empty divergence here AFTER the rebuild means the pin is stale or lacks "
+              "the player — investigate, do not regenerate to taste.")
     else:
-        print("  MECHANISM: not a registry-drift signature — see the per-player cause lines above.")
+        print("  No divergence — on-disk reproduces a fresh compute (deterministic).")
+
+    # --- Extend the bounded audit to the other roster-strength reads (Session 1.7): name every changed
+    #     row so 'moves only the named two-way players' is proven, not asserted.
+    print("\n=== downstream frame diff (fresh compute vs on-disk) ===")
+    _named_entity_diff("true_rank", tr.compute(season),
+                       data_layer.read_true_rank(season, as_of_week="all"), ["as_of_week", "roster_id"])
+    _named_entity_diff("positional_depth", depth.compute(season),
+                       data_layer.read_positional_depth(season, as_of_week="all"),
+                       ["as_of_week", "roster_id", "position"])
+    try:
+        od_mv = pl.read_parquet(data_layer._market_vor_path(season, data_layer._active_league(season)[0]))
+        _named_entity_diff("market_vor", mv.compute(season), od_mv,
+                           ["snapshot_date", "roster_id", "sleeper_player_id"])
+    except Exception as e:  # market_vor is optional (POC entity) — report, don't crash the diagnostic
+        print(f"  market_vor: skipped ({type(e).__name__}: {str(e)[:80]})")
+    try:
+        od_bo = data_layer.read_bracket_odds(season, as_of_week="all")
+        _named_entity_diff("bracket_odds", bracket.compute(season), od_bo, ["as_of_week", "roster_id"])
+    except Exception as e:
+        print(f"  bracket_odds: skipped ({type(e).__name__}: {str(e)[:80]})")
 
 
 def run(season: int) -> bool:
@@ -158,6 +219,21 @@ def run(season: int) -> bool:
     vor_sf = vor._pool_of(pl.DataFrame(_SF_SLOTS))
     _check("VOR _pool_of: standard 2 pools, superflex 1 (QB pooled with flex)",
            len(set(vor_std.values())) == 2 and vor_sf["QB"] == vor_sf["RB"], results)
+
+    # --- C: determinism (Session 1.7) — the substrate reads reproduce on a re-run. With the registry
+    #     pinned, a fresh compute cannot drift; two computes must carry identical VALUES. Compared
+    #     order-INSENSITIVELY (sort by all columns first): polars' multi-threaded group_by can legitimately
+    #     reorder tied rows within a run, and every consumer sorts, so row order is not a determinism
+    #     property — the values are. (The pipeline-level twice-run in the session rebuild sorts the same
+    #     way.) ---
+    print("  C — determinism (compute twice == identical values, order-insensitive):")
+    for cname, cfn in (("production_vor", vor.compute), ("true_rank", tr.compute),
+                       ("positional_depth", depth.compute), ("market_vor", mv.compute)):
+        try:
+            a, b = cfn(season), cfn(season)
+            _check(f"{cname} compute×2 identical", a.sort(a.columns).equals(b.sort(b.columns)), results)
+        except Exception as e:
+            _check(f"{cname} compute×2 identical", False, results, f"{type(e).__name__}: {str(e)[:60]}")
 
     ok = all(results)
     print()

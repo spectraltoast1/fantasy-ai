@@ -1,6 +1,54 @@
 # STATUS
 
-**Last updated:** 2026-07-14 (**BACKEND — NFL SUBSTRATE BACKFILL 2020–2025 (Improvement-Loop Session 2): the
+**Last updated:** 2026-07-14 (**BACKEND — ROSTER SUBSTRATE REPRODUCIBILITY: the registry PINNED as the
+authority for rostered skill-eligibility (Improvement-Loop Session 1.7); the determinism the corpus +
+ledger rest on.** The 1.6 finding is RESOLVED. **Reframe, not patch:** for a rostered player,
+skill-eligibility ("what slot does he fill?") is a **fantasy** question (Sleeper registry); stats ("what did
+he produce?") are an **NFL** question (nflreadpy). The bug was that eligibility was answered by the stats
+source. **Mechanism correction (proven, not assumed):** the 1.6 brief said pin `audit_join` to keep Hunter,
+but nflreadpy had since accumulated his **CB** rows (wk1–7), so a fresh join now **matches** his CB row and
+the skill-filter drops him **before** the remainder step (**wk1–4 remainders empty — he is not a
+remainder**); pinning the audit path alone would leave the gate red. **The fix:** an immutable, versioned,
+write-once players snapshot (`data_layer.ACTIVE_PLAYERS_SNAPSHOT` + `read_pinned_sleeper_players` +
+`capture_players_snapshot`; parquet gitignored, id git-tracked); `join_nfl_sleeper_weekly` arbitrates a
+rostered player's eligibility in the registry's favour when it disagrees with nflreadpy; `audit_join`
+(dormant today, wakes for the corpus) + `compute_market_vor` + `compute_player_signal` (security axis) all
+read the pin, not the 24h cache. **This session CHANGES NUMBERS BY DESIGN**, so the discipline inverts:
+**bounded + stable, not "nothing moved".** Rebuilt join_season (2025 wk1–4) + everything downstream; the
+union of changed ids across all 8 entities = **exactly {Travis Hunter 12530}** (every changed row named,
+proven not asserted), and the full pipeline run **twice is byte-identical**. `backtest_roster_shape` green
+from determinism (frame-eq 635/40/160 + a new twice-compute check); `--diagnose` extended to name the full
+changed set. Other gates exit 0 (production_vor/true_rank/positional_depth/bracket_sim, check_market_vor,
+l0_keying). **Exposure quantified:** corpus-wide two-way ceiling ~4–6 material players/season; 2025
+real-roster = 1 (Hunter). **Residual (named, not closed):** pinning gives determinism, NOT historical
+accuracy (the registry is current-state — a Session-3 footnote). **Answer-key wrinkle:** Hunter's 63.8 PPR
+are his CB line → recommend FLAG (cross-position two-way), not exclude; defer to Session 3. **⚠️ Concurrent
+Session 2 (NOT a 1.7 regression):** `backtest_ros_player_band` is red because Session 2's in-flight
+`adp_points_curve` migration (pooled→per-holdout) removed the pooled curve this branch reads → the §2 anchor
+is a no-op (coverage = the UNCHANGED pre-anchor 0.744, identical to 1.6 → production_vor byte-identical,
+exonerating 1.7); resolves post-merge. Sessions 1.7 & 2 are INDEPENDENT (disjoint writes: league-scoped vs
+NFL-global/scoring-scoped; the only shared edited file is `data_layer.py`, additions in different regions).
+**No `queries.js`/view edits — the seam held. Next: the has_ros_anchor→in_calibrated_pool rewire (post
+Session 2).** **Fold-in (merged Session 2 into 1.7):** the §2 ADP anchor is live post-merge (Session 2 had
+already repointed the reader to `read_adp_points_curve(holdout=season)`; the earlier `0.744` was only 1.7's
+stale pre-merge worktree). Added the **missing anchor-consumption gate** to `backtest_ros_player_band`: it now
+ASSERTS the anchor is non-trivial (coverage-with ≠ coverage-without, applied to N>0), so a silently-disabled
+anchor FAILS the gate instead of passing — the check Session 2's "curve files exist" gate could not make
+(teeth proven: a simulated missing curve flips the gate to FAIL). **Anchor live: coverage 0.744→0.817** on
+the calibrated pool. Also hardened 1.7's own Part C determinism check to compare **order-insensitively**
+(polars' multi-threaded group_by reorders tied rows — not a determinism property; the values are identical,
+which Part A and the twice-run proof already sort for). **Report-only (BAND_Z):** Session 2's
+"BAND_Z=0.55 generalizes, 2025 not the outlier" is **anchor-INDEPENDENT** — measured on `projection_consensus`,
+which never consumes the ADP anchor (the anchor shifts the band CENTER in `ros_player_band`, not the width) —
+so it stands unchanged with the anchor live; `backtest_projection_consensus` re-run PASS. **Regenerated the
+whole merged tree** (substrate + roster chain) so data matches merged code; the twice-run determinism check
+across it caught a **pre-existing (1.6) non-determinism in `ros_player_band.in_calibrated_pool`** — the
+top-300 suppression cutoff broke `ros_center` ties by `ordinal` rank (i.e. by polars' parallelism-dependent
+row order), flipping 6 boundary booleans run-to-run (no numeric change, not gated). **Fixed:** the tie-break
+now pins on `sleeper_player_id` (`_mark_calibrated_pool` pre-sorts); the full substrate ({ppr,half}×2020–2025)
+rebuilt via `build_substrate` — now **every** entity, incl. `ros_player_band`, is twice-run byte-identical.
+All gates green (incl. `check_adp_curve_leakage`, `backtest_ros_player_band`, `backtest_roster_shape`). — Prior:
+**BACKEND — NFL SUBSTRATE BACKFILL 2020–2025 (Improvement-Loop Session 2): the
 corpus's multi-season forward-prior spine, which the engine has never had.** `projections` backfilled for
 2020–2024 (existed only for 2025) after a schema-honesty pre-check proved every load-bearing component column
 populated per season; `projection_consensus` + `ros_player_band` computed for **{ppr,half}×2020–2025** via a new
@@ -366,6 +414,28 @@ The project will do this in two ways: a dashboard for user-driven insight and an
 > section is just the recent-detail window. Keeps the doc light for every session.
 
 > most recent build
+**§1.7 — Roster Substrate Reproducibility: pin the registry (Improvement-Loop; 3 commits).** Made the roster
+substrate deterministic — the determinism the corpus (Session 3) and the prediction ledger rest on. The 1.6
+finding is RESOLVED. **Reframe, not patch:** for a rostered player, skill-eligibility ("what slot does he
+fill?") is a **fantasy** question (Sleeper registry); stats are an **NFL** question (nflreadpy) — the bug was
+eligibility being answered by the stats source. **Mechanism correction (proven):** the 1.6 brief's premise
+(pin `audit_join`) was outdated — nflreadpy accumulated Hunter's **CB** rows (wk1–7), so a fresh join now
+matches his CB row and the skill-filter drops him **before** the remainder step (wk1–4 remainders empty; he
+is not a remainder), so the audit-only fix would leave the gate red. **C1 (plumbing):** immutable versioned
+write-once players snapshot + `read_pinned_sleeper_players` + tracked `ACTIVE_PLAYERS_SNAPSHOT`;
+`join_nfl_sleeper_weekly` arbitrates eligibility in the pinned registry's favour on a nflreadpy⇄registry
+disagreement; `audit_join` (dormant, wakes for the corpus) + `compute_market_vor` + `compute_player_signal`
+(security) read the pin. **C2 (rebuild + gate):** rebuilt join_season (wk1–4) + all downstream; the union of
+changed ids across all 8 entities = **exactly {Hunter 12530}** (every row named), full pipeline **twice
+byte-identical**; `backtest_roster_shape` green from determinism (frame-eq 635/40/160 + a new twice-compute
+check; `--diagnose` names the full changed set); other gates exit 0. **C3 (quantify + docs):** corpus-wide
+two-way ceiling ~4–6 material/season, 2025 real-roster = 1 (Hunter); residual = determinism ≠ historical
+accuracy (Session-3 footnote); answer-key wrinkle (Hunter's 63.8 PPR are CB) → recommend FLAG not exclude.
+**⚠️ Concurrent Session 2 (NOT a 1.7 regression):** `backtest_ros_player_band` red = Session 2's in-flight
+`adp_points_curve` pooled→per-holdout migration removed the pooled curve this branch reads → §2 anchor no-op
+(coverage = the UNCHANGED pre-anchor 0.744 → production_vor byte-identical → 1.7 exonerated); resolves
+post-merge (done — see the fold-in note in the header). **No `queries.js`/view edits.**
+
 **§2 — NFL substrate backfill 2020–2025 (Improvement-Loop; the corpus's forward-prior spine; 2 code commits
 + a data backfill).** Session 3 (harvest) can compute nothing without a multi-season forward prior; it
 existed only for 2025. **Independence from the concurrent §1.7 verified against the code, not assumed:** §2's
@@ -431,28 +501,6 @@ covered); the pool's value is decision-relevance + suppression. **Gap reported (
 refreshed, Chase card ROS BULL 9/10 from the repointed parquet). No `queries.js`/view edits — seam held.
 **Next — Sessions 2/3 unblocked on a trustworthy baseline; queued: the roster-reproducibility fix + the
 `has_ros_anchor` rewire.**
-
-> earlier build
-**§1.5 — `team_form` + `team_leakage` retired (Improvement-Loop scope correction; 3 commits).** Two fully-orphaned
-derived reads (neither a §1–§7 read; only consumers were pre-Gridiron panels imported by nobody), deleted **before
-the corpus harvest** so they aren't computed ~276× for reads that don't exist. `team_leakage` retired **on
-principle** — it graded start/sit against **realized points** (a design-law-1 violation coaching the spike-week
-START/SIT error); the *process*-graded successor (vs the `projection_consensus` prior knowable at decision time)
-is recorded as future work in `DECISION_READS.md`, not built. **C1 backend:** dropped
-`compute_team_form.py`/`compute_team_leakage.py` + the six `data_layer` fns + the persisted parquets; pruned
-leakage from `backtest_roster_shape` (frame-eq target **and** its synthetic-superflex sub-check, keeping the
-VOR/position_pools checks) and `backtest_l0_keying`'s `_LEAGUE_ENTITIES`; **`_analytics.py` untouched**. **C2
-front end:** deleted `TeamPanel.jsx`/`LeaguePanel.jsx` + the whole dead `queries.js` cluster only they reached +
-the two `db.js` registrations + the two `public/data` symlinks; **kept** the live **singular** `loadTeamDetail` +
-`expandSlots`/`optimalLineup`/`teamProjections`. **C3 docs:** DECISION_READS "Retired reads" +
-TECHNICAL_ARCHITECTURE / READ_BUILD_ORDER / PRODUCT_ROADMAP. **Verified:** `compileall` clean, zero dangling refs;
-`backtest_l0_keying` **exit 0**; `backtest_roster_shape` byte-identical **bar the removed leakage lines** (no live
-number moved — standing instruction 5); all five surfaces (Players · Teams · League · **Matchups** · Dossier)
-render live at 1280px, zero console errors, no retired-parquet fetch. **⚠️ Pre-existing (NOT this session):**
-`backtest_roster_shape`'s `production_vor` frame-eq FAILs at baseline (on-disk 635 rows **stale** vs 631
-recomputed) — a shared-store data-regeneration concern, orthogonal to this deletion, left unfixed (regenerating
-would move numbers). **Next — the corpus harvester (Session 2).**
-— consumes the corrected manifest.
 
 > built
     - nflreadpy fetcher

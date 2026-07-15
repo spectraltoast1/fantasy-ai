@@ -19,7 +19,6 @@ immediately without touching the joined file.
 
 import argparse
 import sys
-from pathlib import Path
 
 import polars as pl
 
@@ -34,38 +33,16 @@ _EXCLUDE_POSITIONS = {"K", "DEF", "FB", "OL", "DL", "LB", "DB", "CB", "S",
 
 
 def _load_sleeper_players() -> pl.DataFrame:
-    """Load the Sleeper players cache, triggering a fetch if stale or missing."""
-    try:
-        return data_layer.read_sleeper_players()
-    except FileNotFoundError:
-        # Cache doesn't exist yet — call the fetcher.
-        _trigger_players_fetch(force=True)
-        return data_layer.read_sleeper_players()
+    """Load the PINNED Sleeper players snapshot (Session 1.7 — roster reproducibility).
 
-
-def _trigger_players_fetch(force: bool = False) -> None:
-    """Call sleeper.fetch_players() without importing the module at the top level
-    (the fetcher lives in a sibling directory and has its own path setup)."""
-    import importlib.util, os
-    fetcher_path = Path(__file__).resolve().parent.parent / "fetchers" / "sleeper.py"
-    spec = importlib.util.spec_from_file_location("sleeper_fetcher", fetcher_path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    mod.fetch_players(force=force)
-
-
-def _check_cache_staleness() -> None:
-    """Refresh the Sleeper players cache if it is older than 24 hours."""
-    age = data_layer.sleeper_players_age_seconds()
-    if age is None:
-        print("  Sleeper players cache missing — fetching now...")
-        _trigger_players_fetch(force=True)
-        return
-    if age > 86_400:
-        print(f"  Sleeper players cache is {age / 3600:.1f}h old — refreshing...")
-        _trigger_players_fetch(force=True)
-    else:
-        print(f"  Sleeper players cache is fresh ({age / 3600:.1f}h old).")
+    Remainder resolution used to read the live 24h `players.parquet` cache, so a rostered player's
+    keep/discard flipped with whatever the registry said on rebuild day — the reproducibility hole. It now
+    reads the immutable pinned snapshot, so the resolution is deterministic across rebuilds and re-harvests.
+    This path is dormant today (the real 2025 league produces no remainders) but it is the SAME drift class
+    the join corrects, and it wakes the moment a 276-league corpus yields non-empty remainders (Session 3).
+    Raises with capture instructions if the pin has not been created.
+    """
+    return data_layer.read_pinned_sleeper_players()
 
 
 def _build_zero_stat_row(
@@ -121,8 +98,7 @@ def audit(season: int, week: int) -> None:
 
     print(f"  {len(remainders)} remainder(s) to resolve.")
 
-    # --- Ensure Sleeper players cache is fresh ---
-    _check_cache_staleness()
+    # --- Resolve against the PINNED registry snapshot (deterministic, not the moving 24h cache) ---
     players_df = _load_sleeper_players()
 
     # Build a lookup: sleeper_player_id → player dict

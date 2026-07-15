@@ -91,7 +91,10 @@ with a paired `backtest_*.py` / `check_*.py`. **No UI yet on any of these** — 
 `nfl_stats.py` / `sleeper.py` / `leaguelogs.py` / `news.py` / `adp.py`, all routed through the shared
 `fetchers/_http.py` resilience layer (timeout / backoff / retry / throttle / per-item isolation) with a
 `run.py` collector registry/dispatcher + `check_collectors.py` coverage gate (QUEUED #1); joins
-`join_nfl_sleeper_weekly.py` + `audit_join.py`; `derive_lineup_slots.py`; the `_scoring.py` dispatcher +
+`join_nfl_sleeper_weekly.py` + `audit_join.py` — **Session 1.7: a rostered player's skill-eligibility is
+resolved against the PINNED Sleeper registry snapshot (`data_layer.read_pinned_sleeper_players`), not the
+mutable 24h cache, so the roster substrate is deterministic across rebuilds (the corpus/ledger precondition;
+audit S1.1 struck)**; `derive_lineup_slots.py`; the `_scoring.py` dispatcher +
 custom-scoring recompute engine + `expected_points_expr`; the AI seam `application/ai/client.py`; shared
 pure helpers `_analytics.py` / `_manager.py`; the `league_settings`, multi-source `projections`, ADP
 (`adp_preseason` / `adp_points_curve`), and §2 team-news pipeline (`team_news_raw` → `team_news_dossier`

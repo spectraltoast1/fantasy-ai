@@ -251,6 +251,22 @@ def run(season: int, bull_z: float = BULL_Z, anchor_w: float = ANCHOR_W) -> bool
     print(f"    pre-anchor  (ANCHOR_W=0.00): coverage {pcov:.3f}  below-bear {pbelow:.3f}  above-bull {pabove:.3f}")
     print(f"    anchored    (ANCHOR_W={anchor_w:.2f}): coverage {cov:.3f}  below-bear {below:.3f}  above-bull {above:.3f}")
 
+    # 1b. Anchor-consumption gate (Session 1.7 fold-in — the missing tooth). The §2 preseason anchor must be
+    #     CONSUMED, not silently disabled. A dropped / mis-pathed per-holdout curve makes `_load_anchor_inputs`
+    #     return empty maps → every band degrades to the pure-projection read → anchored coverage collapses
+    #     onto the pre-anchor number, and NOTHING here noticed (Session 2's gate only proved the curve FILES
+    #     exist, never that the band consumes them). Assert the anchor (a) has present inputs reaching N>0
+    #     freeze players AND (b) actually MOVES freeze coverage (anchored ≠ pre-anchor). A silent-disable —
+    #     which historically read as a clean PASS at the disabled 0.744 — now FAILS.
+    adp_map, curve_lookup, _ = _load_anchor_inputs(season)
+    anchored_n = fz.filter(pl.col("sleeper_player_id").is_in(list(adp_map))).height if adp_map else 0
+    anchor_moves = abs(cov - pcov) > 1e-9
+    anchor_live = bool(curve_lookup) and anchored_n > 0 and anchor_moves
+    print()
+    print(f"  anchor-consumption (§2 anchor must be live, not silently disabled):")
+    print(f"    curve present={bool(curve_lookup)}  anchored freeze players={anchored_n} (N>0 required)  "
+          f"anchored≠pre-anchor={anchor_moves} (Δcov={cov - pcov:+.3f})   {'PASS' if anchor_live else 'FAIL'}")
+
     # 2. Decision-relevant — terciles by ros_bull, actual ROS rises monotonically (dead < mid < stud).
     g = fz.sort("bull", descending=False)
     third = g.height // 3
@@ -275,11 +291,12 @@ def run(season: int, bull_z: float = BULL_Z, anchor_w: float = ANCHOR_W) -> bool
     # Graded at the same decision (freeze) week as the verdict, not the band's full-season max as-of.
     _pool_coverage_evidence(season, freeze)
 
-    ok = calibrated and monotonic
+    ok = calibrated and monotonic and anchor_live
     print()
     print(f"  VERDICT: {'PASS' if ok else 'FAIL'} — bull/bear band {'is' if calibrated else 'is NOT'} "
           f"calibrated at the freeze (coverage {cov:.3f} vs target {TARGET_COVERAGE:.2f}); "
-          f"ros_bull {'ranks' if monotonic else 'does NOT rank'} realised ROS (dead<mid<stud).")
+          f"ros_bull {'ranks' if monotonic else 'does NOT rank'} realised ROS (dead<mid<stud); "
+          f"§2 anchor {'LIVE' if anchor_live else 'SILENTLY DISABLED'}.")
     return ok
 
 

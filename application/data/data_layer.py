@@ -76,6 +76,74 @@ def sleeper_players_age_seconds() -> float | None:
     return time.time() - path.stat().st_mtime
 
 
+# --- Sleeper Players Registry: pinned snapshot (Session 1.7 — roster reproducibility) ---
+#
+# players.parquet above is a current-state cache refreshed every 24h. Resolving a rostered player's
+# skill-ELIGIBILITY from a moving cache makes join_season non-reproducible: a two-way player (Travis
+# Hunter — nflreadpy CB, Sleeper WR) enters/leaves the roster substrate with the registry's label on
+# rebuild day, and every league-scoped read is built on it. The pinned snapshot is an IMMUTABLE, versioned
+# copy the join / audit / market_vor position resolution reads instead of "today's" cache. Bumping
+# ACTIVE_PLAYERS_SNAPSHOT is a DELIBERATE versioned event (→ rebuild + no-regression review), never
+# ambient drift. Eligibility ("what slot does a rostered player fill?") is a fantasy question answered by
+# this registry; stats ("what did he produce?") stay an nflreadpy question.
+
+ACTIVE_PLAYERS_SNAPSHOT = "2026-07-14"  # tracked reproducibility anchor; the snapshot parquet is gitignored runtime
+
+
+def _sleeper_players_snapshot_path(snapshot_id: str) -> Path:
+    return _CACHE_DIR / "sleeper" / f"players_snapshot_{snapshot_id}.parquet"
+
+
+def write_sleeper_players_snapshot(df: pl.DataFrame, snapshot_id: str) -> None:
+    """Persist an IMMUTABLE, versioned copy of the Sleeper players registry (write-once).
+
+    Refuses to overwrite an existing id — a pinned snapshot is immutable by contract; a new registry state
+    must get a NEW id (a deliberate versioned event), never silently replace an old one.
+    """
+    path = _sleeper_players_snapshot_path(snapshot_id)
+    if path.exists():
+        raise FileExistsError(
+            f"Players snapshot {snapshot_id!r} already exists at {path}. Pinned snapshots are immutable — "
+            "allocate a NEW ACTIVE_PLAYERS_SNAPSHOT id instead of overwriting."
+        )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(path)
+
+
+def read_sleeper_players_snapshot(snapshot_id: str) -> pl.DataFrame:
+    path = _sleeper_players_snapshot_path(snapshot_id)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Pinned players snapshot {snapshot_id!r} not found at {path}. "
+            "Create it with: python3 -m application.data.fetchers.sleeper capture-players-snapshot"
+        )
+    return pl.read_parquet(path)
+
+
+def read_pinned_sleeper_players() -> pl.DataFrame:
+    """The ACTIVE pinned Sleeper players snapshot — the authoritative, reproducible registry that
+    skill-eligibility (join_nfl_sleeper_weekly, audit_join) and the market_vor position join resolve
+    against, in place of the moving 24h players.parquet cache."""
+    return read_sleeper_players_snapshot(ACTIVE_PLAYERS_SNAPSHOT)
+
+
+def sleeper_players_snapshot_exists(snapshot_id: str | None = None) -> bool:
+    return _sleeper_players_snapshot_path(snapshot_id or ACTIVE_PLAYERS_SNAPSHOT).exists()
+
+
+def capture_players_snapshot(snapshot_id: str | None = None) -> Path:
+    """Pin the current live players.parquet into an immutable versioned snapshot (write-once).
+
+    The one deliberate capture step: freezes today's registry into the named id. Idempotent — if the id
+    already exists it is left untouched (a re-capture would raise on the write-once guard)."""
+    snapshot_id = snapshot_id or ACTIVE_PLAYERS_SNAPSHOT
+    path = _sleeper_players_snapshot_path(snapshot_id)
+    if path.exists():
+        return path
+    write_sleeper_players_snapshot(read_sleeper_players(), snapshot_id)
+    return path
+
+
 # --- Sleeper Teams (roster_id → names) ---
 
 def _sleeper_teams_path(season: int) -> Path:
