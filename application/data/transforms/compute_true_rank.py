@@ -121,7 +121,9 @@ def compute(season: int, *, league_id=None) -> pl.DataFrame:
     for n in sorted(vor["as_of_week"].unique().to_list()):
         all_rows.extend(_compute_as_of(vor.filter(pl.col("as_of_week") == n), slots, season, n))
 
-    df = pl.DataFrame(all_rows).sort("as_of_week", "rank")
+    # roster_id is the unique tie-break: dense rank ties across teams, so a sort on (as_of_week, rank)
+    # alone is parallelism-dependent (the 1.7 lesson). One row per (as_of_week, roster_id) ⇒ byte-stable.
+    df = pl.DataFrame(all_rows).sort("as_of_week", "rank", "roster_id")
     max_week = int(df["as_of_week"].max())
     print(f"=== True Rank: season={season}  as_of_week 1..{max_week}  (rows={df.height}) ===")
     print(f"  week {max_week} roster strength (optimal-lineup ROS value, strongest first):")

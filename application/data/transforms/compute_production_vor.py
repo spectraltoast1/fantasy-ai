@@ -131,10 +131,12 @@ def _roster_as_of(season_df: pl.DataFrame, n: int) -> dict:
 
 
 def _compute_as_of(consensus: pl.DataFrame, season_df: pl.DataFrame, n: int, max_proj_week: int,
-                   season: int, *, pool_of: dict) -> list:
+                   season: int, *, pool_of: dict, two_way_ids=frozenset()) -> list:
     """Production VOR rows for one as-of cutoff N: resolve the roster as of N, value every
     projected player's remaining schedule, set each pool's waiver/top from who's available,
-    then score the rostered players. Returns row dicts tagged as_of_week = N."""
+    then score the rostered players. Returns row dicts tagged as_of_week = N. `two_way_ids` is the
+    set of `is_two_way` players (from join_season) — carried through as a first-class flag so the
+    scorer can slice the cross-position answer-key points out."""
     roster = _roster_as_of(season_df, n)
     rostered_ids = set(roster)
     remaining = range(n + 1, max_proj_week + 1)
@@ -162,6 +164,7 @@ def _compute_as_of(consensus: pl.DataFrame, season_df: pl.DataFrame, n: int, max
             "waiver_line": round1(line["waiver"]),
             "pool_top": round1(line["top"]),
             "vor": round(_vor(r["ros_value"], line["waiver"], line["top"]), 3),
+            "is_two_way": r["sleeper_player_id"] in two_way_ids,
         })
     return rows
 
@@ -174,16 +177,24 @@ def compute(season: int, *, league_id=None, scoring_key=None) -> pl.DataFrame:
         pl.col("position").is_in(SKILL_POSITIONS)
     )
     pool_of = _pool_of(data_layer.read_lineup_slots(season, league_id=league_id))
+    # is_two_way rides join_season from 3a; carry the flagged-player set onto the VOR rows (it may be
+    # absent on a pre-3a join — then no player is flagged, not an error).
+    two_way_ids = (set(season_df.filter(pl.col("is_two_way"))["sleeper_player_id"].to_list())
+                   if "is_two_way" in season_df.columns else frozenset())
 
     max_proj_week = int(consensus["week"].max())
     max_roster_week = int(season_df["week"].max())  # roster data frozen here (season join)
 
     all_rows = []
     for n in range(1, max_roster_week + 1):
-        all_rows.extend(_compute_as_of(consensus, season_df, n, max_proj_week, season, pool_of=pool_of))
+        all_rows.extend(_compute_as_of(consensus, season_df, n, max_proj_week, season,
+                                       pool_of=pool_of, two_way_ids=two_way_ids))
 
+    # sleeper_player_id is the unique tie-break: within a (as_of_week, roster_id) many players share a
+    # rounded vor, so a sort on vor alone is parallelism-dependent (the 1.7 lesson). One row per
+    # (as_of_week, sleeper_player_id) ⇒ it fully orders the frame → byte-stable output.
     df = pl.DataFrame(all_rows, infer_schema_length=None).sort(
-        "as_of_week", "roster_id", "vor", descending=[False, False, True]
+        "as_of_week", "roster_id", "vor", "sleeper_player_id", descending=[False, False, True, False]
     )
     latest = df.filter(pl.col("as_of_week") == max_roster_week)
     print(f"=== Production VOR: season={season}  as_of_week 1..{max_roster_week}  "

@@ -42,6 +42,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import math
 import sys
 from pathlib import Path
@@ -59,6 +60,28 @@ SKILL_POSITIONS = ["QB", "RB", "WR", "TE"]
 SIMS = 10_000
 SEED = 20260709
 MAGIC_ODDS = 0.90          # "clinch" threshold for the magic-number proxy
+
+
+def _sim_seed(season: int, league_id=None) -> int:
+    """League-stable Monte-Carlo seed. The is_mine/primary league keeps the base SEED, so its
+    bracket_odds stay byte-identical to the pre-corpus output; every other league gets a seed derived
+    from a stable hash of its league_id. Same league ⇒ same odds on re-run (reproducible); different
+    leagues ⇒ independent Monte-Carlo draws (the ledger's calibration can't average correlated noise
+    away — one global SEED would share one stream across all 221). Machine-independent (hashlib, not
+    the salted Python `hash()`); never wall-clock.
+
+    A corpus season without an is_mine league (2020–2023) has no primary — those leagues are
+    definitionally non-primary, so resolving the primary is best-effort and absence just routes to the
+    derived seed."""
+    try:
+        primary = str(data_layer._active_league(season)[0])
+    except Exception:   # noqa: BLE001 — no is_mine league for this season → no primary to match
+        primary = None
+    lid = str(league_id) if league_id is not None else primary
+    if lid is not None and lid == primary:
+        return SEED
+    h = int.from_bytes(hashlib.blake2b(str(lid).encode(), digest_size=7).digest(), "big")
+    return SEED ^ h
 
 
 def _playoff_config(season: int, *, league_id=None) -> tuple:
@@ -189,13 +212,13 @@ def _schedule(matchups: pl.DataFrame, weeks: range, idx: dict) -> dict:
 
 
 def _simulate(team_ids: list, base: dict, dists: dict, sched: dict, weeks: range, playoff_teams: int,
-              divisions=None) -> dict:
+              divisions=None, *, seed: int = SEED) -> dict:
     """Monte Carlo the remaining regular season. `dists[w]` = (mu[T], sig[T]) arrays; `sched[w]` =
     index pairs; `base` = as-of-N standings; `playoff_teams` = the league's championship-bracket size;
-    `divisions` = per-team-index division labels (None ⇒ flat seeding). Returns per-team aggregates
-    over SIMS runs."""
+    `divisions` = per-team-index division labels (None ⇒ flat seeding); `seed` = the league-stable RNG
+    seed (`_sim_seed`). Returns per-team aggregates over SIMS runs."""
     T = len(team_ids)
-    rng = np.random.default_rng(SEED)
+    rng = np.random.default_rng(seed)
     base_wins = np.array([base.get(r, {}).get("wins", 0.0) for r in team_ids])
     base_pts = np.array([base.get(r, {}).get("points", 0.0) for r in team_ids])
 
@@ -242,7 +265,7 @@ def _simulate(team_ids: list, base: dict, dists: dict, sched: dict, weeks: range
 
 
 def _compute_as_of(n, roster_pids, cons_by_week, slots, matchups, season,
-                   reg_season_end: int, playoff_teams: int, div_map=None) -> list:
+                   reg_season_end: int, playoff_teams: int, div_map=None, *, seed: int = SEED) -> list:
     """Bracket-odds rows for one as-of cutoff N (playoff config injected from league settings)."""
     weeks = range(n + 1, reg_season_end + 1)
     team_ids = sorted(roster_pids.keys())
@@ -262,7 +285,7 @@ def _compute_as_of(n, roster_pids, cons_by_week, slots, matchups, season,
 
     base = _standings_as_of(matchups, n)
     sched = _schedule(matchups, weeks, idx)
-    agg = _simulate(team_ids, base, dists, sched, weeks, playoff_teams, divisions)
+    agg = _simulate(team_ids, base, dists, sched, weeks, playoff_teams, divisions, seed=seed)
 
     rows = []
     for rid, i in idx.items():
@@ -299,7 +322,18 @@ def compute(season: int, *, league_id=None, scoring_key=None) -> pl.DataFrame:
     slots = expand_slots(data_layer.read_lineup_slots(season, league_id=league_id).to_dicts())
     matchups = data_layer.read_season_matchups(season, through_week=reg_season_end, league_id=league_id)
     div_map = _division_map(season, league_id=league_id)  # None for a no-division league → flat seeding (unchanged)
+    seed = _sim_seed(season, league_id)  # league-stable: base SEED for is_mine, hashed per corpus league
     max_roster_week = int(season_df["week"].max())
+
+    # A named diagnosis (standing instruction 6), not a cryptic empty-frame crash. reg_season_end<2 or a
+    # single-week join means the raw harvest is degenerate — e.g. playoff_week_start unset=0 ⇒ reg_end=-1,
+    # or only week-1 matchups were pulled. There is no regular season to simulate, so flag the league
+    # rather than ship a clean-zero bracket (standing instruction 1). The driver isolates + reports it.
+    if reg_season_end < 2 or max_roster_week < 1:
+        raise RuntimeError(
+            f"no simulable regular season (reg_season_end={reg_season_end}, max_roster_week="
+            f"{max_roster_week}) — degenerate/incomplete raw harvest (playoff_week_start unset or "
+            f"only week-1 matchups joined)")
 
     all_rows = []
     for n in range(1, max_roster_week + 1):
@@ -313,10 +347,13 @@ def compute(season: int, *, league_id=None, scoring_key=None) -> pl.DataFrame:
         for rid in roster_pids:
             roster_pids[rid].sort()
         all_rows.extend(_compute_as_of(n, roster_pids, cons_by_week, slots, matchups, season,
-                                       reg_season_end, playoff_teams, div_map))
+                                       reg_season_end, playoff_teams, div_map, seed=seed))
 
+    # roster_id is the unique tie-break: within an as-of week, playoff_odds ties across teams, so a
+    # sort on (as_of_week, playoff_odds) alone is parallelism-dependent (the 1.7 lesson). One row per
+    # (as_of_week, roster_id) ⇒ roster_id fully orders it → the fixed-seed output is byte-stable.
     df = pl.DataFrame(all_rows, infer_schema_length=None).sort(
-        "as_of_week", "playoff_odds", descending=[False, True]
+        "as_of_week", "playoff_odds", "roster_id", descending=[False, True, False]
     )
     latest = df.filter(pl.col("as_of_week") == max_roster_week)
     print(f"=== Bracket Odds: season={season}  as_of_week 1..{max_roster_week}  "
