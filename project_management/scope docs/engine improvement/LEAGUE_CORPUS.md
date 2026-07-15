@@ -5,8 +5,15 @@
 league-keyed → MEASUREMENT SPINE COMPUTED (Session 3b, 2026-07-15): the 5 graded reads (`production_vor`,
 `true_rank`, `positional_depth`, `bracket_odds`, `player_signal`) threaded league-keyed + computed for the 221
 matched leagues (220 computed + 1 flagged-degenerate; `check_spine` green). The narrative reads
-(`ros_league_view`, `manager_features`) are DESCOPED from the corpus (no answer key). Session 3c = the 48
-`never_tune` generalization leagues through the same spine (scoped, not started); then the L2 ledger.**
+(`ros_league_view`, `manager_features`) are DESCOPED from the corpus (no answer key). → EXPECTED-POINTS
+BACKFILL (Session 3c, 2026-07-15): the 14 ff_opportunity `*_exp` components **additively backfilled** into
+`nfl_stats` 2020–24 + the matched `join_season`s (every pre-existing column byte-identical), and
+`player_signal` re-run over the 160 non-degenerate matched 2020–24 leagues — so **§1 Quality (`quality_rate`
+/ `luck` / `point_correlation`) now spans the whole matched corpus** (was TEST-only: 100% null 2020–24), the
+rest of the 3b spine byte-identical; `check_expected_points` green with teeth. Session 3d (renumbered from
+3c) = the 48 `never_tune` generalization leagues through the same spine — it inherits the `*_exp` fix for
+free (`nfl_stats` already carries the components) and additively backfills its own joins the same way
+(scoped, not started); then the L2 ledger.**
 **Companions:** [`IMPROVEMENT_LOOP.md`](./IMPROVEMENT_LOOP.md) · [`PILOT_2026.md`](./PILOT_2026.md) ·
 [`SESSION_0_5_CORPUS_SELECTION.md`](./SESSION_0_5_CORPUS_SELECTION.md) ·
 [`LLM context/SPIKE_CORPUS_FINDINGS.md`](../LLM%20context/SPIKE_CORPUS_FINDINGS.md) ·
