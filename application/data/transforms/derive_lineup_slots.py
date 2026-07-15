@@ -51,8 +51,8 @@ _SLOT_ELIGIBILITY = {
 }
 
 
-def derive(season: int) -> pl.DataFrame:
-    raw = data_layer.read_roster_positions(season)
+def derive(season: int, *, league_id=None) -> pl.DataFrame:
+    raw = data_layer.read_roster_positions(season, league_id=league_id)
     slots = raw.sort("slot_index")["slot"].to_list()
 
     rows = []
@@ -86,10 +86,10 @@ def derive(season: int) -> pl.DataFrame:
     return df
 
 
-def run(season: int) -> None:
-    df = derive(season)
-    data_layer.write_lineup_slots(df, season)
-    print(f"  → snapshots/sleeper/{season}/lineup_slots_{season}.parquet")
+def run(season: int, *, league_id=None) -> None:
+    df = derive(season, league_id=league_id)
+    data_layer.write_lineup_slots(df, season, league_id=league_id)
+    print(f"  → snapshots/sleeper/{season}/league/{league_id or '<mine>'}/lineup_slots_{season}.parquet")
 
 
 if __name__ == "__main__":

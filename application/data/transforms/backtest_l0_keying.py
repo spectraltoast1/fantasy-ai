@@ -12,6 +12,9 @@ about the numbers and that the isolation actually holds. Exit 0 iff every applic
       does not (migration not run yet). This is the "reproduce mine frame-for-frame" guarantee.
   B — **Collision isolation (synthetic; runs anywhere).** Write two different frames under two league_ids
       and confirm each reads back its own rows — league #2 provably cannot overwrite league #1.
+  B2 — **Raw-layer collision isolation (synthetic; Session 3a).** The same guarantee on the now-league-keyed
+      raw layer (`sleeper/<season>/league/<league_id>/…`), with a prove-bites control showing an
+      unpartitioned (season-only) write DOES collide — the hazard the raw re-key removes.
   C — **Registry / resolver smoke.** leagues.parquet resolves the is_mine (league_id, scoring_key), and
       the resolver returns it registry-first (no network).
 
@@ -118,6 +121,42 @@ def _check_collision(season: int, results: list) -> None:
             shutil.rmtree(data_layer._league_dir(lid), ignore_errors=True)
 
 
+def _check_collision_raw(season: int, results: list) -> None:
+    """Raw-layer twin of B (Session 3a): two leagues' matchups in one season cannot overwrite each other,
+    now that the raw/join layer is league-keyed. Includes a prove-bites negative control — a season-only
+    (unpartitioned) write DOES collide, which is exactly the hazard league_id keying removes."""
+    print("  B2 — raw-layer collision isolation (two leagues' matchups cannot overwrite each other):")
+    a_id, b_id = "__L0RAWTEST_A__", "__L0RAWTEST_B__"
+    wk = 1
+    fa = pl.DataFrame({"roster_id": [1], "matchup_id": [1], "points": [10.0],
+                       "players_points": ["{}"], "starters": ["[]"]})
+    fb = pl.DataFrame({"roster_id": [1], "matchup_id": [1], "points": [20.0],
+                       "players_points": ["{}"], "starters": ["[]"]})
+    try:
+        data_layer.write_sleeper_matchups(fa, season, wk, league_id=a_id)
+        data_layer.write_sleeper_matchups(fb, season, wk, league_id=b_id)  # must NOT touch A
+        ra = data_layer.read_sleeper_matchups(season, wk, league_id=a_id)
+        rb = data_layer.read_sleeper_matchups(season, wk, league_id=b_id)
+        pa = data_layer._sleeper_matchups_path(season, wk, a_id)
+        pb = data_layer._sleeper_matchups_path(season, wk, b_id)
+        _check("distinct paths per league_id (raw matchups)", pa != pb, results)
+        _check("league A matchups read back unclobbered", ra.equals(fa), results,
+               f"got points={ra['points'].to_list()}")
+        _check("league B matchups read back its own rows", rb.equals(fb), results)
+        # prove-bites: writing BOTH leagues to one shared (season-only) path collides — B clobbers A.
+        shared = _SNAP / "sleeper" / str(season) / "__l0rawtest_shared__.parquet"
+        shared.parent.mkdir(parents=True, exist_ok=True)
+        fa.write_parquet(shared)
+        fb.write_parquet(shared)
+        collided = not pl.read_parquet(shared).equals(fa)
+        _check("PROVE-BITES: an unpartitioned (season-keyed) write collides", collided, results,
+               "league B clobbered A at a shared path — the collision league_id keying prevents")
+        shared.unlink(missing_ok=True)
+    finally:
+        for lid in (a_id, b_id):
+            shutil.rmtree(data_layer._sleeper_league_dir(season, lid), ignore_errors=True)
+
+
 def _check_registry(season: int, results: list) -> None:
     print("  C — registry / resolver smoke:")
     if not data_layer.leagues_exists():
@@ -141,6 +180,7 @@ def run(season: int) -> bool:
     else:
         print("  A — migration identity: SKIP (no registry; build it, then re-run after migration)")
     _check_collision(season, results)
+    _check_collision_raw(season, results)
     _check_registry(season, results)
 
     ok = all(results) and bool(results)

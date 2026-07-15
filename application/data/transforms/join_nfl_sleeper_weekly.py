@@ -83,7 +83,7 @@ def _build_player_metadata(season: int) -> pl.DataFrame:
 # ---------------------------------------------------------------------------
 
 def _parse_sleeper_matchups(
-    season: int, week: int
+    season: int, week: int, *, league_id=None
 ) -> tuple[pl.DataFrame, dict]:
     """Explode Sleeper matchup rows into one row per rostered player.
 
@@ -96,7 +96,7 @@ def _parse_sleeper_matchups(
     Returns:
         (DataFrame of non-DST players, counts dict with 'total' and 'dst_count')
     """
-    matchups = data_layer.read_sleeper_matchups(season, week)
+    matchups = data_layer.read_sleeper_matchups(season, week, league_id=league_id)
 
     rows = []
     total_entries = 0
@@ -360,10 +360,10 @@ def _apply_registry_eligibility(joined: pl.DataFrame) -> pl.DataFrame:
     ).drop("_reg_position")
 
 
-def run(season: int, week: int) -> None:
+def run(season: int, week: int, *, league_id=None) -> None:
     nfl = _load_nfl_stats(season, week)
     metadata = _build_player_metadata(season)
-    sleeper, raw_counts = _parse_sleeper_matchups(season, week)
+    sleeper, raw_counts = _parse_sleeper_matchups(season, week, league_id=league_id)
     sleeper = _derive_matchup_result(sleeper)
 
     # Left join: every rostered non-DST player stays in the output.
@@ -398,7 +398,7 @@ def run(season: int, week: int) -> None:
         pl.lit(week).cast(pl.Int32).alias("week"),
     )
 
-    data_layer.write_join_nfl_sleeper_weekly(joined, season, week)
+    data_layer.write_join_nfl_sleeper_weekly(joined, season, week, league_id=league_id)
 
     # Write remainders — unknown-position players the join could not resolve.
     # Empty DataFrame = clean join. Auditor reads this to decide whether to act.
@@ -410,7 +410,7 @@ def run(season: int, week: int) -> None:
         "sleeper_player_id", "player_id", "roster_id",
         "matchup_id", "sleeper_points", "is_starter", "roster_total_points",
     ])
-    data_layer.write_join_remainders(remainders, season, week)
+    data_layer.write_join_remainders(remainders, season, week, league_id=league_id)
 
     _print_validation(raw_counts, pre_filter, joined, season, week)
 

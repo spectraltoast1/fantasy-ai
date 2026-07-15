@@ -171,16 +171,17 @@ def _rows_to_df(data: list):
     return pl.from_dicts(normalized)
 
 
-def _snapshot_list(data: list, writer, year: int, week: int, label: str) -> bool:
+def _snapshot_list(data: list, writer, year: int, week: int, label: str, *, league_id: str) -> bool:
     """Persist one week's Sleeper list-payload via a data_layer writer, skipping (with a
     log line) when the response is empty. The fetcher keeps the shaping + skip concern;
-    the file I/O lives behind data_layer (write_sleeper_matchups / write_sleeper_transactions)."""
+    the file I/O lives behind data_layer (write_sleeper_matchups / write_sleeper_transactions),
+    league-keyed under `sleeper/{year}/league/{league_id}/` (L0 keying, Session 3a)."""
     df = _rows_to_df(data)
     if df is None:
         print(f"  {label}: empty response from Sleeper (offseason or week not yet played) — skipping write.")
         return False
-    writer(df, year, week)
-    print(f"  {label}: {len(df)} rows → snapshots/sleeper/{year}/")
+    writer(df, year, week, league_id=league_id)
+    print(f"  {label}: {len(df)} rows → snapshots/sleeper/{year}/league/{league_id}/")
     return True
 
 
@@ -269,8 +270,8 @@ def fetch_teams(league_id: str, year: int) -> None:
         })
 
     df = pl.from_dicts(rows)
-    data_layer.write_sleeper_teams(df, year)
-    print(f"  teams: {len(df)} rosters → snapshots/sleeper/{year}/teams_{year}.parquet")
+    data_layer.write_sleeper_teams(df, year, league_id=league_id)
+    print(f"  teams: {len(df)} rosters → snapshots/sleeper/{year}/league/{league_id}/teams_{year}.parquet")
 
 
 def fetch_roster_positions(league_id: str, year: int) -> None:
@@ -294,8 +295,8 @@ def fetch_roster_positions(league_id: str, year: int) -> None:
     df = pl.DataFrame(
         {"slot_index": list(range(len(slots))), "slot": [str(s) for s in slots]}
     )
-    data_layer.write_roster_positions(df, year)
-    print(f"  roster_positions: {len(df)} slots → snapshots/sleeper/{year}/roster_positions_{year}.parquet")
+    data_layer.write_roster_positions(df, year, league_id=league_id)
+    print(f"  roster_positions: {len(df)} slots → snapshots/sleeper/{year}/league/{league_id}/roster_positions_{year}.parquet")
     print(f"  slots: {slots}")
 
 
@@ -334,9 +335,9 @@ def fetch_league_config(league_id: str, year: int) -> None:
         return
 
     df = pl.DataFrame(rows, schema={"section": pl.Utf8, "key": pl.Utf8, "value": pl.Float64})
-    data_layer.write_league_settings(df, year)
+    data_layer.write_league_settings(df, year, league_id=league_id)
     print(f"  league_settings: {df.height} keys ({len(scoring)} scoring) → "
-          f"snapshots/sleeper/{year}/league_settings_{year}.parquet")
+          f"snapshots/sleeper/{year}/league/{league_id}/league_settings_{year}.parquet")
     _lg = {r["key"]: r["value"] for r in df.filter(pl.col("section") == "league").iter_rows(named=True)}
     print(f"  playoff config: {_lg}")
 
@@ -579,10 +580,12 @@ def backfill(league_id: str, year: int) -> None:
         print(f"  Week {week}/{completed_weeks}...")
 
         _snapshot_list(_get_json(f"{_SLEEPER_BASE}/league/{league_id}/matchups/{week}"),
-                       data_layer.write_sleeper_matchups, year, week, f"matchups week {week}")
+                       data_layer.write_sleeper_matchups, year, week, f"matchups week {week}",
+                       league_id=league_id)
 
         _snapshot_list(_get_json(f"{_SLEEPER_BASE}/league/{league_id}/transactions/{week}"),
-                       data_layer.write_sleeper_transactions, year, week, f"transactions week {week}")
+                       data_layer.write_sleeper_transactions, year, week, f"transactions week {week}",
+                       league_id=league_id)
 
         time.sleep(0.5)
 
@@ -612,9 +615,11 @@ def refresh(league_id: str) -> None:
 
     # Current week snapshots — same entities as backfill
     _snapshot_list(_get_json(f"{_SLEEPER_BASE}/league/{league_id}/matchups/{week}"),
-                   data_layer.write_sleeper_matchups, year, week, f"matchups week {week}")
+                   data_layer.write_sleeper_matchups, year, week, f"matchups week {week}",
+                   league_id=league_id)
     _snapshot_list(_get_json(f"{_SLEEPER_BASE}/league/{league_id}/transactions/{week}"),
-                   data_layer.write_sleeper_transactions, year, week, f"transactions week {week}")
+                   data_layer.write_sleeper_transactions, year, week, f"transactions week {week}",
+                   league_id=league_id)
 
     print(f"Refresh complete for league {league_id}.")
 

@@ -144,71 +144,94 @@ def capture_players_snapshot(snapshot_id: str | None = None) -> Path:
     return path
 
 
+# --- League-scoped RAW directories (L0 keying, Session 3a) ---
+# The raw fetched + join layer is partitioned by league_id so a second league can never overwrite the
+# first (audit S1.3) — the raw analog of `_league_dir` (derived side, Session 1). Every raw/join
+# read/write/path helper takes a `league_id=None` kwarg that default-resolves to the is_mine league
+# (`_active_league`), so single-league callers are unchanged and only the corpus harvest passes explicit
+# keys. `_active_league` is defined below (resolved at call time), so referencing it here is fine.
+
+def _sleeper_league_dir(season: int, league_id) -> Path:
+    """Directory for a league-scoped raw Sleeper entity — `sleeper/<season>/league/<league_id>/`."""
+    return _SNAPSHOT_DIR / "sleeper" / str(season) / "league" / str(league_id)
+
+
+def _join_league_dir(league_id) -> Path:
+    """Directory for the league-scoped NFL+Sleeper join — `nfl_sleeper_weekly_joined/league/<league_id>/`."""
+    return _SNAPSHOT_DIR / "nfl_sleeper_weekly_joined" / "league" / str(league_id)
+
+
 # --- Sleeper Teams (roster_id → names) ---
 
-def _sleeper_teams_path(season: int) -> Path:
-    return _SNAPSHOT_DIR / "sleeper" / str(season) / f"teams_{season}.parquet"
+def _sleeper_teams_path(season: int, league_id) -> Path:
+    return _sleeper_league_dir(season, league_id) / f"teams_{season}.parquet"
 
 
-def write_sleeper_teams(df: pl.DataFrame, season: int) -> None:
-    """Write the roster_id → team/owner name map for a season (overwrite).
+def write_sleeper_teams(df: pl.DataFrame, season: int, *, league_id=None) -> None:
+    """Write the roster_id → team/owner name map for a league season (overwrite).
 
     Roster identities are effectively fixed once a season is frozen, so this is a
-    single overwrite file per season rather than an appended time-series.
+    single overwrite file per league season rather than an appended time-series.
     """
-    path = _sleeper_teams_path(season)
+    league_id = league_id or _active_league(season)[0]
+    path = _sleeper_teams_path(season, league_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path)
 
 
-def read_sleeper_teams(season: int) -> pl.DataFrame:
-    return pl.read_parquet(_sleeper_teams_path(season))
+def read_sleeper_teams(season: int, *, league_id=None) -> pl.DataFrame:
+    league_id = league_id or _active_league(season)[0]
+    return pl.read_parquet(_sleeper_teams_path(season, league_id))
 
 
 # --- Sleeper Roster Positions (league starting-lineup config) ---
 
-def _roster_positions_path(season: int) -> Path:
-    return _SNAPSHOT_DIR / "sleeper" / str(season) / f"roster_positions_{season}.parquet"
+def _roster_positions_path(season: int, league_id) -> Path:
+    return _sleeper_league_dir(season, league_id) / f"roster_positions_{season}.parquet"
 
 
-def write_roster_positions(df: pl.DataFrame, season: int) -> None:
-    """Write the league's raw roster_positions slot list for a season (overwrite).
+def write_roster_positions(df: pl.DataFrame, season: int, *, league_id=None) -> None:
+    """Write the league's raw roster_positions slot list for a league season (overwrite).
 
     One row per slot, in Sleeper's declared order (slot_index, slot). This is the
     source of truth straight from the league object — derive_lineup_slots shapes it
     into the starting skill-slot requirements the optimal-lineup calc consumes.
     Like team identities, league lineup config is fixed once a season is frozen, so
-    this is a single overwrite file per season, not an appended time-series.
+    this is a single overwrite file per league season, not an appended time-series.
     """
-    path = _roster_positions_path(season)
+    league_id = league_id or _active_league(season)[0]
+    path = _roster_positions_path(season, league_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path)
 
 
-def read_roster_positions(season: int) -> pl.DataFrame:
-    return pl.read_parquet(_roster_positions_path(season))
+def read_roster_positions(season: int, *, league_id=None) -> pl.DataFrame:
+    league_id = league_id or _active_league(season)[0]
+    return pl.read_parquet(_roster_positions_path(season, league_id))
 
 
 # --- Lineup Slots (derived starting skill-slot requirements) ---
 
-def _lineup_slots_path(season: int) -> Path:
-    return _SNAPSHOT_DIR / "sleeper" / str(season) / f"lineup_slots_{season}.parquet"
+def _lineup_slots_path(season: int, league_id) -> Path:
+    return _sleeper_league_dir(season, league_id) / f"lineup_slots_{season}.parquet"
 
 
-def write_lineup_slots(df: pl.DataFrame, season: int) -> None:
-    """Write the derived starting skill-slot requirements for a season (overwrite).
+def write_lineup_slots(df: pl.DataFrame, season: int, *, league_id=None) -> None:
+    """Write the derived starting skill-slot requirements for a league season (overwrite).
 
     Output of transforms/derive_lineup_slots.py: one row per distinct starting slot
     type (slot, count, eligible) covering only slots a QB/RB/WR/TE can fill. Consumed
     by the front-end optimal-lineup ("perfect lineup") calculation.
     """
-    path = _lineup_slots_path(season)
+    league_id = league_id or _active_league(season)[0]
+    path = _lineup_slots_path(season, league_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path)
 
 
-def read_lineup_slots(season: int) -> pl.DataFrame:
-    return pl.read_parquet(_lineup_slots_path(season))
+def read_lineup_slots(season: int, *, league_id=None) -> pl.DataFrame:
+    league_id = league_id or _active_league(season)[0]
+    return pl.read_parquet(_lineup_slots_path(season, league_id))
 
 
 # --- League Settings (scoring_settings + playoff/league config) ---
@@ -221,35 +244,37 @@ def read_lineup_slots(season: int) -> pl.DataFrame:
 # roster_positions.
 
 
-def _league_settings_path(season: int) -> Path:
-    return _SNAPSHOT_DIR / "sleeper" / str(season) / f"league_settings_{season}.parquet"
+def _league_settings_path(season: int, league_id) -> Path:
+    return _sleeper_league_dir(season, league_id) / f"league_settings_{season}.parquet"
 
 
-def write_league_settings(df: pl.DataFrame, season: int) -> None:
-    """Write the league's settings (scoring + playoff/league config) for a season (overwrite).
+def write_league_settings(df: pl.DataFrame, season: int, *, league_id=None) -> None:
+    """Write the league's settings (scoring + playoff/league config) for a league season (overwrite).
 
     Tall frame: section ∈ {"scoring", "league"}, key (the Sleeper setting name), value (float —
     scoring values and league settings are all numeric on Sleeper). Output of
     `python3 -m application.data.fetchers.sleeper fetch-league-config`.
     """
-    path = _league_settings_path(season)
+    league_id = league_id or _active_league(season)[0]
+    path = _league_settings_path(season, league_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path)
 
 
-def read_league_settings(season: int) -> pl.DataFrame:
-    return pl.read_parquet(_league_settings_path(season))
+def read_league_settings(season: int, *, league_id=None) -> pl.DataFrame:
+    league_id = league_id or _active_league(season)[0]
+    return pl.read_parquet(_league_settings_path(season, league_id))
 
 
-def read_scoring_settings(season: int) -> dict:
+def read_scoring_settings(season: int, *, league_id=None) -> dict:
     """The league's scoring_settings as a {key: float} dict (the `scoring` section)."""
-    df = read_league_settings(season).filter(pl.col("section") == "scoring")
+    df = read_league_settings(season, league_id=league_id).filter(pl.col("section") == "scoring")
     return {r["key"]: float(r["value"]) for r in df.iter_rows(named=True)}
 
 
-def read_playoff_settings(season: int) -> dict:
+def read_playoff_settings(season: int, *, league_id=None) -> dict:
     """The league's playoff/league config as a {key: value} dict (the `league` section)."""
-    df = read_league_settings(season).filter(pl.col("section") == "league")
+    df = read_league_settings(season, league_id=league_id).filter(pl.col("section") == "league")
     return {r["key"]: r["value"] for r in df.iter_rows(named=True)}
 
 
@@ -361,29 +386,32 @@ def adp_points_curve_exists(holdout: int) -> bool:
 
 # --- Sleeper Matchups ---
 
-def _sleeper_matchups_path(season: int, week: int) -> Path:
-    return _SNAPSHOT_DIR / "sleeper" / str(season) / f"matchups_week_{week:02d}.parquet"
+def _sleeper_matchups_path(season: int, week: int, league_id) -> Path:
+    return _sleeper_league_dir(season, league_id) / f"matchups_week_{week:02d}.parquet"
 
 
-def write_sleeper_matchups(df: pl.DataFrame, season: int, week: int) -> None:
-    """Write one week's matchup snapshot for a season (overwrite)."""
-    path = _sleeper_matchups_path(season, week)
+def write_sleeper_matchups(df: pl.DataFrame, season: int, week: int, *, league_id=None) -> None:
+    """Write one week's matchup snapshot for a league season (overwrite)."""
+    league_id = league_id or _active_league(season)[0]
+    path = _sleeper_matchups_path(season, week, league_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path)
 
 
-def read_sleeper_matchups(season: int, week: int) -> pl.DataFrame:
-    return pl.read_parquet(_sleeper_matchups_path(season, week))
+def read_sleeper_matchups(season: int, week: int, *, league_id=None) -> pl.DataFrame:
+    league_id = league_id or _active_league(season)[0]
+    return pl.read_parquet(_sleeper_matchups_path(season, week, league_id))
 
 
-def read_season_matchups(season: int, through_week: int = 18) -> pl.DataFrame:
+def read_season_matchups(season: int, through_week: int = 18, *, league_id=None) -> pl.DataFrame:
     """Stack every available weekly matchup snapshot into one (week, roster_id, matchup_id,
     points) frame — the schedule (matchup_id pairs two teams per week) + actual results, the
     seam the bracket-math sim reads for standings and the remaining schedule. Skips weeks whose
     snapshot is missing (offseason / not yet fetched)."""
+    league_id = league_id or _active_league(season)[0]
     frames = []
     for week in range(1, through_week + 1):
-        path = _sleeper_matchups_path(season, week)
+        path = _sleeper_matchups_path(season, week, league_id)
         if not path.exists():
             continue
         frames.append(
@@ -424,40 +452,43 @@ def schedule_exists(season: int) -> bool:
 
 # --- Sleeper Transactions ---
 
-def _sleeper_transactions_path(season: int, week: int) -> Path:
-    return _SNAPSHOT_DIR / "sleeper" / str(season) / f"transactions_week_{week:02d}.parquet"
+def _sleeper_transactions_path(season: int, week: int, league_id) -> Path:
+    return _sleeper_league_dir(season, league_id) / f"transactions_week_{week:02d}.parquet"
 
 
-def write_sleeper_transactions(df: pl.DataFrame, season: int, week: int) -> None:
-    """Write one week's transaction snapshot for a season (overwrite)."""
-    path = _sleeper_transactions_path(season, week)
+def write_sleeper_transactions(df: pl.DataFrame, season: int, week: int, *, league_id=None) -> None:
+    """Write one week's transaction snapshot for a league season (overwrite)."""
+    league_id = league_id or _active_league(season)[0]
+    path = _sleeper_transactions_path(season, week, league_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path)
 
 
-def read_sleeper_transactions(season: int, week: int) -> pl.DataFrame:
-    return pl.read_parquet(_sleeper_transactions_path(season, week))
+def read_sleeper_transactions(season: int, week: int, *, league_id=None) -> pl.DataFrame:
+    league_id = league_id or _active_league(season)[0]
+    return pl.read_parquet(_sleeper_transactions_path(season, week, league_id))
 
 
 # --- Join: NFL + Sleeper Weekly ---
 
-def _join_season_path(season: int) -> Path:
-    return _SNAPSHOT_DIR / "nfl_sleeper_weekly_joined" / f"season_{season}.parquet"
+def _join_season_path(season: int, league_id) -> Path:
+    return _join_league_dir(league_id) / f"season_{season}.parquet"
 
 
-def read_join_season(season: int) -> pl.DataFrame:
+def read_join_season(season: int, *, league_id=None) -> pl.DataFrame:
     """Read the full season join file (all weeks)."""
-    return pl.read_parquet(_join_season_path(season))
+    league_id = league_id or _active_league(season)[0]
+    return pl.read_parquet(_join_season_path(season, league_id))
 
 
-def read_join_nfl_sleeper_weekly(season: int, week: int) -> pl.DataFrame:
+def read_join_nfl_sleeper_weekly(season: int, week: int, *, league_id=None) -> pl.DataFrame:
     """Read a single week's slice from the season join file."""
-    return read_join_season(season).filter(
+    return read_join_season(season, league_id=league_id).filter(
         (pl.col("season") == season) & (pl.col("week") == week)
     )
 
 
-def write_join_nfl_sleeper_weekly(df: pl.DataFrame, season: int, week: int) -> None:
+def write_join_nfl_sleeper_weekly(df: pl.DataFrame, season: int, week: int, *, league_id=None) -> None:
     """Append a week's rows to the single season join file.
 
     `df` is treated as the complete set of rows for (season, week). If the
@@ -465,7 +496,8 @@ def write_join_nfl_sleeper_weekly(df: pl.DataFrame, season: int, week: int) -> N
     dropped first (dedup guard) so re-running a week replaces it rather than
     duplicating. Otherwise the week's rows seed a new season file.
     """
-    path = _join_season_path(season)
+    league_id = league_id or _active_league(season)[0]
+    path = _join_season_path(season, league_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         existing = pl.read_parquet(path).filter(
@@ -477,29 +509,32 @@ def write_join_nfl_sleeper_weekly(df: pl.DataFrame, season: int, week: int) -> N
 
 # --- Join Remainders ---
 
-def _remainders_path(season: int, week: int) -> Path:
-    return _SNAPSHOT_DIR / "nfl_sleeper_weekly_joined" / str(season) / f"remainders_{season}_w{week:02d}.parquet"
+def _remainders_path(season: int, week: int, league_id) -> Path:
+    return _join_league_dir(league_id) / f"remainders_{season}_w{week:02d}.parquet"
 
 
-def write_join_remainders(df: pl.DataFrame, season: int, week: int) -> None:
+def write_join_remainders(df: pl.DataFrame, season: int, week: int, *, league_id=None) -> None:
     """Write unresolved Sleeper players to a remainders file.
 
     An empty DataFrame written here signals a clean join with no unknowns.
     """
-    path = _remainders_path(season, week)
+    league_id = league_id or _active_league(season)[0]
+    path = _remainders_path(season, week, league_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path)
 
 
-def read_join_remainders(season: int, week: int) -> pl.DataFrame:
-    path = _remainders_path(season, week)
+def read_join_remainders(season: int, week: int, *, league_id=None) -> pl.DataFrame:
+    league_id = league_id or _active_league(season)[0]
+    path = _remainders_path(season, week, league_id)
     if not path.exists():
         raise FileNotFoundError(f"Remainders file not found: {path}")
     return pl.read_parquet(path)
 
 
-def remainders_exist(season: int, week: int) -> bool:
-    return _remainders_path(season, week).exists()
+def remainders_exist(season: int, week: int, *, league_id=None) -> bool:
+    league_id = league_id or _active_league(season)[0]
+    return _remainders_path(season, week, league_id).exists()
 
 
 # --- LeagueLogs Market Values ---
