@@ -144,11 +144,11 @@ def _corr(p, y):
     return float(pl.DataFrame({"p": p, "y": y}).select(pl.corr("p", "y")).item())
 
 
-def _load(season: int) -> pl.DataFrame:
+def _load(season: int, *, league_id=None) -> pl.DataFrame:
     """Cleaned skill-position stats (usage/score nulls → 0) for the season, with `exp_pts` — the
     league-scored expected points (the Quality basis) — derived from the ff_opportunity components
     exactly as the transform does (`expected_points_expr`), so the gate exercises the shipped math."""
-    scoring = data_layer.read_scoring_settings(season)
+    scoring = data_layer.read_scoring_settings(season, league_id=league_id)
     return data_layer.read_nfl_stats(season).filter(
         pl.col("position").is_in(SKILL_POSITIONS)
     ).with_columns(
@@ -187,11 +187,11 @@ def _evaluate(stats: pl.DataFrame, recent_weeks, rest_weeks, half_life):
     return df, pos_mean
 
 
-def sweep(season: int, recent_weeks, rest_weeks) -> None:
+def sweep(season: int, recent_weeks, rest_weeks, *, league_id=None) -> None:
     """Tune the opportunity half-life: for each candidate, report the signal's MAE on the
     answer key at this freeze. Run across several freezes to choose OPP_HALF_LIFE_WK —
     the window earns its keep mid/late season, where role drift has had time to show."""
-    stats = _load(season)
+    stats = _load(season, league_id=league_id)
     print(f"=== Half-life sweep: season={season}  input wks {recent_weeks[0]}–{recent_weeks[-1]}  "
           f"truth wks {rest_weeks[0]}–{rest_weeks[-1]} ===")
     print(f"  {'half_life':<12}{'signal MAE':>12}{'corr':>8}   (naive MAE held fixed = equal-weight recent)")
@@ -212,8 +212,8 @@ def sweep(season: int, recent_weeks, rest_weeks) -> None:
     print(f"  → best half-life at this freeze: {'cumulative' if best[0] is None else f'{best[0]:g}wk'} (MAE {best[1]:.3f})")
 
 
-def run(season: int, recent_weeks, rest_weeks, half_life=OPP_HALF_LIFE_WK) -> bool:
-    stats = _load(season)
+def run(season: int, recent_weeks, rest_weeks, half_life=OPP_HALF_LIFE_WK, *, league_id=None) -> bool:
+    stats = _load(season, league_id=league_id)
     df, pos_mean = _evaluate(stats, recent_weeks, rest_weeks, half_life)
 
     naive = df["naive_ppg"]

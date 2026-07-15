@@ -147,11 +147,11 @@ def _compute_as_of(vor_slice: pl.DataFrame, needs: dict, season: int, n: int) ->
     return rows
 
 
-def compute(season: int) -> pl.DataFrame:
-    vor = data_layer.read_production_vor(season, as_of_week="all").select(
+def compute(season: int, *, league_id=None) -> pl.DataFrame:
+    vor = data_layer.read_production_vor(season, league_id=league_id, as_of_week="all").select(
         "as_of_week", "roster_id", "position", "ros_value", "vor"
     )
-    needs = _starter_needs(data_layer.read_lineup_slots(season))
+    needs = _starter_needs(data_layer.read_lineup_slots(season, league_id=league_id))
 
     all_rows = []
     for n in sorted(vor["as_of_week"].unique().to_list()):
@@ -174,10 +174,11 @@ def compute(season: int) -> pl.DataFrame:
     return df
 
 
-def run(season: int) -> None:
-    df = compute(season)
-    data_layer.write_positional_depth(df, season)
-    print(f"  → snapshots/derived/positional_depth_{season}.parquet")
+def run(season: int, *, league_id=None) -> None:
+    df = compute(season, league_id=league_id)
+    data_layer.write_positional_depth(df, season, league_id=league_id)
+    lid = league_id or data_layer._active_league(season)[0]
+    print(f"  → snapshots/derived/league/{lid}/positional_depth_{season}.parquet")
 
 
 if __name__ == "__main__":

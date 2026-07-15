@@ -218,8 +218,17 @@ one place "which week am I viewing" lives behind the seam.
   (scoring-scoped: `projection_consensus`, `ros_player_band`), `sleeper/<season>/league/<league_id>/…`.
   `ros_outcome_shape` split into `ros_player_band` (scoring) + `ros_league_view` (league); `ros_synthesis`
   is league-scoped (its grades depend on league-relative anchor inputs). Reads/writes default to the
-  is_mine league so callers are unchanged. **Still pending (Session 2):** the *fetched* league entities
-  (teams/roster_positions/league_settings) are not yet re-keyed (no 2nd league's data exists to collide).
+  is_mine league so callers are unchanged. **Raw/fetched layer re-keyed (Session 3a)**
+  (teams/roster_positions/lineup_slots/league_settings/matchups/transactions/`join_season` under
+  `sleeper/<season>/league/<id>/…`), and the **compute side keyed (Session 3b)**: the 5 *measurement*
+  `compute_*` fns (`production_vor`/`true_rank`/`positional_depth`/`bracket_sim`/`player_signal`) + their
+  backtests take explicit `league_id`/`scoring_key` (defaulting to is_mine), and `corpus/compute_spine.py`
+  computed the spine for the 221 matched leagues (220 computed + 1 flagged-degenerate; gated by
+  `corpus/check_spine.py`). `bracket_sim` uses a **league-stable seed** (base SEED for is_mine, a
+  `blake2b(league_id)` hash per corpus league — reproducible per league, independent across leagues) and the
+  new sorts carry a unique `sleeper_player_id`/`roster_id` tie-break; `is_two_way` rides `production_vor`.
+  The narrative reads (`ros_league_view`/`manager_features`) are **descoped from the corpus** (no answer key,
+  consumed only by the AI writers) and stay is_mine-only.
 - **`MY_USERNAME` identity hardcode** (still in `queries.js`) resolves "your team" — replace by baking an
   `is_me` flag into the teams parquet at fetch time. **Slated for the next session (Session 2)** now that
   the registry exists to key it.
@@ -306,7 +315,7 @@ fantasy-ai/
             ├── projections/
             │   └── projections_2025.parquet         # multi-source forward prior (Sleeper now, FantasyPros in-season); `source` a column; snapshot/append, grain (season, week, source, player)
             └── nfl_sleeper_weekly_joined/
-                └── league/<league_id>/                  # L0 league-keyed (Session 3a) — one dir per harvested league
+                └── league/<league_id>/                  # L0 league-keyed (Session 3a); the 5 measurement reads (production_vor/true_rank/positional_depth/bracket_odds/player_signal) computed here for the 221 matched corpus leagues by corpus/compute_spine.py (Session 3b) — one dir per league
                     ├── season_2025.parquet                  # join output, all weeks appended (+ is_two_way flag on corpus joins)
                     └── remainders_2025_w{week}.parquet      # unresolved players; empty = clean join
     │       └── nflreadpy/

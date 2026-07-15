@@ -64,13 +64,13 @@ def _actual_ceiling(players: list, need: int, remaining: list, actual: dict) -> 
     return sum(tot[:need])
 
 
-def _test_points(season: int):
+def _test_points(season: int, *, league_id=None):
     """One row per (as_of_week N, roster_id, position): projected starter_value (shipped pure path) +
     the actual starter ceiling over the same remaining weeks. Returns (rows, freeze_week)."""
-    vor = data_layer.read_production_vor(season, as_of_week="all").select(
+    vor = data_layer.read_production_vor(season, league_id=league_id, as_of_week="all").select(
         "as_of_week", "roster_id", "sleeper_player_id", "position", "ros_value", "vor"
     )
-    needs = _starter_needs(data_layer.read_lineup_slots(season))
+    needs = _starter_needs(data_layer.read_lineup_slots(season, league_id=league_id))
     actual = _actual_weekly(season)
 
     weeks = sorted(vor["as_of_week"].unique().to_list())
@@ -98,8 +98,8 @@ def _test_points(season: int):
     return pl.DataFrame(rows), freeze
 
 
-def run(season: int) -> bool:
-    tp, freeze = _test_points(season)
+def run(season: int, *, league_id=None) -> bool:
+    tp, freeze = _test_points(season, league_id=league_id)
     print(f"=== Positional Depth backtest: season={season}  test points={tp.height} "
           f"(team × position × as-of week; freeze week={freeze}) ===")
 

@@ -81,10 +81,10 @@ def _week_matchups(matchups: pl.DataFrame, w: int) -> list:
     return out
 
 
-def _test_points(season: int):
+def _test_points(season: int, *, league_id=None, scoring_key=None):
     """Collect per-matchup (p_win, outcome) calibration points and per-(N, team) expected vs actual
     wins, all from the shipped pure functions on the actual answer key."""
-    cons = data_layer.read_projection_consensus(season).filter(
+    cons = data_layer.read_projection_consensus(season, scoring_key=scoring_key).filter(
         pl.col("position").is_in(SKILL_POSITIONS)
     ).select("week", "sleeper_player_id", "position", "center_ppr", "band_ppr")
     cons_by_week: dict = {}
@@ -92,10 +92,10 @@ def _test_points(season: int):
         cons_by_week.setdefault(int(r["week"]), {})[r["sleeper_player_id"]] = (
             float(r["center_ppr"]), float(r["band_ppr"] or 0.0), r["position"]
         )
-    season_df = data_layer.read_join_season(season).filter(pl.col("position").is_in(SKILL_POSITIONS))
-    slots = expand_slots(data_layer.read_lineup_slots(season).to_dicts())
-    reg_season_end, _ = _playoff_config(season)
-    matchups = data_layer.read_season_matchups(season, through_week=reg_season_end)
+    season_df = data_layer.read_join_season(season, league_id=league_id).filter(pl.col("position").is_in(SKILL_POSITIONS))
+    slots = expand_slots(data_layer.read_lineup_slots(season, league_id=league_id).to_dicts())
+    reg_season_end, _ = _playoff_config(season, league_id=league_id)
+    matchups = data_layer.read_season_matchups(season, through_week=reg_season_end, league_id=league_id)
     freeze = int(season_df["week"].max())
 
     calib = []        # (p_win, outcome) per actual matchup
@@ -137,8 +137,8 @@ def _test_points(season: int):
     return calib, pl.DataFrame(winrows), freeze
 
 
-def run(season: int) -> bool:
-    calib, wins, freeze = _test_points(season)
+def run(season: int, *, league_id=None, scoring_key=None) -> bool:
+    calib, wins, freeze = _test_points(season, league_id=league_id, scoring_key=scoring_key)
     print(f"=== Bracket Odds backtest: season={season}  calibration matchups={len(calib)}  "
           f"win rows={wins.height}  (freeze week={freeze}) ===")
 
@@ -167,10 +167,10 @@ def run(season: int) -> bool:
 
     # Evidence (not gated): do the shipped high-odds teams actually make the top-K playoffs?
     try:
-        reg_end, playoff_teams = _playoff_config(season)
-        odds = data_layer.read_bracket_odds(season, as_of_week=freeze)
+        reg_end, playoff_teams = _playoff_config(season, league_id=league_id)
+        odds = data_layer.read_bracket_odds(season, league_id=league_id, as_of_week=freeze)
         actual_final = _standings_as_of(
-            data_layer.read_season_matchups(season, through_week=reg_end), reg_end
+            data_layer.read_season_matchups(season, through_week=reg_end, league_id=league_id), reg_end
         )
         ranked = sorted(actual_final.items(), key=lambda kv: (kv[1]["wins"], kv[1]["points"]), reverse=True)
         actual_playoff = {rid for rid, _ in ranked[:playoff_teams]}
@@ -183,9 +183,9 @@ def run(season: int) -> bool:
         print(f"  evidence: (bracket_odds parquet not available: {e})")
 
     # --- Determinism + invariant (the fixed SEED must reproduce; Σ odds = playoff_teams) ---
-    _reg, playoff_teams = _playoff_config(season)
-    a = _bracket_compute(season).sort(["as_of_week", "roster_id"])
-    b = _bracket_compute(season).sort(["as_of_week", "roster_id"])
+    _reg, playoff_teams = _playoff_config(season, league_id=league_id)
+    a = _bracket_compute(season, league_id=league_id, scoring_key=scoring_key).sort(["as_of_week", "roster_id"])
+    b = _bracket_compute(season, league_id=league_id, scoring_key=scoring_key).sort(["as_of_week", "roster_id"])
     det_ok = a.equals(b)
     sums = a.group_by("as_of_week").agg(pl.col("playoff_odds").sum().alias("s"))["s"].to_list()
     inv_ok = all(abs(s - playoff_teams) < 0.02 for s in sums)

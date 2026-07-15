@@ -379,7 +379,8 @@ def positional_mean_ppo(season: int, weeks) -> dict:
 
 
 def _compute_as_of(
-    season_df: pl.DataFrame, pos_mean: dict, as_of_week: int, *, opp_half_life, security_map: dict
+    season_df: pl.DataFrame, pos_mean: dict, as_of_week: int, *, opp_half_life, security_map: dict,
+    has_exp: bool = True,
 ) -> list:
     """The per-player signal rows as of one cutoff week N — `season_df` is the join
     already filtered to weeks ≤ N (skill positions, nulls filled). Returns a list of
@@ -425,6 +426,11 @@ def _compute_as_of(
             spike_band=SPIKE_BAND,
             sticky_band=STICKY_BAND,
         )
+        # The §1 Quality axis rests on the ff_opportunity substrate; hold it null where that substrate
+        # is absent (pre-2025 corpus), rather than reporting a placeholder-zero quality_rate/luck.
+        if not has_exp:
+            sig["quality_rate"] = None
+            sig["luck"] = None
         # Trust axis (direction/reliability) + the point-correlation companion are
         # computed from the raw series, not inside `_player_signal` — they need the
         # per-week list, not just the aggregate rates, and (for security) external
@@ -439,7 +445,7 @@ def _compute_as_of(
                 **sig,
                 "direction": _direction(series, half_life=DIRECTION_HALF_LIFE_WK, band=DIRECTION_BAND),
                 "reliability": _reliability(series, min_games=MIN_GAMES),
-                "point_correlation": _point_correlation(series, min_games=MIN_GAMES),
+                "point_correlation": _point_correlation(series, min_games=MIN_GAMES) if has_exp else None,
                 "security": security_map.get(row["sleeper_player_id"], "unknown"),
                 "weeks": [
                     {"week": w["week"], "pts": round1(w["pts"]), "opp": round1(w["opp"])}
@@ -490,23 +496,35 @@ def _security_map() -> dict:
     }
 
 
-def compute(season: int) -> pl.DataFrame:
+def compute(season: int, *, league_id=None) -> pl.DataFrame:
     # Full (frozen) join; usage/score columns can be null for a player who didn't record
     # that stat type, so treat as zero so opportunity and points are well-defined.
-    scoring = data_layer.read_scoring_settings(season)
-    full = data_layer.read_join_season(season).filter(
+    scoring = data_layer.read_scoring_settings(season, league_id=league_id)
+    join = data_layer.read_join_season(season, league_id=league_id).filter(
         pl.col("position").is_in(SKILL_POSITIONS)
     ).with_columns(
         [
             pl.col(c).fill_null(0.0)
             for c in [
                 "carries", "targets", "attempts", "fantasy_points_ppr",
-                "rushing_tds", "receiving_tds", "passing_tds", *EXP_COMPONENT_COLS,
+                "rushing_tds", "receiving_tds", "passing_tds",
             ]
         ]
-    # exp_pts = the league-scored expected points from the ff_opportunity components (the Quality
-    # basis) — derived once here at the consumption layer, then carried per-week like actual points.
-    ).with_columns(expected_points_expr(scoring).alias("exp_pts"))
+    )
+    # exp_pts = the league-scored expected points from the ff_opportunity components (the Quality basis).
+    # The ff_opportunity substrate (EXP_COMPONENT_COLS) is only backfilled for 2025; historical corpus
+    # seasons lack it. When present it drives the §1 Quality axis; when ABSENT exp_pts is a placeholder
+    # and the Quality-axis fields (quality_rate / luck / point_correlation) are held null (law 2 — null
+    # when the substrate can't support the read). The core repeatability read (regression_risk /
+    # expected_ppg / the categorical read) needs none of it, so it is unaffected — is_mine (2025, has the
+    # columns) is byte-identical, corpus 2020-24 gets the core read with a null Quality axis.
+    has_exp = all(c in join.columns for c in EXP_COMPONENT_COLS)
+    if has_exp:
+        full = join.with_columns(
+            [pl.col(c).fill_null(0.0) for c in EXP_COMPONENT_COLS]
+        ).with_columns(expected_points_expr(scoring).alias("exp_pts"))
+    else:
+        full = join.with_columns(pl.lit(0.0).alias("exp_pts"))
 
     security_map = _security_map()
 
@@ -521,16 +539,26 @@ def compute(season: int) -> pl.DataFrame:
         # the cutoff), never peeking past N.
         pos_mean = positional_mean_ppo(season, list(range(1, n + 1)))
         all_rows.extend(
-            _compute_as_of(sub, pos_mean, n, opp_half_life=OPP_HALF_LIFE_WK, security_map=security_map)
+            _compute_as_of(sub, pos_mean, n, opp_half_life=OPP_HALF_LIFE_WK,
+                           security_map=security_map, has_exp=has_exp)
         )
 
     # infer_schema_length=None: reliability/point_correlation are None for many
     # low-sample rows (early as_of_week slices especially) — a partial-row schema scan
     # can pin the wrong dtype for a column that's all-null in the sampled prefix but
     # numeric further down, so scan every row instead.
+    # sleeper_player_id is the unique tie-break: within a (as_of_week, roster_id) many players share a
+    # rounded regression_risk, so a sort on it alone is parallelism-dependent (the 1.7 lesson). One row
+    # per (as_of_week, sleeper_player_id) ⇒ it fully orders the frame → byte-stable output.
     df = pl.DataFrame(all_rows, infer_schema_length=None).sort(
-        "as_of_week", "roster_id", "regression_risk", descending=[False, False, True]
+        "as_of_week", "roster_id", "regression_risk", "sleeper_player_id", descending=[False, False, True, False]
     )
+    # Keep the Quality-axis columns Float64 even when held all-null (no ff_opportunity substrate), so the
+    # corpus schema is consistent with 2025 for the scorer's cross-league scans.
+    df = df.with_columns([
+        pl.col(c).cast(pl.Float64) for c in ("quality_rate", "luck", "point_correlation")
+        if c in df.columns and df[c].dtype == pl.Null
+    ])
     print(f"=== Player signal: season={season}  as_of_week 1..{max_week} ===")
     latest = df.filter(pl.col("as_of_week") == max_week)
     print(f"  latest (week {max_week}) — {latest.height} players:")
@@ -541,10 +569,11 @@ def compute(season: int) -> pl.DataFrame:
     return df
 
 
-def run(season: int) -> None:
-    df = compute(season)
-    data_layer.write_player_signal(df, season)
-    print(f"  → snapshots/derived/player_signal_{season}.parquet")
+def run(season: int, *, league_id=None) -> None:
+    df = compute(season, league_id=league_id)
+    data_layer.write_player_signal(df, season, league_id=league_id)
+    lid = league_id or data_layer._active_league(season)[0]
+    print(f"  → snapshots/derived/league/{lid}/player_signal_{season}.parquet")
 
 
 if __name__ == "__main__":

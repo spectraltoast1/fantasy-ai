@@ -111,17 +111,19 @@ def _compute_as_of(vor_slice: pl.DataFrame, slots: list, season: int, n: int) ->
     ]
 
 
-def compute(season: int) -> pl.DataFrame:
-    vor = data_layer.read_production_vor(season, as_of_week="all").select(
+def compute(season: int, *, league_id=None) -> pl.DataFrame:
+    vor = data_layer.read_production_vor(season, league_id=league_id, as_of_week="all").select(
         "as_of_week", "roster_id", "position", "ros_value"
     )
-    slots = expand_slots(data_layer.read_lineup_slots(season).to_dicts())
+    slots = expand_slots(data_layer.read_lineup_slots(season, league_id=league_id).to_dicts())
 
     all_rows = []
     for n in sorted(vor["as_of_week"].unique().to_list()):
         all_rows.extend(_compute_as_of(vor.filter(pl.col("as_of_week") == n), slots, season, n))
 
-    df = pl.DataFrame(all_rows).sort("as_of_week", "rank")
+    # roster_id is the unique tie-break: dense rank ties across teams, so a sort on (as_of_week, rank)
+    # alone is parallelism-dependent (the 1.7 lesson). One row per (as_of_week, roster_id) ⇒ byte-stable.
+    df = pl.DataFrame(all_rows).sort("as_of_week", "rank", "roster_id")
     max_week = int(df["as_of_week"].max())
     print(f"=== True Rank: season={season}  as_of_week 1..{max_week}  (rows={df.height}) ===")
     print(f"  week {max_week} roster strength (optimal-lineup ROS value, strongest first):")
@@ -131,10 +133,11 @@ def compute(season: int) -> pl.DataFrame:
     return df
 
 
-def run(season: int) -> None:
-    df = compute(season)
-    data_layer.write_true_rank(df, season)
-    print(f"  → snapshots/derived/true_rank_{season}.parquet")
+def run(season: int, *, league_id=None) -> None:
+    df = compute(season, league_id=league_id)
+    data_layer.write_true_rank(df, season, league_id=league_id)
+    lid = league_id or data_layer._active_league(season)[0]
+    print(f"  → snapshots/derived/league/{lid}/true_rank_{season}.parquet")
 
 
 if __name__ == "__main__":
