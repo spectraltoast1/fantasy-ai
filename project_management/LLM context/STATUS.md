@@ -29,7 +29,36 @@ is a no-op (coverage = the UNCHANGED pre-anchor 0.744, identical to 1.6 → prod
 exonerating 1.7); resolves post-merge. Sessions 1.7 & 2 are INDEPENDENT (disjoint writes: league-scoped vs
 NFL-global/scoring-scoped; the only shared edited file is `data_layer.py`, additions in different regions).
 **No `queries.js`/view edits — the seam held. Next: the has_ros_anchor→in_calibrated_pool rewire (post
-Session 2).** — Prior: **BACKEND — GATE REPAIR + one REPRODUCIBILITY DIAGNOSIS (Improvement-Loop
+Session 2).** **Fold-in (merged Session 2 into 1.7):** the §2 ADP anchor is live post-merge (Session 2 had
+already repointed the reader to `read_adp_points_curve(holdout=season)`; the earlier `0.744` was only 1.7's
+stale pre-merge worktree). Added the **missing anchor-consumption gate** to `backtest_ros_player_band`: it now
+ASSERTS the anchor is non-trivial (coverage-with ≠ coverage-without, applied to N>0), so a silently-disabled
+anchor FAILS the gate instead of passing — the check Session 2's "curve files exist" gate could not make
+(teeth proven: a simulated missing curve flips the gate to FAIL). **Anchor live: coverage 0.744→0.817** on
+the calibrated pool. Also hardened 1.7's own Part C determinism check to compare **order-insensitively**
+(polars' multi-threaded group_by reorders tied rows — not a determinism property; the values are identical,
+which Part A and the twice-run proof already sort for). **Report-only (BAND_Z):** Session 2's
+"BAND_Z=0.55 generalizes, 2025 not the outlier" is **anchor-INDEPENDENT** — measured on `projection_consensus`,
+which never consumes the ADP anchor (the anchor shifts the band CENTER in `ros_player_band`, not the width) —
+so it stands unchanged with the anchor live; `backtest_projection_consensus` re-run PASS. All gates green
+(incl. `check_adp_curve_leakage`, `backtest_ros_player_band`, `backtest_roster_shape`). — Prior:
+**BACKEND — NFL SUBSTRATE BACKFILL 2020–2025 (Improvement-Loop Session 2): the
+corpus's multi-season forward-prior spine, which the engine has never had.** `projections` backfilled for
+2020–2024 (existed only for 2025) after a schema-honesty pre-check proved every load-bearing component column
+populated per season; `projection_consensus` + `ros_player_band` computed for **{ppr,half}×2020–2025** via a new
+`_scoring.standard_scoring(key)` + `--scoring-key` on both computes + a `build_substrate.py` driver. **Leakage
+fix:** the §2 ADP anchor curve — one season-agnostic pooled file — is now persisted **per held-out target
+season** (`derived/adp_points_curve/holdout_{S}.parquet`, fit on every season EXCEPT S, with
+`holdout_season`/`train_seasons` provenance), gated by a new **`check_adp_curve_leakage`** hard check (proven to
+have teeth). **Band freeze retired:** `compute_ros_player_band` now spans the full projected season (dropping its
+last `join_season`/roster-path read), and `write_ros_synthesis._read_anchor` is **pinned** to the league-view's
+freeze as-of so the live 2026 AI anchor stays byte-identical. **Independence from the concurrent §1.7 verified
+against the code:** §2 never reads the roster substrate §1.7 rebuilds; disjoint code regions + disjoint data
+writes; §1.7's lone read of §2 territory (2025/ppr consensus) is byte-identical by gate #4. **Report-don't-tune
+(gate #5):** first multi-season calibration look — BAND_Z=0.55 generalizes (2025 is NOT the outlier), SKEW_GAIN=1.5
+is fragile (helps 2020/21/22/25, hurts 2023/24); constants left exactly as-is. **Verified:** all gates exit 0;
+2025/ppr consensus + the wk4 band anchor slice + the 2026 render byte-identical; front end provably unaffected.
+**Next — Session 3 (corpus harvest) on the substrate.** — Prior: BACKEND — GATE REPAIR + one REPRODUCIBILITY DIAGNOSIS (Improvement-Loop
 Session 1.6): the broken instrument fixed before Sessions 2–3 measure against it.** Baseline measurement
 first corrected the brief: only **3** of the "4 red gates" were actually red (`backtest_ros_player_band` was
 already GREEN at 0.817 — its verdict grades the rostered-freeze population, not the whole pool the brief
@@ -399,7 +428,39 @@ accuracy (Session-3 footnote); answer-key wrinkle (Hunter's 63.8 PPR are CB) →
 **⚠️ Concurrent Session 2 (NOT a 1.7 regression):** `backtest_ros_player_band` red = Session 2's in-flight
 `adp_points_curve` pooled→per-holdout migration removed the pooled curve this branch reads → §2 anchor no-op
 (coverage = the UNCHANGED pre-anchor 0.744 → production_vor byte-identical → 1.7 exonerated); resolves
-post-merge. **No `queries.js`/view edits.** — Prior:
+post-merge (done — see the fold-in note in the header). **No `queries.js`/view edits.**
+
+**§2 — NFL substrate backfill 2020–2025 (Improvement-Loop; the corpus's forward-prior spine; 2 code commits
++ a data backfill).** Session 3 (harvest) can compute nothing without a multi-season forward prior; it
+existed only for 2025. **Independence from the concurrent §1.7 verified against the code, not assumed:** §2's
+computes read only NFL-global/config inputs (`projections`/`nfl_stats`/`adp_preseason`/`projection_consensus`),
+never the roster substrate §1.7 rebuilds; §1.7's lone read of §2 territory (`compute_production_vor` → 2025/ppr
+consensus) is a file §2 is pinned NOT to move (gate #4); disjoint code regions + disjoint data writes. **Data
+backfill (no code diff):** `projections` for 2020–2024 (5×18 fetches via the existing `sleeper.py projections`
+mode) — schema-honesty pre-check FIRST (all load-bearing component columns populated per season, else STOP),
+idempotent (re-run week ⇒ unchanged). **C2 — leak-free per-holdout ADP curve.** The §2 anchor curve was ONE
+season-agnostic file, so grading `ros_player_band` on 2023 fit the anchor on 2023's own outcomes (silent,
+optimistic, invisible). Now `derived/adp_points_curve/holdout_{S}.parquet` fit on every season EXCEPT S
+(+ provenance `holdout_season`/`train_seasons`); `data_layer` adp fns take `holdout`; the band's
+`_load_anchor_inputs(season)` reads `holdout=season`. New `check_adp_curve_leakage` HARD gate (provenance
+honesty + train==complement + recompute-match), **proven to have teeth** (fails a deliberately-leaky curve on
+both arms). No-regression: `holdout_2025` (train 2020–2024) is byte-identical on core cols to the retired flat
+curve (already holdout=2025 by default), so 2025 doesn't move. **C3 — {ppr,half}×2020–2025 substrate +
+full-season band + anchor pin.** New `_scoring.standard_scoring(key)` + `--scoring-key` on both computes
+(explicit-key `run`, no `_active_league` for historical seasons) + a `build_substrate.py` driver (12 consensus
++ 12 band). **Retired the band's wk-4 freeze** — `compute_ros_player_band` now spans the full projected season
+(dropping its LAST `join_season`/roster-path read); **pinned `write_ros_synthesis._read_anchor`** to the
+league-view's freeze as-of so the live 2026 AI anchor cannot move. **Proven byte-identical:** 2025/ppr
+consensus (gate #4), the band's wk1–4 anchor slice, and the 2026 `--render` prompt (sha256 match).
+`backtest_ros_player_band`'s pool-coverage evidence re-pinned to the decision week (0.841/0.796 reproduced).
+**Per-season calibration REPORTED, not tuned (gate #5):** BAND_Z=0.55 generalizes (every season's best-Z is
+0.55–0.60 — **2025 is NOT the outlier**); SKEW_GAIN=1.5 is fragile (helps 2020/21/22/25, hurts 2023/24) — a
+Tuner-session finding, constants left exactly as-is. **Verified:** all gates exit 0
+(`backtest_projection_consensus`/`production_vor`/`ros_player_band`/`l0_keying` + `check_adp_curve_leakage`/
+`check_ros_synthesis`/`check_market_vor`); front end provably unaffected (every entity it reads is byte-identical
+or untouched; the band is not a front-end read). **Next — Session 3 (corpus harvest) on the substrate.**
+
+> earlier build
 **§1.6 — Gate Repair + one reproducibility diagnosis (Improvement-Loop; 3 commits).** Repaired the broken
 gate instrument before Sessions 2–3 measure against it. Baseline measurement corrected the brief: only **3**
 of the "4 red gates" were red — `backtest_ros_player_band` was already GREEN (0.817; its verdict grades the
@@ -434,27 +495,6 @@ covered); the pool's value is decision-relevance + suppression. **Gap reported (
 refreshed, Chase card ROS BULL 9/10 from the repointed parquet). No `queries.js`/view edits — seam held.
 **Next — Sessions 2/3 unblocked on a trustworthy baseline; queued: the roster-reproducibility fix + the
 `has_ros_anchor` rewire.**
-
-> earlier build
-**§1.5 — `team_form` + `team_leakage` retired (Improvement-Loop scope correction; 3 commits).** Two fully-orphaned
-derived reads (neither a §1–§7 read; only consumers were pre-Gridiron panels imported by nobody), deleted **before
-the corpus harvest** so they aren't computed ~276× for reads that don't exist. `team_leakage` retired **on
-principle** — it graded start/sit against **realized points** (a design-law-1 violation coaching the spike-week
-START/SIT error); the *process*-graded successor (vs the `projection_consensus` prior knowable at decision time)
-is recorded as future work in `DECISION_READS.md`, not built. **C1 backend:** dropped
-`compute_team_form.py`/`compute_team_leakage.py` + the six `data_layer` fns + the persisted parquets; pruned
-leakage from `backtest_roster_shape` (frame-eq target **and** its synthetic-superflex sub-check, keeping the
-VOR/position_pools checks) and `backtest_l0_keying`'s `_LEAGUE_ENTITIES`; **`_analytics.py` untouched**. **C2
-front end:** deleted `TeamPanel.jsx`/`LeaguePanel.jsx` + the whole dead `queries.js` cluster only they reached +
-the two `db.js` registrations + the two `public/data` symlinks; **kept** the live **singular** `loadTeamDetail` +
-`expandSlots`/`optimalLineup`/`teamProjections`. **C3 docs:** DECISION_READS "Retired reads" +
-TECHNICAL_ARCHITECTURE / READ_BUILD_ORDER / PRODUCT_ROADMAP. **Verified:** `compileall` clean, zero dangling refs;
-`backtest_l0_keying` **exit 0**; `backtest_roster_shape` byte-identical **bar the removed leakage lines** (no live
-number moved — standing instruction 5); all five surfaces (Players · Teams · League · **Matchups** · Dossier)
-render live at 1280px, zero console errors, no retired-parquet fetch. **⚠️ Pre-existing (NOT this session):**
-`backtest_roster_shape`'s `production_vor` frame-eq FAILs at baseline (on-disk 635 rows **stale** vs 631
-recomputed) — a shared-store data-regeneration concern, orthogonal to this deletion, left unfixed (regenerating
-would move numbers). **Next — the corpus harvester (Session 2).**
 
 > built
     - nflreadpy fetcher

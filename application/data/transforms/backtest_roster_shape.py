@@ -220,15 +220,18 @@ def run(season: int) -> bool:
     _check("VOR _pool_of: standard 2 pools, superflex 1 (QB pooled with flex)",
            len(set(vor_std.values())) == 2 and vor_sf["QB"] == vor_sf["RB"], results)
 
-    # --- C: determinism (Session 1.7) — the substrate reads reproduce byte-for-byte on a re-run. With the
-    #     registry pinned, a fresh compute cannot drift; two computes must be identical. This is the
-    #     transform-level half of the determinism proof (the pipeline-level twice-run lives in the session
-    #     rebuild). ---
-    print("  C — determinism (compute twice == byte-identical):")
+    # --- C: determinism (Session 1.7) — the substrate reads reproduce on a re-run. With the registry
+    #     pinned, a fresh compute cannot drift; two computes must carry identical VALUES. Compared
+    #     order-INSENSITIVELY (sort by all columns first): polars' multi-threaded group_by can legitimately
+    #     reorder tied rows within a run, and every consumer sorts, so row order is not a determinism
+    #     property — the values are. (The pipeline-level twice-run in the session rebuild sorts the same
+    #     way.) ---
+    print("  C — determinism (compute twice == identical values, order-insensitive):")
     for cname, cfn in (("production_vor", vor.compute), ("true_rank", tr.compute),
                        ("positional_depth", depth.compute), ("market_vor", mv.compute)):
         try:
-            _check(f"{cname} compute×2 identical", cfn(season).equals(cfn(season)), results)
+            a, b = cfn(season), cfn(season)
+            _check(f"{cname} compute×2 identical", a.sort(a.columns).equals(b.sort(b.columns)), results)
         except Exception as e:
             _check(f"{cname} compute×2 identical", False, results, f"{type(e).__name__}: {str(e)[:60]}")
 
