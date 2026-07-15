@@ -271,16 +271,19 @@ def compute(season: int, scoring: dict | None = None) -> pl.DataFrame:
     return df
 
 
-def run(season: int, scoring_key: str | None = None) -> None:
+def run(season: int, scoring_key: str | None = None, scoring: dict | None = None) -> None:
     # scoring_key=None → the is_mine league's profile (single-league default, unchanged). Session 2 (the
-    # corpus substrate) passes an EXPLICIT standard key so it builds {ppr,half} independently of any
-    # league — and historical seasons have no is_mine league for `_active_league` to resolve.
+    # matched substrate) passes an EXPLICIT standard key so it builds {ppr,half} independently of any
+    # league. Session 2.5 (the generalization substrate) additionally passes a `scoring` dict for a
+    # CUSTOM key (`cust-<hash>`) — a representative scoring_settings so compute() recomputes the custom
+    # points; the key is still the path scope. Historical seasons have no is_mine league to resolve.
     if scoring_key is None:
         df = compute(season)
         data_layer.write_projection_consensus(df, season)
         sk = data_layer._active_league(season)[1]
     else:
-        df = compute(season, scoring=standard_scoring(scoring_key))
+        sc = scoring if scoring is not None else standard_scoring(scoring_key)
+        df = compute(season, scoring=sc)
         data_layer.write_projection_consensus(df, season, scoring_key=scoring_key)
         sk = scoring_key
     print(f"  → snapshots/derived/scoring/{sk}/projection_consensus_{season}.parquet")
