@@ -40,8 +40,14 @@ the calibrated pool. Also hardened 1.7's own Part C determinism check to compare
 which Part A and the twice-run proof already sort for). **Report-only (BAND_Z):** Session 2's
 "BAND_Z=0.55 generalizes, 2025 not the outlier" is **anchor-INDEPENDENT** — measured on `projection_consensus`,
 which never consumes the ADP anchor (the anchor shifts the band CENTER in `ros_player_band`, not the width) —
-so it stands unchanged with the anchor live; `backtest_projection_consensus` re-run PASS. All gates green
-(incl. `check_adp_curve_leakage`, `backtest_ros_player_band`, `backtest_roster_shape`). — Prior:
+so it stands unchanged with the anchor live; `backtest_projection_consensus` re-run PASS. **Regenerated the
+whole merged tree** (substrate + roster chain) so data matches merged code; the twice-run determinism check
+across it caught a **pre-existing (1.6) non-determinism in `ros_player_band.in_calibrated_pool`** — the
+top-300 suppression cutoff broke `ros_center` ties by `ordinal` rank (i.e. by polars' parallelism-dependent
+row order), flipping 6 boundary booleans run-to-run (no numeric change, not gated). **Fixed:** the tie-break
+now pins on `sleeper_player_id` (`_mark_calibrated_pool` pre-sorts); the full substrate ({ppr,half}×2020–2025)
+rebuilt via `build_substrate` — now **every** entity, incl. `ros_player_band`, is twice-run byte-identical.
+All gates green (incl. `check_adp_curve_leakage`, `backtest_ros_player_band`, `backtest_roster_shape`). — Prior:
 **BACKEND — NFL SUBSTRATE BACKFILL 2020–2025 (Improvement-Loop Session 2): the
 corpus's multi-season forward-prior spine, which the engine has never had.** `projections` backfilled for
 2020–2024 (existed only for 2025) after a schema-honesty pre-check proved every load-bearing component column
