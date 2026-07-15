@@ -46,6 +46,7 @@ def _fail(msg):
 
 
 def check() -> bool:
+    _ok_count["n"] = 0   # reset the failure tally so check() is re-callable in one process (teeth tests)
     if not data_layer.corpus_manifest_exists():
         _fail("corpus_manifest.parquet missing — run select.py first")
         return False
@@ -95,6 +96,26 @@ def check() -> bool:
     if thin:
         print(f"  ⓘ thin train seasons (< {MATCHED_SEASON_SOLID_FLOOR}, k-folded within train, not "
               f"standalone): { {s: by_season.get(s, 0) for s in thin} }")
+
+    # 2b. generalization spread + custom-key budget (Session 2.5 — the missing tooth). The generalization
+    # set proves the any-league code survives real shapes; it CANNOT run that check on a season it
+    # certifies against if that season is empty (the exact defect that shipped: all 55 gen leagues in
+    # 2023-24, zero in the 2025 test season). Gate the property, not just the file (standing instr #7).
+    gen_by_season = Counter(r["season"] for r in gen)
+    print(f"  generalization supply per season: {dict(sorted(gen_by_season.items()))}")
+    empty_gen = {s: gen_by_season.get(s, 0) for s in _corpus.SEASONS
+                 if gen_by_season.get(s, 0) < _corpus.GEN_SEASON_MIN}
+    if empty_gen:
+        _fail(f"generalization below hard floor {_corpus.GEN_SEASON_MIN} in season(s) {empty_gen} — the "
+              f"robustness set can't certify a season it doesn't cover (the season-collapse defect)")
+    else:
+        _ok(f"generalization ≥ {_corpus.GEN_SEASON_MIN} in every season {sorted(_corpus.SEASONS)}")
+    gen_custom_keys = {r["scoring_key"] for r in gen if str(r["scoring_key"]).startswith("cust")}
+    if len(gen_custom_keys) > _corpus.GEN_CUSTOM_KEY_CAP:
+        _fail(f"generalization has {len(gen_custom_keys)} distinct custom scoring keys > cap "
+              f"{_corpus.GEN_CUSTOM_KEY_CAP} (unbounded scoring-scoped substrate compute)")
+    else:
+        _ok(f"generalization distinct custom keys {len(gen_custom_keys)} ≤ cap {_corpus.GEN_CUSTOM_KEY_CAP}")
 
     # 3. filter honesty
     no_result = [r for r in m if not r["filter_result"]]
