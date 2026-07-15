@@ -1,6 +1,43 @@
 # STATUS
 
-**Last updated:** 2026-07-15 (**BACKEND — SESSION 2.5 PRODUCER CODE COMMITTED + MERGED (re-run): the
+**Last updated:** 2026-07-15 (**BACKEND — L0 RAW-LAYER KEYING + CORPUS RAW HARVEST shipped (Improvement-Loop
+Session 3a): the deferred half of L0 closed, and the first real data pulled through the collision isolation.**
+Session 1 keyed the *derived* league layer but deferred the *raw* fetched + join layer — which was still
+season-keyed only, so a second league pulled into a season would **overwrite the first** (audit S1.3). **C1 —
+raw/join re-keyed by `league_id`:** a default-resolves-active `league_id=None` kwarg (mirroring the derived
+idiom exactly) on every path/read/write for `sleeper_matchups`/`sleeper_transactions`/`teams`/
+`roster_positions`/`lineup_slots`/`league_settings`/`join_season`(+`remainders`) → `sleeper/<season>/league/
+<league_id>/…` · `nfl_sleeper_weekly_joined/league/<league_id>/…`; threaded through the sleeper fetchers +
+`join_nfl_sleeper_weekly.run` + `derive_lineup_slots`; `league_registry` now passes the config league_id
+**explicitly** to its raw reads (the default resolution reads the very `leagues.parquet` it builds — an
+explicit key breaks that bootstrap cycle). The is_mine 2025 league (`1182…`) **migrated byte-preserving**
+(SHA `9457b16e`, verify-then-remove) with the 4 `public/data` raw symlinks (teams/lineup_slots/
+league_settings/season) repointed; `backtest_l0_keying` gains a **B2 raw-collision check + prove-bites**.
+**C2 — the harvest driver (`corpus/harvest.py`):** reads the FROZEN manifest, filters `matched ∪
+generalization ∪ mine = 271` (excludes the 41 `excluded`), and per league-season pulls the raw layer through
+the throttled `_http` (idempotent/incremental — `join_season` is the terminal resumability artifact; **per-
+league failure isolation** so one transient Sleeper timeout flags-and-continues instead of aborting 271
+pulls) and builds a per-league `join_season` vs `nfl_stats` + the **pinned registry** (1.7). **Full harvest:
+271/271 joined · 8,938 Sleeper calls · ~48 min · 41 calls/league · ≈0 incremental re-run · 0 drifted · 0
+errored.** (`join` got per-process caches for the week-invariant reads — nfl_stats/registry/id-map — cutting
+per-league join cost ~an order of magnitude; `backfill` gained a `pace` override.) Roster mass **65,049
+resolved + 997 named remainders (1.51% aggregate loss, bounded)**; twice-join byte-identical. **Two-way flag:**
+`corpus_two_way_flags` (10-row reference) rides each join as a first-class `is_two_way` boolean — **FLAG, not
+exclude** (the scorer slices later). A **clean-zero bug was caught (standing instruction 1):** `group_by(
+"season")` yields a TUPLE key, so the flag map missed the int-season lookup and `is_two_way` came out
+all-False (exposure 0 despite Hunter being rostered); fixed (row-wise int keys + recompute-on-change), giving
+the true **exposure = 5** (Travis Hunter `12530` is on the is_mine roster too; one flagged player rostered per
+season 2021–2025). **C3 — `corpus/check_harvest.py` gate, GREEN over all 271** (raw present · join computes ·
+roster-mass bounded · determinism byte-identical · two-way present+correct on every join), **prove-bites both
+fire** (a truncated league fails completeness; a roster-mass-losing join fails the bound). **Historical-
+accuracy footnote (1.7 residual — report, don't fix):** the pinned registry is current-state, so a 2020–24
+league's skill-eligibility label is *today's*; the material exposure is exactly the bounded two-way set (5
+rostered), reported. **No constant changed; substrate/manifest/flags frozen (untouched); `queries.js`/views
+untouched — the seam held; front end renders** (is_mine resolves post-migration, `is_two_way` column added,
+zero console errors). **Next — Session 3b: the league-scoped read spine (`production_vor` → {`true_rank`,
+`positional_depth`, `bracket_odds`}, `player_signal`, `ros_league_view`, `manager_features`) with explicit
+`league_id`/`scoring_key` threaded through the `compute_*` functions, matched-first then generalization, + the
+10k-Monte-Carlo `bracket_sim` per league per as-of week (budget it) → then the L2 ledger.** — Prior: **BACKEND — SESSION 2.5 PRODUCER CODE COMMITTED + MERGED (re-run): the
 corpus-finalization producers now live on main at `51940eb`.** The 2026-07-14 run shipped the artifacts (frozen
 in the store) but committed the code only on an unmerged branch, so main had no producers — this re-run
 **adopted that branch's 3 commits** (`26bf6d7` C1 season-aware + key-capped generalization re-select & gate

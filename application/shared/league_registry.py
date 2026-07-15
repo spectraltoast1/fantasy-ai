@@ -48,15 +48,18 @@ def _reg_row_from_manifest(r: dict) -> dict:
     }
 
 
-def _mine_shape_key(season: int) -> str:
+def _mine_shape_key(season: int, league_id: str) -> str:
     """Best-effort shape_key for the live league from persisted settings, reusing the corpus classifier.
 
     Only reached in the bootstrap case (no corpus manifest yet). shape_key is registry metadata, not a
-    partition key, and the manifest is authoritative when present — so this degrades gracefully."""
+    partition key, and the manifest is authoritative when present — so this degrades gracefully. Reads the
+    raw config with an EXPLICIT league_id (the config league it is building for): the raw layer is now
+    league-keyed and its default resolution goes through `_active_league`, which reads the very
+    leagues.parquet this builder writes — an explicit key breaks that bootstrap cycle (Session 3a)."""
     try:
         from application.data.transforms import _manager
-        slots = data_layer.read_roster_positions(season)["slot"].to_list()
-        league = data_layer.read_playoff_settings(season)
+        slots = data_layer.read_roster_positions(season, league_id=league_id)["slot"].to_list()
+        league = data_layer.read_playoff_settings(season, league_id=league_id)
         num_teams = league.get("num_teams") or league.get("total_rosters")
         return _keys.shape_key(num_teams, _manager.qb_structure(slots),
                                _manager.league_format(league.get("type")))
@@ -72,11 +75,11 @@ def _ensure_mine(rows: list, seen: set, season: int) -> None:
     lid = str(config.SLEEPER_LEAGUE_ID)
     if (lid, season) in seen:
         return
-    scoring = data_layer.read_scoring_settings(season)
+    scoring = data_layer.read_scoring_settings(season, league_id=lid)
     rows.append({
         "league_id": lid, "season": season,
         "scoring_key": _keys.scoring_key_from_settings(scoring),
-        "shape_key": _mine_shape_key(season),
+        "shape_key": _mine_shape_key(season, lid),
         "is_mine": True, "onboarded_at": _now(), "pilot_cohort": "mine",
     })
     seen.add((lid, season))

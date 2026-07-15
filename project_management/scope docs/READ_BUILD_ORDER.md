@@ -124,7 +124,15 @@ backfill) — DONE:** `projections` backfilled 2020–2024 (was 2025-only); `pro
 (`holdout_{S}.parquet`, `check_adp_curve_leakage.py` hard gate); the `ros_player_band` wk-4 freeze retired
 (full-season range) with `write_ros_synthesis._read_anchor` pinned so the live 2026 anchor holds. First
 multi-season calibration reported (BAND_Z=0.55 generalizes; SKEW_GAIN=1.5 fragile) — reported, not tuned.
-See `engine improvement/SESSION_2_NFL_SUBSTRATE_BACKFILL.md`. **Next: Session 3 harvest** → L2 ledger backfill.
+See `engine improvement/SESSION_2_NFL_SUBSTRATE_BACKFILL.md`. **Session 2.5 (corpus finalization) — DONE:**
+manifest FINAL/harvest-ready (matched 221 + generalization 48 [8/season] + mine 2 = 271 harvested, 41 excluded),
+generalization substrate built (8 custom keys × 2020–2025), `corpus_two_way_flags` reference (10 rows; FLAG not
+exclude). **Session 3a (raw harvest) — DONE:** the deferred half of L0 — the raw fetched + join layer re-keyed
+by `league_id` (`sleeper/<season>/league/<id>/…`, `nfl_sleeper_weekly_joined/league/<id>/…`), the is_mine league
+migrated byte-identical; a new `corpus/harvest.py` pulled all 271 leagues' raw + per-league `join_season` (with
+the `is_two_way` flag riding through), gated by `corpus/check_harvest.py`. See
+`engine improvement/SESSION_3A_RAW_HARVEST.md`. **Next: Session 3b** (the league-scoped read spine +
+10k-Monte-Carlo bracket sim, matched-first) → then L2 ledger backfill.
 
 ## Built — Frontend
 
