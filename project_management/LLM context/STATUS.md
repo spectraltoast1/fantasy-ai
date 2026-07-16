@@ -43,7 +43,18 @@ check, fixed). (3) **No-native-confidence flag list** — `production_vor`, `bra
 signal is defined) — FLAGGED, not fabricated. **Value-identity proven** — every claim value is byte-equal
 to its source read across all 9 families (a reshape that moved a number would be a bug). **Seam held —
 `queries.js`/views/reads/substrate untouched** (`data_layer` additive-only, +52 lines; the ledger is
-internal loop plumbing, no view consumes it, nothing observable in the app). **Next — Session 4b:
+internal loop plumbing, no view consumes it, nothing observable in the app). **4a-fix (`code_version`
+provenance correction, +1 commit):** the initial backfill ran on a **dirty tree**, so
+`backfill_predictions._git_sha()` captured the pre-4a **BASE** sha (`087e740`, which does NOT contain the
+producing `backfill_predictions.py`) into all 2.89M rows' `code_version` — and hence into `prediction_id`.
+Corrected before 4b joins on those ids: `_git_sha()` now **refuses a dirty tree** (raises), and the
+`served=false` store was cleared + **re-stamped from the committed tip** so every row's `code_version`
+names the real producing commit. **Proven that ONLY `code_version` + `prediction_id` moved** (row count
+2,893,834 unchanged; schema identical; the 4 `inputs_ok=false` league-seasons unchanged; band-once; every
+other column value-identical — a `_frame_eq` over the store minus those two columns). `check_predictions`
+now asserts `served=false` is a single `code_version` whose tree carries `backfill_predictions.py`, and
+that the dirty-tree guard bites. No `queries.js`/view/constant/read/substrate change; no cascade (4b not
+started — nothing references the old ids). **Next — Session 4b:
 `outcomes_{season}` + `compute_resolutions.py` (the `predictions ⋈ outcomes` join + grading primitives
 `error`/`abs_error`/`in_band`/`pit`/`brier`/`rank_error`) from the frozen `join_season` + `league_settings`;
 PIT the unifying primitive; still NO single-claim verdicts (the scorer, Session 5, is the first judge) —

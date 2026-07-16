@@ -45,12 +45,22 @@ _LEAGUE_READERS = {
 }
 
 
+def _assert_clean_tree(porcelain: str) -> None:
+    """Refuse a canonical `served=false` stamp from a dirty tree. `git rev-parse HEAD` on a dirty tree
+    returns the BASE commit, not the producing one — and because `code_version` is inside `prediction_id`,
+    that mis-stamps every claim (the 4a-fix defect: 2.89M rows stamped with the pre-4a base sha). The
+    testable seam so the guard's bite is provable without mutating the real git state."""
+    if porcelain.strip():
+        raise RuntimeError("canonical predictions write requires a clean tree; commit first "
+                           "(a dirty tree stamps code_version with the base commit, not the producing one)")
+
+
 def _git_sha() -> str:
-    """The git sha at write time (the `code_version` provenance). Names the commit; a dirty tree is not
-    reflected — the authoritative store is regenerated at a clean commit."""
-    return subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=os.path.dirname(os.path.abspath(__file__))
-    ).decode().strip()
+    """The git sha at write time (the `code_version` provenance) — the committed producing tip. Refuses a
+    dirty tree (see `_assert_clean_tree`); pass an explicit `--code-version` to bypass for tests/pilots."""
+    root = os.path.dirname(os.path.abspath(__file__))
+    _assert_clean_tree(subprocess.check_output(["git", "status", "--porcelain"], cwd=root).decode())
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root).decode().strip()
 
 
 def targets(strata=BACKFILL_STRATA, limit=None) -> list[dict]:

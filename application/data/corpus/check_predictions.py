@@ -18,7 +18,9 @@ prove-bite.
   3. IMMUTABILITY — the append-only writer never overwrites: a same-code_version re-write appends nothing;
      a new-code_version write appends a parallel population (both retained). Proven on a throwaway season.
   4. PROVENANCE BITES — the constants_hash drift gate reddens on a changed module constant; the store
-     exercises inputs_ok's `false` path (≥1 league) AND the derivation flips false on a degraded input.
+     exercises inputs_ok's `false` path (≥1 league) AND the derivation flips false on a degraded input;
+     all `served=false` rows share ONE code_version naming the PRODUCING commit (its tree carries
+     backfill_predictions.py — not the base/dirty-tree sha), and the dirty-tree stamp guard bites (4a-fix).
   5. DETERMINISM — rebuilding a sample league/band's claims (with the PERSISTED code_version) is
      value-identical to the persisted rows, incl. a stable prediction_id. Value-compared (`_frame_eq`):
      determinism is a property of the VALUES, not the physically-non-deterministic parquet byte stream.
@@ -28,6 +30,8 @@ prove-bite.
 Run: python3 -m application.data.corpus.check_predictions [--strata matched generalization mine] [--sample N]
 """
 import argparse
+import os
+import subprocess
 import sys
 
 import polars as pl
@@ -58,6 +62,29 @@ def _frame_eq(a: pl.DataFrame, b: pl.DataFrame) -> bool:
         return False
     cols = b.columns
     return a.select(cols).sort(cols).equals(b.select(cols).sort(cols))
+
+
+def _commit_has_producer(sha: str) -> bool:
+    """True iff `sha` is a real commit whose tree contains the producing code
+    (`backfill_predictions.py`) — so `code_version` names the commit that PRODUCED the claims, not the
+    base/dirty-tree commit (the 4a-fix defect: the base sha's tree lacks the backfill file)."""
+    root = os.path.dirname(os.path.abspath(__file__))
+    r = subprocess.run(["git", "cat-file", "-e", f"{sha}:application/data/corpus/backfill_predictions.py"],
+                       cwd=root, capture_output=True)
+    return r.returncode == 0
+
+
+def _guard_bites() -> bool:
+    """The dirty-tree stamp guard exists and bites: a clean tree passes, a dirty one raises."""
+    try:
+        backfill_predictions._assert_clean_tree("")            # clean → no raise
+    except Exception:
+        return False
+    try:
+        backfill_predictions._assert_clean_tree(" M application/data/corpus/backfill_predictions.py")
+        return False                                           # dirty → should have raised
+    except RuntimeError:
+        return True
 
 
 def _load(seasons) -> pl.DataFrame:
@@ -205,6 +232,14 @@ def check(strata=("matched", "generalization", "mine"), sample: int = 3) -> bool
                           "id_resolution_pct": [10.0]})
     _ok("inputs_ok derivation flips false on a degraded input",
         not inputs_ok.inputs_ok_detail("X", 2099, manifest=synth)["ok"], results)
+    # code_version provenance (4a-fix): served=false is ONE version naming the PRODUCING commit; guard bites.
+    sf_cvs = df.filter(~pl.col("served"))["code_version"].unique().to_list()
+    _ok(f"served=false rows share ONE code_version [{len(sf_cvs)}]", len(sf_cvs) == 1, results,
+        "" if len(sf_cvs) == 1 else f"{sf_cvs[:3]}")
+    _ok("code_version names the PRODUCING commit (its tree has backfill_predictions.py)",
+        len(sf_cvs) == 1 and _commit_has_producer(sf_cvs[0]), results,
+        sf_cvs[0][:12] if len(sf_cvs) == 1 else "")
+    _ok("dirty-tree stamp guard exists + bites (clean ok; dirty raises)", _guard_bites(), results)
 
     # 5 — determinism
     print("  5 — determinism (rebuild a sample == persisted, incl. stable prediction_id):")
@@ -246,6 +281,9 @@ def check(strata=("matched", "generalization", "mine"), sample: int = 3) -> bool
         pl.DataFrame({"claim_type": ["direction"], "value": [0.0]})
         .filter((pl.col("claim_type") == "direction") & pl.col("value").is_not_null()).height == 1, results)
     _ok("check-2 Law-1 bites (a 'verdict' column would be forbidden)", "verdict" in _FORBIDDEN_COLS, results)
+    _ok("check-4 producing-commit bites (the empty tree carries no producer)",
+        not _commit_has_producer("4b825dc642cb6eb9a060e54bf8d69288fbee4904"), results)  # git's empty-tree sha
+    _ok("check-4 guard bites (clean ok, dirty raises)", _guard_bites(), results)
     _ok("check-5 value-equality bites (differing ≠; permutation ==)",
         (not _frame_eq(pl.DataFrame({"a": [1, 2]}), pl.DataFrame({"a": [1, 3]})))
         and _frame_eq(pl.DataFrame({"a": [2, 1]}), pl.DataFrame({"a": [1, 2]})), results)
