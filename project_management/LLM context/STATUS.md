@@ -1,6 +1,53 @@
 # STATUS
 
-**Last updated:** 2026-07-16 (**BACKEND — L2 LEDGER, PART 1: the `predictions` entity built + backfilled
+**Last updated:** 2026-07-16 (**BACKEND — L2 LEDGER COMPLETE: `outcomes` + `resolutions` join the claims to
+realized truth and attach the grading PRIMITIVES (Improvement-Loop Session 4b, 3 commits) — the ledger now
+runs end-to-end `predictions ⋈ outcomes → resolutions`, grading nothing.** 4a laid the engine's claims flat
+as immutable `served=false` rows; they were ungraded. 4b builds the other half from the FROZEN
+`join_season`/`matchups`/`league_settings` — realized facts + the `error`/`in_band`/`pit`/`brier`/
+`rank_error`/`direction_hit` primitives the scorer (Session 5) will judge. **Law 1 stays structural across
+the entity boundary: a per-row `pit=0.97` is a PRIMITIVE, not a verdict — `resolutions` emits no aggregate
+score, per-read pass/fail, `claim_correct`, or `suppress`; the scorer is the first thing that judges, and
+only over DISTRIBUTIONS.** **C1 — `outcomes_{season}` (962,196 rows, append-only by `outcome_id`).** New
+`data_layer.write_outcomes`/`read_outcomes` (immutable append-only-of-new, `league_id` nullable by scope,
+the 4a precedent); `corpus/backfill_outcomes.py` derives realized truth across the 270 league-seasons.
+Roster facts (`roster_wins`/`roster_total_pts`/`roster_final_standing`/`roster_made_playoffs` +
+`roster_position_pts`) REUSE `compute_bracket_sim`'s division-aware seeding at `reg_end`
+(`_playoff_config`/`_standings_as_of`/`_division_map`/`_seed_table`) — never a naive sort; **gate teeth:
+realized playoff mass == slot count on all 270 incl. the 25 division leagues.** **SCOPING FINDING (a
+correction to the brief's grounding — REPORTED not papered over, std instr 1/6):** the brief assumed
+same-`scoring_key` leagues give a player identical weekly points; FALSE for ~9.5% of player-weeks (spreads
+to ~21 pts) — `scoring_key` classifies only the RECEPTION tier, so two "ppr" leagues that differ on the INT
+penalty / yardage & reception bonuses / first-down points genuinely score a player-week differently, and
+`sleeper_points` faithfully reflects each league's FULL scoring. So realized points are a LEAGUE property:
+`player_weekly_pts` is **league-scoped** (each point claim grades against ITS league's exact truth), while
+`player_weekly_pts_canonical` is **scoring-scoped** (`_scoring.actual_points_expr`, league-independent by
+construction — 0 disagreement — matching the basis the scoring-scoped `ros_player_band` was projected
+under). **C2 — `compute_resolutions.py` → `resolutions_{season}` (2,893,834 rows = exactly the claim
+population; 1:1 on `prediction_id`, asserted).** Horizon-correct per family (ros → Σ pts weeks ≥ as_of;
+weekly → weeks > as_of; season → the season-end roster facts). PIT the unifier ONLY where a distribution is
+stated: interval via `Φ((truth−center)/sigma)`, probability via the DETERMINISTIC randomized PIT of a
+Bernoulli seeded by `prediction_id` (Uniform under calibration, verified ~flat — so the scorer's ONE
+PIT-uniformity test is valid for playoff odds too); point/ordinal/direction get their native primitive and
+`pit=null` (no fabricated sigma). `rank_error` is integer for `true_rank`, legitimately FRACTIONAL for
+`avg_seed` (a Monte-Carlo average seed). **Unresolved claims are NAMED + counted, never dropped, never a
+fake zero** (production_vor 9.6% / player_signal 19% / band 45% — band-pool players not rostered in any
+league of the scoring_key past as_of). **First-look findings SURFACED, graded nothing, changed no constant:**
+production_vor +28.6 median error and band PIT piled at 0 (projection optimism / injuries / roster churn);
+positional_depth −62 (the ★ approximate answer key: `surplus_value` vs total roster×position pts, graded on
+the clean subset with a coverage flag); direction ~chance hit-rate (non-degenerate classification). Each
+resolution carries its claim's provenance (`code_version`/`constants_hash`/`inputs_ok`/`served`).
+**C3 — `corpus/check_resolutions.py` GREEN with teeth:** coverage (1:1, resolved⇒answer, unresolved⇒reason)
+· primitive validity (pit/brier∈[0,1], in_band∈{0,1}, pit non-null IFF interval/probability) · **Law 1 — no
+verdict column** · traceability + determinism (recompute value-identical, `_frame_eq`) · **realized
+integrity rides through** (Σ made-playoffs truth == playoff_teams per (league, as_of_week) in the GRADED
+rows, std instr 7) — all 5 prove-bites fire. Deterministic (twice-derive/twice-compute value-identical),
+idempotent (re-run appends 0). **Seam held — `queries.js`/views untouched; predictions + reads + substrate
+value-identical (untouched).** **NEXT — Session 5: the Scorer (L3)** (`compute_engine_scorecard.py` over
+`resolutions`: skill vs each read's declared baseline · calibration = PIT-uniformity KS / coverage / Brier
+reliability · confidence-honesty = is error monotone in the read's stated `confidence`, the headline law-2
+metric · discrimination = Spearman; sliced by league/position/week/confidence-tier/`inputs_ok`/cohort → the
+Trust Report) — SCOPED, NOT STARTED; it is the FIRST thing that judges. — Prior: **BACKEND — L2 LEDGER, PART 1: the `predictions` entity built + backfilled
 `served=false` across the 270 spined league-seasons (Improvement-Loop Session 4a, 3 commits): every frozen
 read reshaped into an immutable, provenance-stamped CLAIM row — the ledger's first entity.** The 5-read
 spine + scoring-scoped band were computed, but the engine's *claims* were trapped inside per-read parquets

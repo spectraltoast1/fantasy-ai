@@ -123,7 +123,21 @@ Two append-only entities, plus their join. These are the first entities in the p
 semantics are **immutable** — following `market_values` and `team_news_raw`, which already prove the
 pattern.
 
-> **STATUS — L2 PARTIALLY BUILT.** **`predictions` is DONE (Session 4a):** the entity, its provenance
+> **STATUS — L2 BUILT END-TO-END (`predictions ⋈ outcomes → resolutions`).** **`outcomes` + `resolutions`
+> are DONE (Session 4b):** `outcomes_{season}` (962,196 realized facts from the frozen sources; division-aware
+> standings; realized playoff mass == slot count) and `resolutions_{season}` (`corpus/compute_resolutions.py`,
+> 2,893,834 rows = 1:1 with the claims) carrying the grading primitives — `error`/`abs_error`, `in_band`,
+> `pit` (interval Gaussian + probability's deterministic randomized-PIT), `brier`, `rank_error`,
+> `direction_hit` — gated green by `corpus/check_resolutions.py`. **Two schema realities vs the block below:**
+> (a) a **scoping correction** — realized player points are LEAGUE-scoped (`scoring_key` is only a
+> reception-tier classifier; ~9.5% of player-weeks differ across same-key leagues), so `outcomes` carries a
+> league-scoped `player_weekly_pts` (for the league point claims) AND a scoring-scoped
+> `player_weekly_pts_canonical` (for the band); (b) `pit` is the unifier but ONLY where a distribution is
+> stated (interval + probability) — point/ordinal/direction get `pit=null`, no fabricated sigma.
+> **Law 1 holds across the entity split: `resolutions` carries primitives, NEVER a verdict / aggregate
+> score / suppress column** — the scorer (L3, Session 5) is the first thing that judges. **NEXT = L3.**
+>
+> **STATUS — `predictions` is DONE (Session 4a):** the entity, its provenance
 > scaffolding (constants snapshot + `constants_hash`, versioned `inputs_ok`), and the read→claim reshape
 > are built and backfilled `served=false` across the 270 spined league-seasons (2,893,834 claims), gated
 > green by `corpus/check_predictions.py`. Two schema refinements landed vs the block below: (a) the
@@ -133,7 +147,7 @@ pattern.
 > (interval scale, so PIT reads a typed param not BULL_Z), and `confidence_label` / `confidence_json`
 > (canonical numeric confidence + which signal it is + an audit-only payload). `production_vor` +
 > `bracket_odds` wins/seed + `player_signal` direction have **no native confidence** — flagged, not
-> fabricated. **`outcomes` + `resolutions` are Session 4b (NOT started).** The `predictions` schema below
+> fabricated. **`outcomes` + `resolutions` are now BUILT (Session 4b — see the status note above).** The `predictions` schema below
 > is otherwise as-built (the corpus fills only the 5 spine reads + `ros_player_band`; the AI reads and
 > `market_vor` in the `read` enum are the live-path future).
 
