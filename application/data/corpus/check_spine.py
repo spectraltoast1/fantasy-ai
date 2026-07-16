@@ -1,29 +1,37 @@
 """
-check_spine.py — the corpus measurement-spine gate (Improvement-Loop Session 3b, commit 3).
+check_spine.py — the corpus measurement-spine gate (Improvement-Loop Session 3b commit 3; Session 3d
+commit 3 extends it to the generalization stratum — both strata of the now-complete corpus spine).
 
-Asserts, over every matched league in the FROZEN manifest, that the 5-read measurement spine (commit 2) is
-complete, cohort-sound, probability-valid, roster-mass-faithful, deterministic, and two-way-sliceable.
-Mirrors `check_harvest` / `backtest_l0_keying`: exit 0 iff every applicable check passes. A league whose raw
-harvest is degenerate (playoff_week_start unset ⇒ no simulable season — the compute_spine flag) is a NAMED,
-tolerated exception (reported, not a silent hole); a league missing a read for NO diagnosable reason FAILS.
+Asserts, over every matched AND generalization league in the FROZEN manifest, that the 5-read measurement
+spine (commit 2) is complete, cohort-sound, probability-valid, roster-mass-faithful, deterministic,
+two-way-sliceable, and — for generalization — `never_tune`-intact. Mirrors `check_harvest` /
+`backtest_l0_keying`: exit 0 iff every applicable check passes. A league whose raw harvest is degenerate
+(playoff_week_start unset ⇒ no simulable season — the compute_spine flag) is a NAMED, tolerated exception
+(reported, not a silent hole); a league missing a read for NO diagnosable reason FAILS.
 
   1. SPINE PRESENT — all 5 reads (production_vor, true_rank, positional_depth, bracket_odds, player_signal)
-     exist for every non-degenerate matched league.
+     exist for every non-degenerate league in every checked stratum.
   2. COHORT + PROBABILITY — true_rank / positional_depth / bracket_odds cover the SAME roster set at EVERY
      as-of week (no team silently dropped, no week short a team); bracket_odds playoff_odds ∈ [0,1] and the
-     spent playoff mass per as-of week == the league's playoff-slot count (a real property, not "file exists").
+     spent playoff mass per as-of week == the league's playoff-slot count (a real property, not "file
+     exists") — now exercised on REAL division brackets (3d), the first true test of division-aware seeding.
   3. NO ROSTER-MASS REGRESSION — production_vor's players ⊆ 3a's join_season skill players (the spine invents
      no roster mass and the remainder story doesn't grow downstream); coverage reported.
-  4. DETERMINISTIC — recomputing a sample league is value-identical to the persisted spine (incl. the
-     league-stable bracket_sim seed). Compared order-insensitively (`_frame_eq`): the parquet WRITER is
-     physically non-deterministic (bytes flake run-to-run for a byte-identical in-memory frame), so
-     determinism is a property of the recomputed VALUES, not the on-disk byte stream.
+  4. DETERMINISTIC — recomputing a sample league (from BOTH strata, incl. a division league) is
+     value-identical to the persisted spine (incl. the league-stable bracket_sim seed). Compared
+     order-insensitively (`_frame_eq`): the parquet WRITER is physically non-deterministic (bytes flake
+     run-to-run for a byte-identical in-memory frame), so determinism is a property of the recomputed
+     VALUES, not the on-disk byte stream.
   5. TWO-WAY SLICEABLE — is_two_way is present + boolean on every production_vor and filterable.
+  6. NEVER_TUNE INTACT — every generalization manifest row stays `never_tune` (never leaks into the tunable
+     set) and no matched row is mis-flagged never_tune. The generalization stratum CERTIFIES the any-league
+     code on real shapes; it must never feed the Tuner.
 
 Prove-it-bites (a gate that can't fail is not a gate): a missing read is detected (check 1); a playoff mass ≠
-slot-count fails the check-2 predicate; a wall-clock seed would fail check-4's purity assertion.
+slot-count fails the check-2 predicate; a wall-clock seed would fail check-4's purity assertion; a
+never_tune=False generalization row fails the check-6 predicate.
 
-Run: python3 -m application.data.corpus.check_spine [--sample-determinism N]
+Run: python3 -m application.data.corpus.check_spine [--strata matched generalization] [--sample-determinism N]
 """
 import argparse
 import contextlib
@@ -121,10 +129,15 @@ def _check_determinism(sample_rows, results):
 
 # --- the gate -----------------------------------------------------------------------------------------
 
-def check(sample_determinism: int = 2) -> bool:
+def check(strata=("matched", "generalization"), sample_determinism: int = 2) -> bool:
     results: list = []
-    tgts = compute_spine.targets()
-    print(f"=== corpus measurement-spine gate: {len(tgts)} matched leagues ===")
+    strata = tuple(strata)
+    tgts = compute_spine.targets(strata)
+    strat_counts = defaultdict(int)
+    for r in tgts:
+        strat_counts[r["stratum"]] += 1
+    print(f"=== corpus measurement-spine gate: {len(tgts)} leagues "
+          f"({dict(sorted(strat_counts.items()))}) ===")
 
     present = flagged = 0
     missing = []                       # (lid, season, first_missing) — missing WITHOUT a degenerate reason
@@ -195,8 +208,8 @@ def check(sample_determinism: int = 2) -> bool:
             two_way_total += int(pv.filter(pl.col("is_two_way"))["sleeper_player_id"].n_unique())
 
     # 1 — spine present (degenerate leagues tolerated + named)
-    print("  1 — spine present (all 5 reads for every non-degenerate matched league):")
-    _ok(f"{present} present + {flagged} flagged-degenerate == {len(tgts)} matched", not missing, results,
+    print("  1 — spine present (all 5 reads for every non-degenerate league in each checked stratum):")
+    _ok(f"{present} present + {flagged} flagged-degenerate == {len(tgts)} leagues", not missing, results,
         "" if not missing else f"{len(missing)} missing w/o reason, e.g. {missing[:3]}")
     for lid, season, reason in flagged_leagues:
         print(f"      ⚠ flagged (degenerate raw, tolerated): {lid} {season} — {reason}")
@@ -218,14 +231,35 @@ def check(sample_determinism: int = 2) -> bool:
     _ok(f"per-league coverage ≥ {_MIN_PV_COVERAGE:.0%}", not low_cov, results,
         f"aggregate pv/join = {cov:.3f}" + (f"; {len(low_cov)} low, e.g. {low_cov[:3]}" if low_cov else ""))
 
-    # 4 — determinism (sample)
-    _check_determinism(tgts[:sample_determinism], results)
+    # 4 — determinism (sample from EACH checked stratum + a division league — the division-aware seed path)
+    det_sample = []
+    for st in strata:
+        det_sample += compute_spine.targets((st,))[:sample_determinism]
+    if "generalization" in strata:
+        div_gen = next((r for r in compute_spine.targets(("generalization",)) if r.get("has_divisions")), None)
+        if div_gen and div_gen not in det_sample:
+            det_sample.append(div_gen)
+    _check_determinism(det_sample, results)
 
     # 5 — two-way
     print("  5 — two-way sliceable on production_vor:")
     _ok("is_two_way present + boolean on every production_vor", not two_way_missing, results,
         "" if not two_way_missing else f"{len(two_way_missing)} missing, e.g. {two_way_missing[:3]}")
     print(f"      two-way rows across the corpus: {two_way_total}")
+
+    # 6 — never_tune intact (the generalization stratum CERTIFIES the any-league code; it must never
+    # feed the Tuner — a generalization row that lost never_tune would leak a never_tune shape into tuning).
+    man = data_layer.read_corpus_manifest()
+    gen_leaked = [str(r["league_id"]) for r in man.iter_rows(named=True)
+                  if r["stratum"] == "generalization" and not r["never_tune"]]
+    matched_mistagged = [str(r["league_id"]) for r in man.iter_rows(named=True)
+                         if r["stratum"] == "matched" and r["never_tune"]]
+    n_gen = sum(1 for r in man.iter_rows(named=True) if r["stratum"] == "generalization")
+    print("  6 — never_tune intact (generalization never enters the tuner):")
+    _ok(f"all {n_gen} generalization rows never_tune (none leaked into the tunable set)", not gen_leaked,
+        results, "" if not gen_leaked else f"{len(gen_leaked)} leaked, e.g. {gen_leaked[:3]}")
+    _ok("no matched row mis-flagged never_tune", not matched_mistagged, results,
+        "" if not matched_mistagged else f"{len(matched_mistagged)} mistagged, e.g. {matched_mistagged[:3]}")
 
     # prove-it-bites (logic-level; no store mutation)
     print("  PROVE-BITES:")
@@ -238,21 +272,26 @@ def check(sample_determinism: int = 2) -> bool:
     _ok("check-4 value-equality bites (differing values ≠; row permutation ==)",
         (not _frame_eq(pl.DataFrame({"a": [1, 2]}), pl.DataFrame({"a": [1, 3]})))
         and _frame_eq(pl.DataFrame({"a": [2, 1]}), pl.DataFrame({"a": [1, 2]})), results)
+    _ok("check-6 bites (never_tune=False caught, never_tune=True passes)",
+        (not {"never_tune": False}["never_tune"]) and not (not {"never_tune": True}["never_tune"]), results)
 
     ok = all(results) and bool(results)
     print()
-    print(f"  VERDICT: {'PASS' if ok else 'FAIL'} — the matched measurement spine is complete, cohort-sound, "
-          f"probability-valid, roster-mass-faithful, deterministic, and two-way-sliceable "
-          f"({present} present, {flagged} flagged-degenerate).")
+    print(f"  VERDICT: {'PASS' if ok else 'FAIL'} — the corpus measurement spine ({dict(sorted(strat_counts.items()))}) "
+          f"is complete, cohort-sound, probability-valid, roster-mass-faithful, deterministic, "
+          f"two-way-sliceable, and never_tune-intact ({present} present, {flagged} flagged-degenerate).")
     return ok
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Gate for the corpus measurement spine (Session 3b).")
+    ap = argparse.ArgumentParser(description="Gate for the corpus measurement spine (Session 3b/3d).")
+    ap.add_argument("--strata", nargs="+", default=["matched", "generalization"],
+                    choices=["matched", "generalization", "mine"],
+                    help="strata to gate (default: both — the complete corpus spine)")
     ap.add_argument("--sample-determinism", type=int, default=2,
-                    help="how many leagues to recompute for the determinism proof (default 2)")
+                    help="how many leagues per stratum to recompute for the determinism proof (default 2)")
     a = ap.parse_args()
-    sys.exit(0 if check(a.sample_determinism) else 1)
+    sys.exit(0 if check(tuple(a.strata), a.sample_determinism) else 1)
 
 
 if __name__ == "__main__":
