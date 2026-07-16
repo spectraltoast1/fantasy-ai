@@ -1578,6 +1578,50 @@ def outcomes_exists(season: int) -> bool:
     return _outcomes_path(season).exists()
 
 
+# --- Resolutions ledger (Improvement-Loop L2, Session 4b) ---
+# The `predictions ⋈ outcomes` join: one row per RESOLVED claim, carrying the GRADING PRIMITIVES
+# (`error`/`abs_error`, `in_band`, `pit`, `brier`, `rank_error`, `direction_hit`) plus the realized
+# `truth` and the claim's full provenance (so a resolution is always traceable to the exact claim + code
+# + constants that made it). The primitives are the raw material the scorer (Session 5) judges —
+# NOT verdicts: a per-row `pit=0.97` is a primitive, and this entity emits NO aggregate score, per-read
+# pass/fail, `claim_correct`, or `suppress` flag (the scorer is the first thing that judges). PIT is the
+# unifying calibration primitive, defined only where the claim states a distribution (interval +
+# probability); point/ordinal/direction get their native primitive and `pit=null`. Unresolved claims are
+# kept (with a `unresolved_reason`), never dropped, never a fake zero. APPEND-ONLY + IMMUTABLE by
+# `resolution_id` (= the claim's `prediction_id`, a 1:1 join). See corpus/compute_resolutions.py (writer),
+# corpus/check_resolutions.py (gate).
+def _resolutions_path(season: int) -> Path:
+    return _SNAPSHOT_DIR / "derived" / "ledger" / f"resolutions_{season}.parquet"
+
+
+def write_resolutions(df: pl.DataFrame, season: int) -> None:
+    """Append only genuinely-new resolution rows to the season's ledger (idempotent by `resolution_id`).
+    Immutable-append, mirroring `write_predictions`/`write_outcomes`: de-duplicate on `resolution_id`,
+    drop any id already on disk, diagonal-concat so the file only GROWS. Never overwrites an existing row."""
+    path = _resolutions_path(season)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df = df.unique(subset="resolution_id", keep="first")
+    if path.exists():
+        existing = pl.read_parquet(path)
+        df = df.filter(~pl.col("resolution_id").is_in(existing["resolution_id"]))
+        df = pl.concat([existing, df], how="diagonal")
+    df.write_parquet(path)
+
+
+def read_resolutions(season: int, *, league_id=None, read: str | None = None) -> pl.DataFrame:
+    """Read a season's resolutions, optionally filtered to one league and/or one read."""
+    df = pl.read_parquet(_resolutions_path(season))
+    if league_id is not None:
+        df = df.filter(pl.col("league_id") == str(league_id))
+    if read is not None:
+        df = df.filter(pl.col("read") == read)
+    return df
+
+
+def resolutions_exists(season: int) -> bool:
+    return _resolutions_path(season).exists()
+
+
 # --- League registry (Improvement-Loop L0 keying) ---
 # The single source of truth for "which leagues exist and how each is keyed", replacing the implicit
 # config.SLEEPER_LEAGUE_ID single-league assumption (audit S1.3 — league #2 silently overwriting #1).
