@@ -1529,6 +1529,55 @@ def predictions_exists(season: int) -> bool:
     return _predictions_path(season).exists()
 
 
+# --- Outcomes ledger (Improvement-Loop L2, Session 4b) ---
+# The second L2 entity: one row per REALIZED FACT that a claim resolves against — "what actually
+# happened?". Derived from the FROZEN persisted sources (`join_season` for player/roster points,
+# `matchups` + the division-aware seeding for standings/made-playoffs, `league_settings` for the
+# playoff config); never a re-fetch. `league_id` is nullable BY SCOPE: null for scoring-scoped player
+# facts (weekly points are identical across leagues of a scoring_key — stored ONCE), set for
+# league-scoped roster facts (wins / standing / made-playoffs — `roster_id` is only unique within a
+# league). Outcomes are realized truth, not model output, so there is no `code_version` / `constants_hash`;
+# `data_source` marks the derivation and `recorded_at` is left null (a wall-clock stamp would break the
+# twice-derive value-identity the gate proves). APPEND-ONLY + IMMUTABLE by `outcome_id`. Law 1 holds:
+# outcomes are facts, not grades — the grading primitives live in `resolutions` (compute_resolutions.py),
+# and no verdict exists in either. See corpus/backfill_outcomes.py (writer), corpus/check_resolutions.py (gate).
+def _outcomes_path(season: int) -> Path:
+    return _SNAPSHOT_DIR / "derived" / "ledger" / f"outcomes_{season}.parquet"
+
+
+def write_outcomes(df: pl.DataFrame, season: int) -> None:
+    """Append only genuinely-new realized-fact rows to the season's outcomes ledger (idempotent by
+    `outcome_id`). Immutable-append, mirroring `write_predictions`: de-duplicate the batch on
+    `outcome_id`, drop any id already on disk, diagonal-concat so the file only GROWS — a re-derive from
+    the same frozen sources appends nothing. Never overwrites an existing row."""
+    path = _outcomes_path(season)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df = df.unique(subset="outcome_id", keep="first")
+    if path.exists():
+        existing = pl.read_parquet(path)
+        df = df.filter(~pl.col("outcome_id").is_in(existing["outcome_id"]))
+        df = pl.concat([existing, df], how="diagonal")
+    df.write_parquet(path)
+
+
+def read_outcomes(season: int, *, league_id=None, outcome_type: str | None = None) -> pl.DataFrame:
+    """Read a season's realized facts, optionally filtered to one league and/or one outcome_type.
+
+    `league_id` filters to that league's roster facts (scoring-scoped player facts, whose `league_id`
+    is null, are excluded by the equality filter — use `outcome_type="player_weekly_pts"` to reach
+    them)."""
+    df = pl.read_parquet(_outcomes_path(season))
+    if league_id is not None:
+        df = df.filter(pl.col("league_id") == str(league_id))
+    if outcome_type is not None:
+        df = df.filter(pl.col("outcome_type") == outcome_type)
+    return df
+
+
+def outcomes_exists(season: int) -> bool:
+    return _outcomes_path(season).exists()
+
+
 # --- League registry (Improvement-Loop L0 keying) ---
 # The single source of truth for "which leagues exist and how each is keyed", replacing the implicit
 # config.SLEEPER_LEAGUE_ID single-league assumption (audit S1.3 — league #2 silently overwriting #1).
