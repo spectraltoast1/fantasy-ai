@@ -123,14 +123,16 @@ def _playoff_config(season: int, *, league_id=None) -> tuple:
 
 def _division_map(season: int, *, league_id=None):
     """roster_id → division label, when the league runs divisions AND the per-roster assignment is
-    persisted. Today the teams entity carries no `division` column (Sleeper keeps that assignment on
-    the rosters endpoint; persisting it is a documented follow-up), so this returns None and the
-    seeding falls back to the flat (wins, points-for) table — i.e. the standard league is unchanged.
-    When a division league is onboarded and its map is persisted, division-aware seeding activates
-    with no further code change. Returns None unless ≥ 2 divisions are actually present.
+    persisted. The `teams` entity carries a `division` column (`fetch_teams` persists it from the rosters
+    endpoint; `corpus/backfill_division.py` backfilled it onto already-harvested leagues) — when it's
+    absent or fewer than 2 divisions are present, this returns None and the seeding falls back to the flat
+    (wins, points-for) table, so a no-division league is unchanged. Returns None unless ≥ 2 divisions are
+    actually present.
 
-    NB — division seeding is **synthetic-gated only** (no real division league in the answer key); see
-    backtest_bracket_sim.py. Revisit against real division standings when such a league is added."""
+    VALIDATED ON REAL DATA (Sessions 3d + 3e): division-aware seeding is exercised on the 25 real corpus
+    division leagues (14 generalization + 11 matched), gated by `corpus/check_spine.py` (mass == slot count
+    on real brackets) and unit-checked in `backtest_bracket_sim.py` (a losing-record division winner seeded
+    ahead of a higher-record wildcard). No longer synthetic-gated."""
     teams = data_layer.read_sleeper_teams(season, league_id=league_id)
     if "division" not in teams.columns:
         return None

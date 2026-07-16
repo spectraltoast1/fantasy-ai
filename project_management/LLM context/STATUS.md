@@ -1,6 +1,28 @@
 # STATUS
 
-**Last updated:** 2026-07-15 (**BACKEND — GENERALIZATION ROBUSTNESS PASS (Improvement-Loop Session 3d, 4
+**Last updated:** 2026-07-16 (**BACKEND — MATCHED DIVISION SEEDING ACTIVATED (Improvement-Loop Session 3e, 2
+commits): the 11 matched division leagues now seed division-aware — the last 3d latent closed, bounded to
+their `bracket_odds`.** 3d activated division seeding on the 14 generalization division leagues but
+deliberately LEFT the 11 matched division leagues flat-seeded to protect its byte-identity proof of the frozen
+tuning spine. This closes that named latent — and **changes numbers BY DESIGN** (the 1.7 discipline: bounded +
+proven, not "nothing moved"). **C1 — activate.** `backfill_division` gained `--stratum
+{generalization,matched,mine}` (default generalization — 3d byte-preserved), mirroring
+`backfill_expected_points`; `--stratum matched` targets exactly the 11 (`matched ∧ has_divisions`). Sleeper
+still serves all 11 (2–3 divisions each; 11/11 added, 0 flagged no-divisions); `sleeper.backfill_division`
+additively left-joined `division` onto the existing teams (names byte-identical) → recomputed **only
+`bracket_odds`** (the other 4 reads are division-independent). mass==slots holds on every real matched division
+bracket. **C2 — gate + docs. Bounded + proven:** (a) baseline SHA diff over 1110 files (223 leagues × 5 reads)
+— **EXACTLY 11 changed, all `bracket_odds`, all matched, all the target 11**; the other 210 matched
+bracket_odds + all `production_vor`/`true_rank`/`positional_depth`/`player_signal` + all is_mine
+**BYTE-IDENTICAL**; (b) **no input drift** — a flat recompute (division forced None) reproduces the persisted
+3b `bracket_odds` value-identical → division seeding is the SOLE delta; (c) division-aware odds moved 9–11
+rosters/league (maxΔ 0.005–0.012), deterministic (recompute==persisted, twice-run identical, league-stable
+seed). `check_spine` green both strata (the 11 now pass mass==slots + probs∈[0,1] with real division maps);
+siblings unregressed (`check_harvest`, `check_expected_points`, matched-only gate). Retired the
+"synthetic-gated only / no real division answer key" caveat in `_division_map` + `backtest_bracket_sim` +
+`TECHNICAL_ARCHITECTURE` — division seeding is now validated on **all 25 real corpus division leagues** (14
+gen + 11 matched). **Seam held — `queries.js`/views untouched. Next: the L2 ledger.**) — Prior: **BACKEND —
+GENERALIZATION ROBUSTNESS PASS (Improvement-Loop Session 3d, 4
 commits): the 48 `never_tune` generalization leagues computed through the 5-read measurement spine, and the
 any-league shape paths certified on real superflex / division / custom shapes.** 3a/3b/3c built + lit the
 matched 221 spine; the 48 generalization leagues (**21 superflex · 14 division · 8 custom `cust-` keys · sizes
