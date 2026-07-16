@@ -193,10 +193,13 @@ def run(season: int, *, league_id=None, scoring_key=None) -> bool:
     print(f"  determinism: two runs frame-equal = {det_ok}  {'PASS' if det_ok else 'FAIL'}")
     print(f"  invariant:   Σ playoff_odds ≈ {playoff_teams} every as-of week = {inv_ok}  {'PASS' if inv_ok else 'FAIL'}")
 
-    # --- Synthetic division-seeding correctness (no real division league in the answer key) ---
-    # 10 teams, 2 divisions; div-1's winner (idx 5, 5 wins) has a worse record than several div-0
-    # non-winners. Division-aware seeding must still seat the division winner in the top slots
-    # (Sleeper default), so it makes the bracket where flat seeding drops it for a higher-record team.
+    # --- Division-seeding correctness (fast unit check; validated on REAL brackets by check_spine) ---
+    # This backtest grades the is_mine 2025 answer-key league, which runs no divisions — so the seeding
+    # LOGIC is unit-checked here on a constructed table. Real division brackets now exist in the corpus
+    # (25 leagues: 14 generalization + 11 matched, Sessions 3d + 3e); `corpus/check_spine.py` gates
+    # mass == slot count on them. 10 teams, 2 divisions; div-1's winner (idx 5, 5 wins) has a worse record
+    # than several div-0 non-winners. Division-aware seeding must still seat the division winner in the top
+    # slots (Sleeper default), so it makes the bracket where flat seeding drops it for a higher-record team.
     wins = np.array([[10., 9., 8., 7., 6., 5., 1., 1., 1., 1.]])
     pts = np.array([[500., 490., 480., 470., 460., 450., 400., 400., 400., 400.]])
     divs = [0, 0, 0, 0, 0, 1, 1, 1, 1, 1]
