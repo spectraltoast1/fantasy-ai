@@ -40,10 +40,9 @@ import polars as pl
 
 from application.data import data_layer
 from application.data.fetchers import _http, sleeper
-from application.data.transforms import derive_lineup_slots, join_nfl_sleeper_weekly
+from application.data.transforms import compute_bracket_sim, derive_lineup_slots, join_nfl_sleeper_weekly
 
 HARVEST_STRATA = ("matched", "generalization", "mine")
-_DEFAULT_PLAYOFF_START = 15   # fallback reg-season end+1 when a league carries no playoff_week_start
 
 # --- call counter (wraps sleeper._get_json so every Sleeper call in the pull is counted) --------------
 _CALLS = 0
@@ -110,12 +109,14 @@ def _pull_raw(lid: str, season: int) -> None:
 
 def _reg_end(lid: str, season: int) -> int:
     """Regular-season end week = playoff_week_start - 1 (from the pulled league config), clamped to [1, 18].
-    Falls back to _DEFAULT_PLAYOFF_START-1 when the league carries no playoff_week_start."""
+    A missing OR garbled (< 2) playoff_week_start falls back to the shared sane default
+    (`compute_bracket_sim._sane_playoff_week_start`, the single source of truth so harvest and the sim can't
+    drift) — so a broken config harvests a real season instead of being clamped to a week-1-only stub."""
     try:
         pw = data_layer.read_playoff_settings(season, league_id=lid).get("playoff_week_start")
-        start = int(pw) if pw is not None else _DEFAULT_PLAYOFF_START
-    except Exception:   # noqa: BLE001 — missing/garbled config → conservative default
-        start = _DEFAULT_PLAYOFF_START
+    except Exception:   # noqa: BLE001 — missing/garbled config → the sane default handles None
+        pw = None
+    start = compute_bracket_sim._sane_playoff_week_start(pw)
     return max(1, min(start - 1, 18))
 
 
