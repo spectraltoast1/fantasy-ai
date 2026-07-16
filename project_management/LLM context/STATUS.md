@@ -1226,3 +1226,13 @@ age/injury/scheme).
 > build the multi-league/season selectors on top (switch-league becomes an API param, not a file swap).
 > Backend content compute for ~10 demo leagues (new `compute_demo_slices.py`) + a `schedule`
 > league-scoping fix are store-agnostic prerequisites. ~8–12 sessions; see the doc for the phase order.
+
+> **Scoring/format support — scoped (2026-07-16, not started).** Three code-grounded assessment docs in
+> `scope docs/future work/`: `STANDARD_SCORING_SUPPORT.md`, `CUSTOM_SCORING_SUPPORT.md`,
+> `DYNASTY_SUPPORT.md`. **Shared thesis:** the 5 tuned constants (`BAND_Z`/`SKEW_GAIN`/`BULL_Z`/`ANCHOR_W`/
+> `OPP_HALF_LIFE_WK`) are fit only on the matched stratum → a scoring change (std/custom) is
+> **certify-not-tune**; the format change (dynasty) needs its own value-layer substrate + fitting.
+> **Verdicts:** standard = engine-complete, gap is data + one substrate build (pure-std=0, no `std/`
+> substrate); custom = engine-partial, **45% of real custom leagues unscoreable** (first-down +
+> threshold bonuses), lever is rule coverage not tuning; dynasty = value-model change (ADP anchor/market/
+> multi-year `ros_value`), biggest lift.
