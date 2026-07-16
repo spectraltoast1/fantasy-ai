@@ -148,9 +148,18 @@ column byte-identical); `corpus/backfill_expected_points.py` appended them onto 
 matched 2020–24 leagues — so **§1 Quality (`quality_rate`/`luck`/`point_correlation`) now spans the whole
 matched corpus**, the rest of the 3b spine byte-identical. `compute_player_signal` needed NO edit (already
 `has_exp`-aware). Gated by `corpus/check_expected_points.py` (green, teeth). See `engine
-improvement/SESSION_3C_EXPECTED_POINTS_BACKFILL.md`. **Next: Session 3d** (the 48 `never_tune` generalization
-leagues through the same spine — the synthetic-gated shape paths meet real superflex/division/custom shapes;
-budget it for bugs; inherits the `*_exp` fix for free) → then L2 ledger backfill.
+improvement/SESSION_3C_EXPECTED_POINTS_BACKFILL.md`. **Session 3d (generalization robustness) — DONE:** the
+48 `never_tune` generalization leagues computed through the same 5-read spine (`*_exp` backfilled onto their
+joins → §1 Quality lit for free). The catalog found the shape paths **crash-clean but with silent gaps**:
+(1) **division seeding** — 14/14 division leagues silently flat-seeded (3a's teams fetcher dropped
+`settings.division`); fixed by persisting `division` on `fetch_teams` + a bounded re-harvest
+(`corpus/backfill_division.py`) activating division-aware seeding on the 14 gen leagues (matched's 11 stay
+flat — frozen spine). (2) **week-1-only join** — one 2023 gen league (garbled `playoff_week_start=0`)
+re-joined from persisted raw via the inherited `reg_end` floor. **Superflex pools / lineup slot codes /
+custom scoring all validated clean** on real shapes (no code fix). `corpus/check_spine.py` extended to gate
+**both strata** (269 leagues) + `never_tune`-intact, green with teeth; matched + is_mine spine byte-identical
+(0/666). See `engine improvement/SESSION_3D_GENERALIZATION_ROBUSTNESS.md`. **The corpus measurement spine is
+now complete across both strata → next: the L2 ledger backfill.**
 
 ## Built — Frontend
 

@@ -1,6 +1,46 @@
 # STATUS
 
-**Last updated:** 2026-07-15 (**BACKEND — CORPUS CLEANUP (3 commits): determinism gates de-flaked, dead
+**Last updated:** 2026-07-15 (**BACKEND — GENERALIZATION ROBUSTNESS PASS (Improvement-Loop Session 3d, 4
+commits): the 48 `never_tune` generalization leagues computed through the 5-read measurement spine, and the
+any-league shape paths certified on real superflex / division / custom shapes.** 3a/3b/3c built + lit the
+matched 221 spine; the 48 generalization leagues (**21 superflex · 14 division · 8 custom `cust-` keys · sizes
+4–18**) still had NO spine (`production_vor` 0/48) — the shapes the any-league code had only ever seen
+synthetically. **C1 — §1 Quality + catalog.** Extended `backfill_expected_points` with `--stratum` (default
+matched preserved byte-for-byte) and appended the 14 `*_exp` onto the 40 gen 2020–24 joins (gen 2025 already
+carries them; every pre-existing column byte-identical) → §1 Quality lit for free; ran `compute_spine --strata
+generalization` → **48/48 computed, 0 crashes, 0 flagged**. A clean run ≠ a clean bill (std instr 1) —
+interrogated the OUTPUTS by mechanism. **Failure inventory (silent gaps, not stack traces):** (1) **DIVISION
+SEEDING** — 14/14 division leagues silently FLAT-seeded (`_division_map=None`; 3a's `teams` fetcher dropped
+`settings.division`) → C2; (2) **WEEK-1-ONLY JOIN** — `1004091381628588032` 2023 (garbled
+`playoff_week_start=0` → reg_end=−1 at harvest → week-1-only join; the SAME class the cleanup fixed for the
+matched degenerate league — STATUS predicted "one 2023 generalization league inherits the fix for free at 3d",
+this is it) — **fixed here** by re-joining weeks 1–14 from **persisted raw** (`harvest._build_join`, no
+network) + is_two_way + `*_exp` + recompute (join 1→14 weeks, pv 156→2724 rows); (3) **SUPERFLEX POOLS — no
+bug** (15 real-`SUPER_FLEX` leagues merge QB into the SF pool; 6 multi-dedicated-QB (2QB/3QB) leagues keep QB
+its own pool — `position_pools` keys off actual slot eligibility, not the coarse manifest label); (4) **LINEUP
+SLOT CODES — no bug** (every code recognized, 0 silently dropped); (5) **CUSTOM SCORING — no bug** (all 8
+`cust-` keys score non-degenerate; the selection-time `scoreable` gate holds). **C2 — division re-harvest (the
+ONE sanctioned fetch of 3d — a static historical fact).** `fetch_teams` now persists `division` (forward fix;
+retires the "follow-up when a real division league lands" caveat), and `backfill_division` additively
+left-joins the freshly-fetched roster→division map onto the EXISTING teams parquet (name columns
+byte-identical) for the 14 gen division leagues (2–4 divisions each) → division-aware seeding activated with
+**no `_seed_table` edit** (the branch already existed, fed only by the data). **SCOPED TO GENERALIZATION:** the
+**11 matched division leagues stay flat** — activating them would move the frozen tuning spine (report,
+don't tune, std instr 2); `_division_map` returns None for their untouched teams. Proven: **mass == slot-count
+on every real division bracket**; `_seed_table` lifts a losing-record division winner past a higher-record
+wildcard (unit-proven + materially moves the 4-division league — 12/12 rosters, max Δ 0.144); division
+recompute deterministic (recompute==persisted, twice-run identical, league-stable seed). **C3 — gate + prove
+matched untouched.** `check_spine` extended with `--strata` (default matched+generalization): checks 1–5 over
+both strata + **NEW check 6 `never_tune` intact** (every gen row never_tune, none leaked into the tunable set;
+prove-bite fires); determinism sample spans both strata incl. a division league. **Green over 269 leagues,
+exit 0**, all prove-bites fire; backward compatible (`--strata matched` reproduces the 3b/3c matched gate);
+siblings unregressed (`check_harvest` 271 — incl. the re-joined league + division-column teams, twice-join
+value-identical; `check_expected_points`). **Matched untouched (acceptance gate 3): all 666 matched + is_mine
+spine files (`production_vor`/`bracket_odds`/`player_signal`) BYTE-IDENTICAL to the pre-3d baseline (0/666
+changed)** — the shared-code + division-data changes moved nothing in the frozen tuning spine; the ONLY new
+numbers are the 48-league generalization spine. **Seam held — `queries.js`/views untouched.** **The corpus
+measurement spine is now COMPLETE across both strata (269 leagues: 221 matched + 48 generalization) — next:
+scope the L2 ledger.**) — Prior: **BACKEND — CORPUS CLEANUP (3 commits): determinism gates de-flaked, dead
 `xtd` retired, the degenerate league completed → matched spine 221/221.** Three loose ends from the
 3a/3b/3c work, each touching shared/frozen ground with its own equivalence proof (no `queries.js`/view
 edits). **C1 — de-flaked the determinism gates.** `check_spine` + `check_harvest` asserted determinism by
