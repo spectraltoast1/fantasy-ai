@@ -1,6 +1,60 @@
 # STATUS
 
-**Last updated:** 2026-07-16 (**BACKEND — L2 LEDGER COMPLETE: `outcomes` + `resolutions` join the claims to
+**Last updated:** 2026-07-16 (**BACKEND — L3 SCORER COMPLETE: the FIRST MEASUREMENT the project has ever
+taken (Improvement-Loop Session 5, 3 commits) — `compute_engine_scorecard.py` turns the 2.89M frozen
+`resolutions` primitives into per-read VERDICTS, and it is the first thing in the project allowed to JUDGE —
+but only DISTRIBUTIONS, never a single claim (Law 1 structural: the grain is a slice, never a
+`prediction_id`).** It scores four metric families per `(read × slice)` into `engine_scorecard_{season}`
+(3,518 aggregate slice-verdicts over the 6 seasons): **skill** = `1 − metric_engine/metric_naive` vs a
+DECLARED naive baseline; **calibration** = PIT-uniformity KS / coverage / Brier; **confidence-honesty (law
+2, the headline)** = is realized error monotone in the read's OWN stated confidence; **discrimination** =
+Spearman(claim, truth). **It judges but does NOT tune (no constant changed — L4) or promote (no suppression
+— L6): measure and report.** **C1 — baseline registry + scorecard core.** New `corpus/scorecard_registry.py`
+(versioned, gated declared naive-baseline + confidence-signal registry, `check_registry()` cross-checks the
+9 families vs the 4a claim map and bites); `corpus/compute_engine_scorecard.py` reads frozen `resolutions`
+(+ re-joins `predictions` for the claim `value`/`confidence` and derives every naive from frozen `outcomes`
+— **grounding correction: `resolutions` carries NEITHER `confidence` NOR any naive baseline, contra the
+brief**); slices `overall · week · league · position · cohort · scoring_key` (model quality, on `inputs_ok ∧
+resolved` ONLY) + `inputs_ok · resolution_status · confidence_tier` (L1 quarantine + reliability, kept
+SEPARATE — never blended into a model number); new `data_layer.write/read_engine_scorecard` (append-by-id,
+provenance = scorer `code_version` + the ledger's `constants_hash`, so a re-score is a distinguishable
+population). **Baseline reality (Will's ruling): only 2 of 6 reads had a baseline to PROMOTE
+(`player_signal`→`naive_ppg` [equal-weight recent ppg, NOT the EWMA the brief named], playoff-odds→0.25
+coin-flip Brier); the rest are DECLARED canonical (recent-form-forward, pool-mean, closed-form
+random-permutation `(n²−1)/(3n)` [no RNG], .500-winrate), tagged promoted-vs-declared; the interval band is
+`skill_kind=na` — calibration is its lens, NOT center-MAE (supersedes the brief's band baseline).** cohort
+keyed off the AUTHORITATIVE corpus manifest `stratum` (`leagues.parquet` pilot_cohort is an incomplete
+projection, missing 34 leagues). **C2 — confidence-honesty (the law-2 headline) + the markdown Trust
+Report.** For the 5 confidence-bearing families the raw signal → a monotone `conf_strength` (extremeness
+`|x−0.5|` for `spectrum_pos`/`playoff_odds`; `−x` for the inverted `ros_cv`/`regression_risk` — all DECLARED
+in the registry, no drift) → `conf_monotonicity = Spearman(conf_strength, realized error)` [≤0 honest] +
+per-tier reliability rows; the 4 without carry `measurable_law2=false` (named law-2 gaps, NEVER fabricated).
+**Anti-sort prove-bite verified (anti-sorting confidence flips every honest read to dishonest).**
+`corpus/trust_report.py` → `TRUST_REPORT.md` (force-tracked): per-read traffic lights + the "what we'd
+honestly tell a user" line (front-end copy for later, not wired) + the pre-registered check + the
+season/cohort OOS slices. **C3 — `corpus/check_scorecard.py` GREEN WITH TEETH (6 checks + 7 prove-bites all
+fire):** coverage (9 overall verdicts · base slices · the 5 confidence-tier triples · quarantine slices) ·
+metric ranges · confidence-honesty measured-for-5/flagged-for-4 + the anti-sort bite · baseline-registry
+cross-check bites · determinism (recompute with the PERSISTED `code_version`, HEAD-independent,
+value-identical) · **Law 1 structural (no `prediction_id`/single-claim column; the base model slices are on
+the clean population, `n_claims==n_resolved`; the quarantine slices exist separately).** Deterministic
+(twice/thrice-score value-identical; found + fixed a nested-`group_by` float-flake in `conf_top_minus_bottom`
+— the `_standings_as_of` lesson, now a single `group_by`). **FINDINGS (surfaced, NOT tuned — the whole point
+of report-don't-tune):** (1) **projection optimism is real + stable** — `production_vor` LOSES to
+carry-recent-form-forward every season (skill −0.16…−0.39) while ranking well (Spearman ~0.88), and the band
+UNDER-covers (~0.55 vs 0.80, PIT KS ~0.47) — two independent reads, one story; (2) **the measurement reads
+HOLD out-of-sample** (§1 signal skill ~0, §5 true-rank 0.30–0.39, §6 depth weakly +; playoff Brier 0.11–0.14
+< 0.25) — the pre-registered predictions stand; (3) **confidence-honesty is MIXED** — playoff-odds (ρ=−0.89)
++ true-rank + player_signal honest, but the **band's `ros_cv` is INVERTED** (ρ=+0.58 — its narrowest "most
+confident" bands miss by the MOST) and positional_depth's `spectrum_pos` doesn't sort; 4 reads state no
+confidence at all (law-2 unmeasurable). **The Tuner (L4) acts on these; the scorer only flags.** **Seam held
+— `queries.js`/views/reads/substrate/ledger untouched; the scorecard is a new derived entity the front end
+doesn't read.** **NEXT — Session 6: the Tuner (L4)** — the constant registry (`transforms/_constants.py`,
+promote the 4a snapshot), the `--sweep` harness generalized, and the split discipline (TRAIN 2020–23 · DEV
+2024 · TEST 2025, season-wise + league-wise holdout of the generalization cohort); auto-tune, human
+promotes. **Session 5b (the self-contained HTML Trust Report dashboard) is a named fast-follow** — the
+markdown Trust Report was the must-have (Will's ruling: HTML is its own session; there is NO existing
+standalone-HTML generator in the repo to reuse, only the frontend DuckDB-WASM loader pattern). — Prior: **BACKEND — L2 LEDGER COMPLETE: `outcomes` + `resolutions` join the claims to
 realized truth and attach the grading PRIMITIVES (Improvement-Loop Session 4b, 3 commits) — the ledger now
 runs end-to-end `predictions ⋈ outcomes → resolutions`, grading nothing.** 4a laid the engine's claims flat
 as immutable `served=false` rows; they were ungraded. 4b builds the other half from the FROZEN
