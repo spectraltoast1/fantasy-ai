@@ -36,6 +36,12 @@ COIN_FLIP_BRIER = 0.25
 TIER_QUANTILES = (1.0 / 3.0, 2.0 / 3.0)
 TIER_LABELS = ("low_conf", "mid_conf", "high_conf")
 
+# confidence-honesty verdict threshold (declared — rides the scorer's code_version). Honest = the read's own
+# stated confidence sorts by realized error: a clear NEGATIVE strength↔error rank-correlation (≤ −margin)
+# AND the low-confidence tier missing by more than the high-confidence tier. A near-zero or positive
+# correlation is "laundering noise as caution" — flagged (a finding, not a fix).
+CONF_MONO_MARGIN = 0.03
+
 # --- The naive-baseline registry: (read, claim_type) -> {skill_kind, baseline, provenance, desc} ---
 # skill_kind ∈ {mae, brier, accuracy, na}. `na` = skill is not the honest lens (the band → calibration).
 NAIVE_BASELINES: dict[tuple, dict] = {

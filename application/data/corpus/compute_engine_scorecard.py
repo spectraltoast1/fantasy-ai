@@ -68,15 +68,16 @@ SCORECARD_COLS = [
     "mae_naive", "skill", "skill_kind", "baseline_provenance",
     # family 3b — discrimination (Spearman of claim vs truth — does the ranking carry)
     "discrimination",
-    # family 4 — confidence-honesty (filled in C2; null here)
-    "conf_label", "conf_polarity", "conf_monotonicity", "conf_top_minus_bottom", "conf_honest",
+    # family 4 — confidence-honesty (law 2 — the headline)
+    "conf_label", "conf_polarity", "conf_monotonicity", "conf_top_minus_bottom", "conf_tier_error",
+    "conf_honest",
     # verdicts (Law-1 legal — distribution-level only)
     "measurable_law2", "verdict_note",
 ]
 
 _NUMERIC_METRICS = ["mae", "med_error", "rmse", "in_band_rate", "pit_ks_stat", "pit_edge_mass",
                     "coverage_actual", "brier", "mae_naive", "skill", "conf_monotonicity",
-                    "conf_top_minus_bottom"]
+                    "conf_top_minus_bottom", "conf_tier_error"]
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -252,6 +253,24 @@ def enrich(season: int) -> pl.DataFrame:
           .when(is_point).then((pl.col("naive_pred") - pl.col("truth")).abs())
           .otherwise(None).alias("naive_metric"),
     )
+
+    # --- confidence-honesty inputs (C2): conf_strength + the honesty primitive, built from the registry ---
+    # so the polarity transform + primitive can't drift from the declared spec. The band's abs_error is null
+    # in resolutions (it carries in_band/pit), so its honesty primitive is computed as |center − truth|.
+    strength = pl.lit(None, dtype=pl.Float64)
+    conf_err = pl.lit(None, dtype=pl.Float64)
+    for (rd, ct), spec in reg.CONF_SIGNALS.items():
+        cond = (pl.col("read") == rd) & (pl.col("claim_type") == ct)
+        s = (-pl.col("confidence")) if spec["strength"] == "neg" else (pl.col("confidence") - 0.5).abs()
+        strength = pl.when(cond).then(s).otherwise(strength)
+        if spec["primitive"] == "abs_error":
+            e = (pl.col("value") - pl.col("truth")).abs() if rd == "ros_player_band" else pl.col("abs_error")
+        elif spec["primitive"] == "rank_abs_error":
+            e = pl.col("rank_error").abs()
+        else:                                                       # brier
+            e = pl.col("brier")
+        conf_err = pl.when(cond).then(e).otherwise(conf_err)
+    res = res.with_columns(strength.alias("conf_strength"), conf_err.alias("_conf_err"))
     return res
 
 
@@ -261,6 +280,45 @@ def enrich(season: int) -> pl.DataFrame:
 
 _SKILL_KIND = {k: v["skill_kind"] for k, v in reg.NAIVE_BASELINES.items()}
 _PROVENANCE = {k: v["provenance"] for k, v in reg.NAIVE_BASELINES.items()}
+_CONF_LABEL = {k: v["label"] for k, v in reg.CONF_SIGNALS.items()}
+_CONF_POLARITY = {k: v["strength"] for k, v in reg.CONF_SIGNALS.items()}
+CONF_MONO_MARGIN = reg.CONF_MONO_MARGIN   # re-exported for the report / gate
+
+
+def _confidence_honesty(pop: pl.DataFrame, ctx: dict) -> tuple[dict, pl.DataFrame]:
+    """The law-2 headline. For each of the 5 confidence-bearing families, over its resolved∧inputs_ok pool:
+    (a) the per-read verdict — Spearman(conf_strength, realized error) [≤0 honest] + the low−high tier error
+    gap [>0 honest] → `conf_honest`; (b) the per-tier reliability rows (`slice_dim='confidence_tier'`).
+
+    DETERMINISTIC by construction: tertile edges are quantiles of the frozen pool; monotonicity + the tier
+    means are computed with a SINGLE group_by over the stable frame (never a nested group_by over a
+    reordered sub-frame — that path float-flakes at the ULP, the `_standings_as_of` lesson)."""
+    cf = pop.filter(pl.col("conf_strength").is_not_null() & pl.col("_conf_err").is_not_null())
+    if not cf.height:
+        return {}, pl.DataFrame(schema={c: (pl.Utf8 if c in _STR_COLS else pl.Float64) for c in SCORECARD_COLS})
+    # per-family tertile edges (quantile sorts internally → deterministic), then assign the tier
+    edges = cf.group_by("read", "claim_type").agg(
+        _e1=pl.col("conf_strength").quantile(reg.TIER_QUANTILES[0]),
+        _e2=pl.col("conf_strength").quantile(reg.TIER_QUANTILES[1]))
+    cf = cf.join(edges, on=["read", "claim_type"], how="left").with_columns(
+        pl.when(pl.col("conf_strength") <= pl.col("_e1")).then(pl.lit(reg.TIER_LABELS[0]))
+          .when(pl.col("conf_strength") <= pl.col("_e2")).then(pl.lit(reg.TIER_LABELS[1]))
+          .otherwise(pl.lit(reg.TIER_LABELS[2])).alias("conf_tier"))
+    # monotonicity + tier means via ONE group_by each (deterministic, like _agg)
+    mono = {(r["read"], r["claim_type"]): (None if r["m"] is None or r["m"] != r["m"] else float(r["m"]))
+            for r in cf.group_by("read", "claim_type")
+                       .agg(m=pl.corr("conf_strength", "_conf_err", method="spearman")).to_dicts()}
+    tier_err: dict = {}
+    for r in cf.group_by("read", "claim_type", "conf_tier").agg(err=pl.col("_conf_err").mean()).to_dicts():
+        tier_err.setdefault((r["read"], r["claim_type"]), {})[r["conf_tier"]] = r["err"]
+    verdicts = {}
+    for key, te in tier_err.items():
+        lo, hi, m = te.get(reg.TIER_LABELS[0]), te.get(reg.TIER_LABELS[2]), mono.get(key)
+        tmb = (lo - hi) if (lo is not None and hi is not None) else None
+        honest = (m is not None and m <= -CONF_MONO_MARGIN and tmb is not None and tmb >= 0.0)
+        verdicts[key] = {"conf_top_minus_bottom": tmb, "conf_honest": honest}
+    tier_rows = _finalize(_agg(cf, ["conf_tier"]), "confidence_tier", "conf_tier", ctx)
+    return verdicts, tier_rows
 
 
 def _agg(pop: pl.DataFrame, group_cols: list) -> pl.DataFrame:
@@ -277,6 +335,8 @@ def _agg(pop: pl.DataFrame, group_cols: list) -> pl.DataFrame:
         in_band_rate=pl.col("in_band").mean(),
         brier=pl.col("brier").mean(),
         discrimination=pl.corr("value", "truth", method="spearman"),
+        conf_monotonicity=pl.corr("conf_strength", "_conf_err", method="spearman"),
+        conf_tier_error=pl.col("_conf_err").mean(),
         _em=pl.col("engine_metric").mean(),
         _nm=pl.col("naive_metric").mean(),
         _rise=(pl.col("realized_dir") == "rising").mean(),
@@ -308,6 +368,12 @@ def _finalize(agg: pl.DataFrame, slice_dim: str, slice_val_col, ctx: dict, *,
         lambda s: _SKILL_KIND.get((s["read"], s["claim_type"]), "na"), return_dtype=pl.Utf8)
     prov = pl.struct("read", "claim_type").map_elements(
         lambda s: _PROVENANCE.get((s["read"], s["claim_type"]), "na"), return_dtype=pl.Utf8)
+    lab = pl.struct("read", "claim_type").map_elements(
+        lambda s: _CONF_LABEL.get((s["read"], s["claim_type"])), return_dtype=pl.Utf8)
+    pol = pl.struct("read", "claim_type").map_elements(
+        lambda s: _CONF_POLARITY.get((s["read"], s["claim_type"])), return_dtype=pl.Utf8)
+    ml2 = pl.struct("read", "claim_type").map_elements(
+        lambda s: (s["read"], s["claim_type"]) in reg.CONF_SIGNALS, return_dtype=pl.Boolean)
 
     out = agg.with_columns(
         pl.lit(slice_dim).alias("slice_dim"),
@@ -321,10 +387,10 @@ def _finalize(agg: pl.DataFrame, slice_dim: str, slice_val_col, ctx: dict, *,
         sk.alias("skill_kind"),
         prov.alias("baseline_provenance"),
         base_rate.alias("_base_rate"),
-        # confidence-honesty columns are C2 — null here
-        pl.lit(None, dtype=pl.Utf8).alias("conf_label"),
-        pl.lit(None, dtype=pl.Utf8).alias("conf_polarity"),
-        pl.lit(None, dtype=pl.Float64).alias("conf_monotonicity"),
+        lab.alias("conf_label"),
+        pol.alias("conf_polarity"),
+        ml2.alias("measurable_law2"),
+        # conf_monotonicity + conf_tier_error come from _agg; the per-read tier verdict is a post-step
         pl.lit(None, dtype=pl.Float64).alias("conf_top_minus_bottom"),
         pl.lit(None, dtype=pl.Boolean).alias("conf_honest"),
     )
@@ -339,7 +405,6 @@ def _finalize(agg: pl.DataFrame, slice_dim: str, slice_val_col, ctx: dict, *,
           .when((pl.col("skill_kind") == "accuracy") & (pl.col("_base_rate") < 1.0))
           .then((pl.col("_em") - pl.col("_base_rate")) / (1.0 - pl.col("_base_rate")))
           .otherwise(None).alias("skill"),
-        pl.lit(None, dtype=pl.Boolean).alias("measurable_law2"),
         pl.lit(None, dtype=pl.Utf8).alias("verdict_note"),
     ).with_columns(
         (pl.col("n_claims") - pl.col("n_resolved")).alias("n_unresolved"),
@@ -375,6 +440,73 @@ _STR_COLS = {"scorecard_id", "read", "claim_type", "slice_dim", "slice_val", "ho
              "conf_label", "conf_polarity", "verdict_note"}
 
 
+# The pre-registered predictions (PM_SESSION_STARTUP §strategic frame) — the scorecard TESTS these; a
+# surprise is where the learning is. Each is (label, predicate over the overall row) → HOLD ✓ / SURPRISE ✗.
+PRE_REGISTERED = {
+    ("player_signal", "point"): ("§1 signal HOLD (measurement)",
+                                 lambda r: r["skill"] is not None and r["skill"] >= -0.02),
+    ("true_rank", "ordinal"): ("§5 true-rank HOLD (measurement)",
+                               lambda r: r["skill"] is not None and r["skill"] > 0.10),
+    ("positional_depth", "point"): ("§6 depth HOLD (measurement)",
+                                    lambda r: r["skill"] is not None and r["skill"] >= 0.0),
+    ("bracket_odds", "probability"): ("§5 Brier < 0.25",
+                                      lambda r: r["brier"] is not None and r["brier"] < 0.25),
+    ("ros_player_band", "interval"): ("§3 band calibrated to ~0.80",
+                                      lambda r: r["coverage_actual"] is not None and abs(r["coverage_actual"] - 0.80) < 0.10),
+}
+# production_vor is NOT pre-registered — its projection optimism is a FINDING (expected from the primitives),
+# not a surprise-vs-prediction. It's surfaced in the headline + user-line, with "—" in the pre-registered column.
+
+
+def _user_line(key: tuple, r: dict) -> str:
+    """The 'what we'd honestly tell a user' line — copy the front end should eventually use (not wired here)."""
+    read, ct = key
+    sk = _fmt(r["skill"], 2) if r["skill"] is not None else "n/a"
+    disc = _fmt(r["discrimination"], 2)
+    lines = {
+        ("production_vor", "point"): f"Ranks rest-of-season value well (Spearman {disc}) but point totals run high "
+                                     f"(median +{_fmt(r['med_error'], 0)}) — trust the ORDER, not the level.",
+        ("ros_player_band", "interval"): f"The range is too narrow — truth lands in-band only "
+                                         f"{_fmt(r['coverage_actual'], 2)} of the time (target 0.80); widen the error bars.",
+        ("player_signal", "point"): f"About even with 'recent form carries forward' (skill {sk}) — a thin edge on "
+                                    f"near-random weekly scoring.",
+        ("player_signal", "direction"): f"Trend calls barely beat guessing the base rate (skill {sk}).",
+        ("true_rank", "ordinal"): f"Ranks final standings materially better than chance (skill {sk}).",
+        ("positional_depth", "point"): f"Weak signal on an APPROXIMATE answer key (skill {sk}, coverage-flagged) — "
+                                       f"directional only.",
+        ("bracket_odds", "probability"): f"Playoff odds are well-calibrated (Brier {_fmt(r['brier'], 2)} < 0.25) and "
+                                         f"beat a coin flip (skill {sk}).",
+        ("bracket_odds", "point"): f"Win projections beat a .500 baseline (skill {sk}).",
+        ("bracket_odds", "ordinal"): f"Seed projections beat random ordering (skill {sk}).",
+    }
+    line = lines.get(key, f"skill {sk}.")
+    if r["measurable_law2"]:
+        line += f" Confidence ({r['conf_label']}) {'IS honest' if r['conf_honest'] else 'does NOT sort by error — FLAG'}."
+    else:
+        line += " Confidence-honesty UNMEASURABLE (no native confidence signal — law-2 gap)."
+    return line
+
+
+def _add_verdict_notes(out: pl.DataFrame) -> pl.DataFrame:
+    """Stamp the pre-registered check + the user-facing line onto each `overall` row (`verdict_note`)."""
+    notes = {}
+    for r in out.filter(pl.col("slice_dim") == "overall").iter_rows(named=True):
+        key = (r["read"], r["claim_type"])
+        tag, pred = PRE_REGISTERED.get(key, (None, None))
+        prefix = ""
+        if tag is not None:
+            try:
+                prefix = f"[{tag}: {'HOLD ✓' if pred(r) else 'SURPRISE ✗'}] "
+            except Exception:                                       # noqa: BLE001
+                prefix = f"[{tag}: n/a] "
+        notes[key] = prefix + _user_line(key, r)
+    nf = pl.DataFrame([{"read": r, "claim_type": c, "_note": n} for (r, c), n in notes.items()])
+    return (out.join(nf, on=["read", "claim_type"], how="left")
+               .with_columns(pl.when(pl.col("slice_dim") == "overall").then(pl.col("_note"))
+                             .otherwise(pl.col("verdict_note")).alias("verdict_note"))
+               .drop("_note"))
+
+
 def score_season(season: int) -> pl.DataFrame:
     """Build the full `engine_scorecard_{season}` frame — all slices, provenance-stamped."""
     e = enrich(season)
@@ -404,10 +536,24 @@ def score_season(season: int) -> pl.DataFrame:
     # quarantine slice 2 — resolution_status (resolved vs unresolved), on ALL claims: coverage only
     parts.append(_finalize(_agg(e, ["resolved"]), "resolution_status", "resolved", ctx))
 
+    # confidence-honesty (law 2) — the per-tier reliability rows + the per-read verdict merged onto `overall`
+    verdicts, tier_rows = _confidence_honesty(pop, ctx)
+    parts.append(tier_rows)
+
     out = pl.concat([p for p in parts if p.height], how="vertical")
+    if verdicts:
+        vdf = pl.DataFrame([{"read": r, "claim_type": c, "_tmb": v["conf_top_minus_bottom"], "_hon": v["conf_honest"]}
+                            for (r, c), v in verdicts.items()])
+        out = out.join(vdf, on=["read", "claim_type"], how="left").with_columns(
+            pl.when(pl.col("slice_dim") == "overall").then(pl.col("_tmb"))
+              .otherwise(pl.col("conf_top_minus_bottom")).alias("conf_top_minus_bottom"),
+            pl.when(pl.col("slice_dim") == "overall").then(pl.col("_hon"))
+              .otherwise(pl.col("conf_honest")).alias("conf_honest"),
+        ).drop("_tmb", "_hon")
+    out = _add_verdict_notes(out)
     # Law 1 structural: no per-claim row leaked in (every row is a slice aggregate)
     assert "prediction_id" not in out.columns, "Law 1 breach: a prediction_id leaked into the scorecard"
-    return out
+    return out.select(SCORECARD_COLS)
 
 
 def _one_constants_hash(e: pl.DataFrame) -> str:
