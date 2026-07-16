@@ -1622,6 +1622,54 @@ def resolutions_exists(season: int) -> bool:
     return _resolutions_path(season).exists()
 
 
+# --- Engine scorecard (Improvement-Loop L3, Session 5) ---
+# The first entity allowed to JUDGE — but only distributions, never a single claim. One row per
+# (read, claim_type, slice_dim, slice_val) AGGREGATE verdict over the frozen `resolutions`, carrying the
+# four metric families (skill vs a declared naive baseline · calibration = PIT/coverage/Brier ·
+# confidence-honesty = is error monotone in the read's own stated confidence · discrimination = Spearman).
+# Law 1 holds STRUCTURALLY here too: the grain is a slice, never a `prediction_id` — no single-claim
+# pass/fail exists, by construction. The model verdict (`slice_dim='overall'`) is computed over
+# `inputs_ok=true ∧ resolved=true` ONLY; `inputs_ok=false` and unresolved are their own quarantined slices,
+# never blended in. APPEND-ONLY + IMMUTABLE by `scorecard_id` (which folds in `code_version`, so a re-score
+# under a new scorer or new constants writes a distinguishable parallel population — the L2 discipline,
+# reused). Each row carries the LEDGER's `constants_hash` (which model made the claims it scored) and the
+# scorer's `code_version`. The front end does NOT read it (the "what we'd tell a user" line is copy for
+# later). See corpus/compute_engine_scorecard.py (writer), corpus/check_scorecard.py (gate),
+# corpus/scorecard_registry.py (the declared naive-baseline + confidence-signal registry).
+def _engine_scorecard_path(season: int) -> Path:
+    return _SNAPSHOT_DIR / "derived" / "ledger" / f"engine_scorecard_{season}.parquet"
+
+
+def write_engine_scorecard(df: pl.DataFrame, season: int) -> None:
+    """Append only genuinely-new scorecard rows to the season's file (idempotent by `scorecard_id`).
+    Immutable-append, mirroring `write_resolutions`: de-duplicate on `scorecard_id`, drop any id already on
+    disk, diagonal-concat so the file only GROWS — a re-score under the same scorer `code_version` appends
+    nothing; a re-score under a new one appends a parallel population. Never overwrites an existing row."""
+    path = _engine_scorecard_path(season)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df = df.unique(subset="scorecard_id", keep="first")
+    if path.exists():
+        existing = pl.read_parquet(path)
+        df = df.filter(~pl.col("scorecard_id").is_in(existing["scorecard_id"]))
+        df = pl.concat([existing, df], how="diagonal")
+    df.write_parquet(path)
+
+
+def read_engine_scorecard(season: int, *, read: str | None = None,
+                          slice_dim: str | None = None) -> pl.DataFrame:
+    """Read a season's scorecard, optionally filtered to one read and/or one slice dimension."""
+    df = pl.read_parquet(_engine_scorecard_path(season))
+    if read is not None:
+        df = df.filter(pl.col("read") == read)
+    if slice_dim is not None:
+        df = df.filter(pl.col("slice_dim") == slice_dim)
+    return df
+
+
+def engine_scorecard_exists(season: int) -> bool:
+    return _engine_scorecard_path(season).exists()
+
+
 # --- League registry (Improvement-Loop L0 keying) ---
 # The single source of truth for "which leagues exist and how each is keyed", replacing the implicit
 # config.SLEEPER_LEAGUE_ID single-league assumption (audit S1.3 — league #2 silently overwriting #1).
