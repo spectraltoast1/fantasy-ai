@@ -204,7 +204,9 @@ start-dashboard.command
 **/branding/
 **/engine improvement/
 
+
 # Front-end: deps + symlinked live data; source is tracked
 application/frontend/node_modules/
 application/frontend/dist/
 application/frontend/public/data/
+application/frontend/vite.config.js
