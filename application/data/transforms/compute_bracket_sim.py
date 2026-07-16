@@ -84,11 +84,32 @@ def _sim_seed(season: int, league_id=None) -> int:
     return SEED ^ h
 
 
+# A playoff_week_start below this is not a real postseason boundary (0/1/negative — garbled or unset in the
+# league's Sleeper config); fall back to the standard 15 (a 14-week regular season) rather than yield a
+# reg_season_end < 1 that disables the whole season. The single source of truth for the sanity floor, shared
+# by _playoff_config (the sim) and harvest._reg_end (the harvest) so the two can never drift.
+_DEFAULT_PLAYOFF_WEEK_START = 15
+
+
+def _sane_playoff_week_start(pw) -> int:
+    """A league's playoff_week_start, floored to a sane value. `pw` < 2 or non-numeric/None (missing/garbled)
+    → `_DEFAULT_PLAYOFF_WEEK_START`; otherwise the real value. A playoff starting week 0 or 1 is impossible,
+    so it means the config was never set — clamping to 1/−1 (the old behaviour) silently disabled the season
+    instead of harvesting it."""
+    try:
+        start = int(pw)
+    except (TypeError, ValueError):
+        return _DEFAULT_PLAYOFF_WEEK_START
+    return start if start >= 2 else _DEFAULT_PLAYOFF_WEEK_START
+
+
 def _playoff_config(season: int, *, league_id=None) -> tuple:
     """(reg_season_end_week, playoff_teams) from the league's real Sleeper settings — NOT hardcoded.
     `playoff_week_start` is the first postseason week, so the regular season ends the week before;
     `playoff_teams` is the championship-bracket size (the top-K that make the playoffs). Raises with a
-    clear message if league_settings hasn't been fetched — never silently fall back to a guess."""
+    clear message if league_settings hasn't been fetched — never silently fall back to a guess. A
+    present-but-garbled `playoff_week_start` (< 2) is floored to the sane default (`_sane_playoff_week_start`)
+    so a broken config yields a real season, not reg_season_end = −1."""
     s = data_layer.read_playoff_settings(season, league_id=league_id)
     if "playoff_week_start" not in s or "playoff_teams" not in s:
         raise RuntimeError(
@@ -97,7 +118,7 @@ def _playoff_config(season: int, *, league_id=None) -> tuple:
             "first. The bracket sim reads the league's real playoff_week_start / playoff_teams; it "
             "does not assume them."
         )
-    return int(s["playoff_week_start"]) - 1, int(s["playoff_teams"])
+    return _sane_playoff_week_start(s["playoff_week_start"]) - 1, int(s["playoff_teams"])
 
 
 def _division_map(season: int, *, league_id=None):
@@ -178,8 +199,14 @@ def _standings_as_of(matchups: pl.DataFrame, n: int) -> dict:
     tiebreaker carried alongside wins."""
     standings: dict = {}
     sub = matchups.filter((pl.col("week") <= n) & pl.col("matchup_id").is_not_null())
-    for _, g in sub.group_by("week", "matchup_id"):
-        rows = g.to_dicts()
+    # Iterate the groups in a FIXED (week, matchup_id) order. A roster's cumulative points is a float sum,
+    # and float addition is non-associative, so the non-deterministic order polars' group_by yields groups in
+    # flips the accumulated sum by a rounding ULP run-to-run for a roster whose total lands on a round1
+    # boundary — a latent non-determinism the fixed-SEED sim otherwise inherits (current_points was the only
+    # column it reached; graded outputs stayed stable). Sorting pins it; proven a no-op for the whole
+    # persisted corpus (matched + is_mine), only making the value reproducible.
+    for _, g in sorted(sub.group_by("week", "matchup_id"), key=lambda kv: (int(kv[0][0]), int(kv[0][1]))):
+        rows = g.sort("roster_id").to_dicts()
         for r in rows:
             standings.setdefault(int(r["roster_id"]), {"wins": 0.0, "points": 0.0})
             standings[int(r["roster_id"])]["points"] += float(r["points"])

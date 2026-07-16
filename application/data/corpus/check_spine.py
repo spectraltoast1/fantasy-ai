@@ -14,8 +14,10 @@ tolerated exception (reported, not a silent hole); a league missing a read for N
      spent playoff mass per as-of week == the league's playoff-slot count (a real property, not "file exists").
   3. NO ROSTER-MASS REGRESSION — production_vor's players ⊆ 3a's join_season skill players (the spine invents
      no roster mass and the remainder story doesn't grow downstream); coverage reported.
-  4. DETERMINISTIC — recomputing a sample league is byte-identical to the persisted spine (incl. the
-     league-stable bracket_sim seed).
+  4. DETERMINISTIC — recomputing a sample league is value-identical to the persisted spine (incl. the
+     league-stable bracket_sim seed). Compared order-insensitively (`_frame_eq`): the parquet WRITER is
+     physically non-deterministic (bytes flake run-to-run for a byte-identical in-memory frame), so
+     determinism is a property of the recomputed VALUES, not the on-disk byte stream.
   5. TWO-WAY SLICEABLE — is_two_way is present + boolean on every production_vor and filterable.
 
 Prove-it-bites (a gate that can't fail is not a gate): a missing read is detected (check 1); a playoff mass ≠
@@ -25,9 +27,7 @@ Run: python3 -m application.data.corpus.check_spine [--sample-determinism N]
 """
 import argparse
 import contextlib
-import hashlib
 import io
-import shutil
 import sys
 from collections import defaultdict
 
@@ -58,6 +58,19 @@ def _quiet(fn):
         return fn()
 
 
+def _frame_eq(a: pl.DataFrame, b: pl.DataFrame) -> bool:
+    """Order-insensitive frame equality: same columns + same VALUES, ignoring row order. The determinism
+    property is about VALUES, not the parquet byte stream: polars' parquet writer is physically
+    non-deterministic (compression/dictionary/metadata layout differ run-to-run even for a byte-identical
+    in-memory frame — verified: recompute is order-sensitive `.equals` every time, only the on-disk bytes
+    flake), so a raw byte-hash flakes ~8%. Comparing sorted frames asserts what determinism actually means.
+    (The 1.7 precedent; check_expected_points uses the same helper.)"""
+    if set(a.columns) != set(b.columns):
+        return False
+    cols = b.columns
+    return a.select(cols).sort(cols).equals(b.select(cols).sort(cols))
+
+
 # --- check-2 / check-4 predicates (factored out so prove-it-bites can call them directly) --------------
 
 def _mass_ok(mass: float, playoff_teams: int, tol: float = _MASS_TOL) -> bool:
@@ -76,39 +89,32 @@ def _one_cohort(rby: dict) -> bool:
     return bool(vals) and all(v == vals[0] for v in vals)
 
 
-# --- determinism (recompute a sample → byte-identical vs persisted, never touches canonical data) ------
+# --- determinism (recompute a sample → value-identical vs persisted, never touches canonical data) -----
 
+# (compute, persisted-path, needs_scoring_key). Value-compared, so no writer is needed.
 _COMP = [
-    (compute_production_vor.compute, data_layer.write_production_vor, data_layer._production_vor_path, True),
-    (compute_true_rank.compute, data_layer.write_true_rank, data_layer._true_rank_path, False),
-    (compute_positional_depth.compute, data_layer.write_positional_depth, data_layer._positional_depth_path, False),
-    (compute_bracket_sim.compute, data_layer.write_bracket_odds, data_layer._bracket_odds_path, True),
-    (compute_player_signal.compute, data_layer.write_player_signal, data_layer._player_signal_path, False),
+    (compute_production_vor.compute, data_layer._production_vor_path, True),
+    (compute_true_rank.compute, data_layer._true_rank_path, False),
+    (compute_positional_depth.compute, data_layer._positional_depth_path, False),
+    (compute_bracket_sim.compute, data_layer._bracket_odds_path, True),
+    (compute_player_signal.compute, data_layer._player_signal_path, False),
 ]
 
 
 def _check_determinism(sample_rows, results):
     print("  4 — determinism (recompute a sample league == persisted, incl. bracket seed):")
-    tmp = "__SPINEDET__"
     checked = 0
     for r in sample_rows:
         lid, season, sk = str(r["league_id"]), int(r["season"]), str(r["scoring_key"])
         if not compute_spine._spine_present(lid, season):
             continue
-        try:
-            all_same = True
-            for comp, write, path_fn, needs_sk in _COMP:
-                kw = {"scoring_key": sk} if needs_sk else {}
-                df = _quiet(lambda: comp(season, league_id=lid, **kw))
-                write(df, season, league_id=tmp)
-                same = (hashlib.sha256(path_fn(season, tmp).read_bytes()).hexdigest()
-                        == hashlib.sha256(path_fn(season, lid).read_bytes()).hexdigest())
-                path_fn(season, tmp).unlink()
-                all_same = all_same and same
-            _ok(f"{lid} {season}: recompute byte-identical to persisted", all_same, results)
-            checked += 1
-        finally:
-            shutil.rmtree(data_layer._league_dir(tmp), ignore_errors=True)
+        all_same = True
+        for comp, path_fn, needs_sk in _COMP:
+            kw = {"scoring_key": sk} if needs_sk else {}
+            df = _quiet(lambda: comp(season, league_id=lid, **kw))
+            all_same = all_same and _frame_eq(df, pl.read_parquet(path_fn(season, lid)))
+        _ok(f"{lid} {season}: recompute value-identical to persisted (incl. bracket seed)", all_same, results)
+        checked += 1
     if not checked:
         print("    (no present sample leagues to recompute)")
 
@@ -229,6 +235,9 @@ def check(sample_determinism: int = 2) -> bool:
     _ok("check-4 seed is a pure fn of league_id (not wall-clock)",
         compute_bracket_sim._sim_seed(2025, "A") == compute_bracket_sim._sim_seed(2025, "A")
         and compute_bracket_sim._sim_seed(2025, "A") != compute_bracket_sim._sim_seed(2025, "B"), results)
+    _ok("check-4 value-equality bites (differing values ≠; row permutation ==)",
+        (not _frame_eq(pl.DataFrame({"a": [1, 2]}), pl.DataFrame({"a": [1, 3]})))
+        and _frame_eq(pl.DataFrame({"a": [2, 1]}), pl.DataFrame({"a": [1, 2]})), results)
 
     ok = all(results) and bool(results)
     print()

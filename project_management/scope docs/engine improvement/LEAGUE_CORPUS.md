@@ -13,7 +13,13 @@ BACKFILL (Session 3c, 2026-07-15): the 14 ff_opportunity `*_exp` components **ad
 rest of the 3b spine byte-identical; `check_expected_points` green with teeth. Session 3d (renumbered from
 3c) = the 48 `never_tune` generalization leagues through the same spine — it inherits the `*_exp` fix for
 free (`nfl_stats` already carries the components) and additively backfills its own joins the same way
-(scoped, not started); then the L2 ledger.**
+(scoped, not started); then the L2 ledger. → CORPUS CLEANUP (2026-07-15): the determinism gates de-flaked
+(byte-hash → value-equality — the flake was polars' parquet writer, not tied rows); the dead `xtd` column
+retired (six-season nfl_stats schema unified to 166 cols); and the one degenerate matched league completed
+via a **reg_end sanity floor** (garbled `playoff_week_start` → sane default) + re-join from persisted raw —
+so the **matched spine is now 221/221 (0 flagged)**. A pre-existing `bracket_sim._standings_as_of`
+float-sum-order non-determinism (surfaced by that league) was fixed, proven equivalence-preserving (0 numbers
+moved across the persisted corpus).**
 **Companions:** [`IMPROVEMENT_LOOP.md`](./IMPROVEMENT_LOOP.md) · [`PILOT_2026.md`](./PILOT_2026.md) ·
 [`SESSION_0_5_CORPUS_SELECTION.md`](./SESSION_0_5_CORPUS_SELECTION.md) ·
 [`LLM context/SPIKE_CORPUS_FINDINGS.md`](../LLM%20context/SPIKE_CORPUS_FINDINGS.md) ·

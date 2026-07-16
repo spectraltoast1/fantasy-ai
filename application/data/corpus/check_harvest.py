@@ -12,8 +12,10 @@ raw harvest (commit 2) is complete, sound, deterministic, and two-way-sliceable.
      NAMED remainder (the join writes a remainders file per week, even when empty). The per-league remainder
      rate is REPORTED and must be BOUNDED (standing instruction 6 — name the players, don't assert a clean
      join). A league that loses roster mass beyond the bound FAILS.
-  4. DETERMINISTIC — re-joining a sample league from the persisted raw is byte-identical (the property the
-     persist decision, standing instruction 8, exists to satisfy).
+  4. DETERMINISTIC — re-joining a sample league from the persisted raw is value-identical (the property the
+     persist decision, standing instruction 8, exists to satisfy). Compared order-insensitively (`_frame_eq`):
+     the parquet writer's physical bytes flake run-to-run for a byte-identical in-memory frame, so
+     determinism is a property of the joined VALUES, not the on-disk byte stream.
   5. TWO-WAY RIDES — the `is_two_way` flag is on every join, correctly applied (a row is flagged iff its
      (season, player) is in the 10-row `corpus_two_way_flags` reference), and sliceable.
 
@@ -23,7 +25,6 @@ FAILS check 1; a roster-mass-losing join FAILS check 3's bound predicate.
 Run: python3 -m application.data.corpus.check_harvest [--sample-determinism N]
 """
 import argparse
-import hashlib
 import json
 import shutil
 import sys
@@ -85,12 +86,20 @@ def _reg_end(lid, season):
 
 # --- determinism (temp-league re-join, never touches canonical data) ----------------------------------
 
-def _sha_join(path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def _frame_eq(a: pl.DataFrame, b: pl.DataFrame) -> bool:
+    """Order-insensitive frame equality: same columns + same VALUES, ignoring row order. The determinism
+    property is about VALUES, not the parquet byte stream: polars' parquet writer is physically
+    non-deterministic (compression/dictionary/metadata layout differ run-to-run even for a byte-identical
+    in-memory frame), so a raw byte-hash flakes ~8%. Comparing sorted frames asserts what determinism
+    actually means. (The 1.7 precedent; check_spine / check_expected_points use the same helper.)"""
+    if set(a.columns) != set(b.columns):
+        return False
+    cols = b.columns
+    return a.select(cols).sort(cols).equals(b.select(cols).sort(cols))
 
 
 def _check_determinism(sample_rows, results):
-    print("  4 — determinism (re-join from persisted raw is byte-identical):")
+    print("  4 — determinism (re-join from persisted raw is value-identical):")
     tmp = "__HARVESTDETERM__"
     checked = 0
     for r in sample_rows:
@@ -101,7 +110,8 @@ def _check_determinism(sample_rows, results):
         if not weeks:
             continue
         try:
-            # stage the sample's matchups under a temp league_id, then join it twice
+            # stage the sample's matchups under a temp league_id, then join it twice and compare VALUES
+            # (the parquet writer's physical bytes flake run-to-run; the joined data does not).
             for w in weeks:
                 src = data_layer._sleeper_matchups_path(season, w, lid)
                 dst = data_layer._sleeper_matchups_path(season, w, tmp)
@@ -109,12 +119,12 @@ def _check_determinism(sample_rows, results):
                 shutil.copy2(src, dst)
             for w in weeks:
                 join_nfl_sleeper_weekly.run(season, w, league_id=tmp)
-            h1 = _sha_join(data_layer._join_season_path(season, tmp))
+            f1 = pl.read_parquet(data_layer._join_season_path(season, tmp))
             data_layer._join_season_path(season, tmp).unlink()
             for w in weeks:
                 join_nfl_sleeper_weekly.run(season, w, league_id=tmp)
-            h2 = _sha_join(data_layer._join_season_path(season, tmp))
-            _ok(f"{lid} {season}: twice-join byte-identical", h1 == h2, results)
+            f2 = pl.read_parquet(data_layer._join_season_path(season, tmp))
+            _ok(f"{lid} {season}: twice-join value-identical", _frame_eq(f1, f2), results)
             checked += 1
         finally:
             shutil.rmtree(data_layer._sleeper_league_dir(season, tmp), ignore_errors=True)
@@ -210,6 +220,9 @@ def check(sample_determinism: int = 2) -> bool:
         not _raw_present("__NOSUCH__", 2025, 3)[0], results)
     _ok("check-3 fails on a roster-mass-losing join (rate 0.9)",
         not _roster_mass_ok(join_players=1, remainder_players=9), results)
+    _ok("check-4 value-equality bites (differing values ≠; row permutation ==)",
+        (not _frame_eq(pl.DataFrame({"a": [1, 2]}), pl.DataFrame({"a": [1, 3]})))
+        and _frame_eq(pl.DataFrame({"a": [2, 1]}), pl.DataFrame({"a": [1, 2]})), results)
 
     ok = all(results) and bool(results)
     print()

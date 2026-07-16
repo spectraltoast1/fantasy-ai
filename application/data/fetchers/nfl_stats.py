@@ -76,8 +76,10 @@ def _load_redzone_touches(year: int) -> pl.DataFrame:
     """Return (gsis_id, week, redzone_touches) from play-by-play — the legible companion evidence for
     the Quality read (a player's touches inside the 20). The Quality axis *itself* is now the
     ff_opportunity expected-points model (`_load_ff_opportunity`, DECISION_READS §1), which retired the
-    old hand-rolled `xtd = Σ td_prob` TD-proxy; this keeps only the red-zone volume that model doesn't
-    express. Player ids are already gsis_id format, matching every other join here — no id mapping.
+    old hand-rolled `xtd = Σ td_prob` TD-proxy (dropped from the fetcher output, then purged from the stale
+    2020-24 parquets by `corpus/retire_xtd.py` — no season carries it now); this keeps only the red-zone
+    volume that model doesn't express. Player ids are already gsis_id format, matching every other join
+    here — no id mapping.
     """
     pbp = nflreadpy.load_pbp(year).filter(pl.col("season_type") == "REG")
     redzone = pl.col("yardline_100") <= 20

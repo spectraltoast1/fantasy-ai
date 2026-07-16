@@ -1,6 +1,39 @@
 # STATUS
 
-**Last updated:** 2026-07-15 (**BACKEND — EXPECTED-POINTS SUBSTRATE BACKFILL: §1 `player_signal` Quality lit
+**Last updated:** 2026-07-15 (**BACKEND — CORPUS CLEANUP (3 commits): determinism gates de-flaked, dead
+`xtd` retired, the degenerate league completed → matched spine 221/221.** Three loose ends from the
+3a/3b/3c work, each touching shared/frozen ground with its own equivalence proof (no `queries.js`/view
+edits). **C1 — de-flaked the determinism gates.** `check_spine` + `check_harvest` asserted determinism by
+`sha256(read_bytes())` of the recomputed parquet, which flaked ~8%. Mechanism NAMED (not tied rows — the 3c
+mislabel is corrected here): recomputing a read gives an **order-sensitive-identical in-memory frame every
+time**; only polars' **parquet WRITER is physically non-deterministic** (compression/dictionary/metadata
+bytes flake for a byte-identical frame). Converted both determinism sub-checks to order-insensitive
+value-equality (`_frame_eq` = sort-by-all-cols + frame-eq — the 1.7 precedent `check_expected_points`
+already used); corrected the mislabeled comments there too; added prove-bites (fails on differing values,
+passes on a row permutation). Both gates **10/10 green, zero flake.** **C2 — retired the dead `xtd` column.**
+The retired TD-proxy survived only on 2020-24 `nfl_stats` (5 files, 167→166 cols) + **202 join_seasons** (all
+2020-24); 2025 lacked it. New idempotent driver `corpus/retire_xtd.py` drops it via the data_layer seam — an
+additive-INVERSE that moves no live number (standing instr 5): every other column byte-identical + rows
+unchanged (asserted per file), the 5 spine reads recompute **value-identical** (xtd unconsumed — its only
+reference is a comment), the **six-season schema now uniform (166 cols).** **C3 — completed the degenerate
+league → 221/221.** `1124876463083261952` (2024) got a week-1-only *join* (not raw — `sleeper.backfill`
+pulls all completed weeks, so its raw weeks 1-15 were already fully persisted) because a garbled
+`playoff_week_start=0` yielded reg_end=−1. Added a **reg_end sanity floor** (`playoff_week_start < 2` →
+`_DEFAULT_PLAYOFF_WEEK_START=15`) as a **shared helper** `compute_bracket_sim._sane_playoff_week_start` that
+both `_playoff_config` (the sim) and `harvest._reg_end` (the harvest) use — a single source so they can't
+drift; a proven **no-op for all 220 valid matched leagues** (only 2 corpus leagues have garbled config: this
+one + one 2023 generalization league that inherits the fix for free at 3d). Re-joined the league weeks 1-14
+from **persisted raw (no network)** + computed its 5-read spine → **`check_spine` 221 present, 0
+flagged-degenerate.** Completing it exposed a SECOND pre-existing bracket_sim non-determinism (named, standing
+instr 6): **`_standings_as_of` accumulated cumulative points by iterating polars `group_by` in
+non-deterministic order**, and float addition is non-associative, so a roster whose total lands on a `round1`
+boundary flipped `current_points` ±0.1 run-to-run (the graded outputs — playoff_odds/seed/wins — stayed
+stable; only that one reported column moved). Fixed by iterating the groups sorted; **PROVEN
+equivalence-preserving — recompute == persisted for all 220 matched + is_mine 2025 (graded AND
+current_points, 0 mismatches), only the new league made reproducible** (its 5-read spine now twice-run
+value-identical). All three gates green (`check_spine`/`check_harvest`/`check_expected_points`); seam held
+(no `queries.js`/view edits; is_mine unaffected). **Next — Session 3d: the generalization robustness pass;
+the floor + `*_exp` fix are inherited for free.**) — Prior: **BACKEND — EXPECTED-POINTS SUBSTRATE BACKFILL: §1 `player_signal` Quality lit
 across the whole matched corpus (Improvement-Loop Session 3c).** 3b surfaced that the §1 Quality axis
 (`quality_rate` / `luck` / `point_correlation`) was TEST-only — 100% null for 2020–24, populated only for
 2025 — because the pre-2025 `nfl_stats` parquets were built *before* `_load_ff_opportunity` was added to the
@@ -36,10 +69,10 @@ null/missing season), (2) matched joins carry `*_exp` (the consumer sees it — 
 value-identical to 3b (they read neither `*_exp` nor `player_signal`); **all 4 prove-bites fire** (stripped
 `*_exp` fails check 1; all-null Quality fails check 3; the value predicate bites, order-insensitively).
 **Checks 3+4 compare recompute-vs-persisted ORDER-INSENSITIVELY** (`_frame_eq` = sort + frame-eq) — surfaced
-a **pre-existing 3b finding: `compute_production_vor` has a tied-row-ordering non-determinism** (polars'
-multi-threaded `group_by` reorders tied rows ~8%/run — VALUES byte-identical, only on-disk row order moves;
-confirmed order-insensitive frame-equal), so a byte-level recompute check flakes. NOT a 3c regression
-(player_signal re-run is 0/12 flaky; the 4 reads were untouched); the project's sanctioned fix is a unique
+a **pre-existing 3b flake** [MECHANISM CORRECTED in Corpus-cleanup C1: NOT tied rows — the recompute is an
+order-sensitive-identical in-memory frame every time; the polars **parquet WRITER** is physically
+non-deterministic, so only the on-disk bytes flake ~8%], so a byte-level recompute check flakes. NOT a 3c
+regression (player_signal re-run is 0/12 flaky; the 4 reads were untouched); the project's sanctioned fix is a unique
 sort tie-break + re-persist, deferred (touching the frozen spine is out of 3c scope) — **`check_spine`'s own
 byte-based determinism check is correspondingly flaky (a 3b gate, ~8%/sampled-league); re-run to confirm
 green.** `check_spine` (value-wise) **intact** (220 present + 1 flagged); the **2025 answer-key `backtest_player_signal` PASS** (Quality axis
@@ -54,10 +87,10 @@ per the additive discipline (it never leaks into `player_signal` — derived rea
 Session 3d: the generalization robustness pass (the 48 `never_tune` leagues through the 5-read spine —
 superflex `position_pools`, division `_seed_table`/`_division_map`, custom `_scoring.recompute_custom_points`;
 budget it for bugs; inherits the `*_exp` fix for free) — SCOPED, NOT STARTED; then the L2 ledger. Queued
-(not this session): the degenerate `1124876463083261952` (a `reg_end` floor + targeted re-harvest); the
-stale `xtd` cleanup; **`compute_production_vor`'s tied-row-ordering non-determinism (a unique sort tie-break
-+ re-persist — the 1.7/3b tie-break pattern; makes `check_spine`'s byte-determinism check flake ~8%)**;
-optionally lighting is_mine historical Quality.**) — Prior: **BACKEND — MATCHED MEASUREMENT SPINE COMPUTED (Improvement-Loop Session 3b):
+(not this session) [ALL THREE DONE in Corpus-cleanup above]: the degenerate `1124876463083261952`
+(reg_end floor + re-join → 221/221); the stale `xtd` cleanup (retired); the determinism-gate flake
+(de-flaked — was the parquet writer, not tied rows). Remaining: optionally lighting is_mine historical
+Quality.**) — Prior: **BACKEND — MATCHED MEASUREMENT SPINE COMPUTED (Improvement-Loop Session 3b):
 the 5 graded reads threaded league-keyed and computed for the 221-league matched tuning corpus.** 3a
 league-keyed the raw+join layer; the compute side was still unkeyed (every `compute_*.compute(season)`
 implicitly resolved is_mine). **C1 — keys threaded:** an explicit keyword-only `league_id` (+ `scoring_key`

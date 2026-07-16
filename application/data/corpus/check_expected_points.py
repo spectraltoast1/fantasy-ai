@@ -17,9 +17,10 @@ gate owns the *_exp-specific teeth. Exit 0 iff every applicable check passes.
      augmented join: value-identical to their persisted 3b output (they read neither *_exp nor player_signal,
      so adding *_exp to the join cannot move them).
 
-Checks 3+4 compare recompute-vs-persisted ORDER-INSENSITIVELY (`_frame_eq`): production_vor carries a
-pre-existing 3b tied-row-ordering flake (polars' multi-threaded group_by reorders tied rows run-to-run —
-values identical, only bytes move), so the meaningful assertion is value-identity, not on-disk byte order.
+Checks 3+4 compare recompute-vs-persisted ORDER-INSENSITIVELY (`_frame_eq`): polars' parquet WRITER is
+physically non-deterministic (the on-disk bytes flake run-to-run for a byte-identical in-memory frame —
+values AND row order are stable, only the serialization moves), so the meaningful assertion is value-identity,
+not on-disk byte order.
 
 Prove-it-bites (a gate that can't fail is not a gate): a season with *_exp stripped fails check 1; an all-null
 Quality column fails check 3; differing values are unequal while a row-permutation is equal (the value
@@ -51,9 +52,9 @@ QUALITY_COLS = ("quality_rate", "luck", "point_correlation")
 
 # The 5 reads: (compute, path, needs_scoring_key). The first four are the blast-radius set (must equal 3b in
 # value); player_signal is the one that legitimately moved (Quality lit). We compare recompute-vs-persisted
-# ORDER-INSENSITIVELY (see _frame_eq) — production_vor has a pre-existing 3b tied-row-ordering flake
-# (polars' multi-threaded group_by reorders tied rows ~run-to-run; values identical), and blast-radius /
-# reproducibility are about VALUE-identity, not the on-disk byte order.
+# ORDER-INSENSITIVELY (see _frame_eq) — polars' parquet writer is physically non-deterministic (the on-disk
+# bytes flake run-to-run for a byte-identical in-memory frame), and blast-radius / reproducibility are about
+# VALUE-identity, not the on-disk byte order.
 _BLAST = [
     (compute_production_vor.compute, data_layer._production_vor_path, True),
     (compute_true_rank.compute, data_layer._true_rank_path, False),
@@ -64,9 +65,10 @@ _SIGNAL = (compute_player_signal.compute, data_layer._player_signal_path, False)
 
 
 def _frame_eq(a: pl.DataFrame, b: pl.DataFrame) -> bool:
-    """Order-insensitive frame equality: same columns + same VALUES, ignoring row order. polars' multi-
-    threaded group_by reorders tied rows run-to-run — a known benign non-determinism the project compares
-    around (it moves bytes, never values), not a value change. Sorts both by all columns, then frame-eq."""
+    """Order-insensitive frame equality: same columns + same VALUES, ignoring row order. polars' parquet
+    writer is physically non-deterministic — the on-disk bytes flake run-to-run for a byte-identical
+    in-memory frame (values AND row order are stable) — so the project compares recompute VALUES, not the
+    byte stream. Sorts both by all columns, then frame-eq."""
     if set(a.columns) != set(b.columns):
         return False
     cols = b.columns
@@ -134,8 +136,8 @@ def _check_recompute(sample_rows, results):
         if not compute_spine._spine_present(lid, season):
             continue
         # Blast radius: the 4 reads recompute VALUE-identical to their persisted 3b output (they read
-        # neither *_exp nor player_signal). Order-insensitive — production_vor has a pre-existing tied-row
-        # ordering flake (values identical); this proves the values didn't move, which is the real claim.
+        # neither *_exp nor player_signal). Order-insensitive — the parquet writer's bytes flake run-to-run
+        # (values stable); this proves the values didn't move, which is the real claim.
         blast_same = True
         for comp, path_fn, needs_sk in _BLAST:
             kw = {"scoring_key": sk} if needs_sk else {}
