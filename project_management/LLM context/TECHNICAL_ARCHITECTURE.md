@@ -465,6 +465,28 @@ Two storage patterns:
     per-read pass/fail, no `claim_correct`/`suppress`** (4b's `check_resolutions` asserts that forbidden
     verdict set is absent). The scorer (L3, Session 5) is the first thing that judges, and only over
     distributions.
+- **Scorer (L3, Improvement-Loop Session 5)** — `engine_scorecard_{season}` (same
+  `snapshots/derived/ledger/` dir, same append-only-of-new, keyed by `scorecard_id`). **The first entity
+  allowed to JUDGE — but only DISTRIBUTIONS, never a single claim:** the grain is one AGGREGATE row per
+  `(read, claim_type, slice_dim, slice_val)`, never a `prediction_id` (the L3 form of Law 1, gated).
+  `corpus/compute_engine_scorecard.py` reads the frozen `resolutions` (+ re-joins `predictions` for the
+  claim `value`/`confidence`, + derives every naive baseline from the frozen `outcomes` — `resolutions`
+  carries neither) and scores four metric families per slice: **skill** = `1 − metric_engine/metric_naive`
+  vs a **declared naive baseline** (`corpus/scorecard_registry.py` — 2 promoted from the backtests, the rest
+  declared canonical: recent-form-forward, pool-mean, closed-form random-permutation `(n²−1)/(3n)`, .500
+  win-rate; the interval band is `skill_kind=na` — calibration is its lens); **calibration** = PIT-uniformity
+  KS + coverage (band) / Brier + PIT (playoff odds); **confidence-honesty (law 2, the headline)** = Spearman
+  of the read's OWN stated confidence-strength vs realized error (honest when negative) for the 5
+  confidence-bearing families, with the 4 without named as law-2 gaps (`measurable_law2=false`, never
+  fabricated); **discrimination** = Spearman(claim, truth). Slices: `overall · week · league · position ·
+  cohort · scoring_key` are model quality (on `inputs_ok ∧ resolved` ONLY) and `inputs_ok · resolution_status
+  · confidence_tier` are the L1 quarantine + reliability, kept SEPARATE (never blended into a model number).
+  Provenance = the scorer's `code_version` + the ledger's `constants_hash` (a re-score = a distinguishable
+  population). Gated by `corpus/check_scorecard.py`; the human Trust Report (`corpus/trust_report.py` →
+  `scope docs/engine improvement/TRUST_REPORT.md`) renders the per-read traffic lights + the pre-registered
+  check + the season/cohort OOS slices. It **judges but does not TUNE** (no constant changed — that is the
+  Tuner, L4) or **PROMOTE** (no suppression packaged — that is the Proposer, L6). The front end does NOT read
+  it (the "what we'd tell a user" line is copy for later; the seam holds).
 
 The scopes are declared by the **`leagues.parquet` registry** (`league_id · season · scoring_key ·
 shape_key · is_mine · onboarded_at · pilot_cohort`), built by `shared/league_registry.py` as a projection

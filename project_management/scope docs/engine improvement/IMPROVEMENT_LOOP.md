@@ -135,7 +135,8 @@ pattern.
 > `player_weekly_pts_canonical` (for the band); (b) `pit` is the unifier but ONLY where a distribution is
 > stated (interval + probability) — point/ordinal/direction get `pit=null`, no fabricated sigma.
 > **Law 1 holds across the entity split: `resolutions` carries primitives, NEVER a verdict / aggregate
-> score / suppress column** — the scorer (L3, Session 5) is the first thing that judges. **NEXT = L3.**
+> score / suppress column** — the scorer (L3, Session 5) is the first thing that judges. **L3 is now BUILT
+> (Session 5) — see the L3 status marker below. NEXT = L4 (the Tuner).**
 >
 > **STATUS — `predictions` is DONE (Session 4a):** the entity, its provenance
 > scaffolding (constants snapshot + `constants_hash`, versioned `inputs_ok`), and the read→claim reshape
@@ -237,6 +238,25 @@ process, not outcome — encoded, not just intended.
 ---
 
 ## L3 — The Scorer → `compute_engine_scorecard.py` → `derived/engine_scorecard_{season}`
+
+> **STATUS — L3 BUILT (Session 5, 3 commits): the first measurement the project has ever taken.**
+> `corpus/compute_engine_scorecard.py` scores the frozen `resolutions` into `engine_scorecard_{season}`
+> (3,518 aggregate slice-verdicts over the 6 seasons) — **skill** vs a declared naive baseline
+> (`corpus/scorecard_registry.py`), **calibration** (PIT-KS/coverage/Brier), **confidence-honesty (law 2)**,
+> **discrimination** — sliced `overall · week · league · position · cohort · scoring_key` (model quality, on
+> `inputs_ok ∧ resolved`) + `inputs_ok · resolution_status · confidence_tier` (quarantine + reliability,
+> never blended). Gated green-with-teeth by `corpus/check_scorecard.py`; the human **Trust Report**
+> (`corpus/trust_report.py` → `TRUST_REPORT.md`). **Grounding corrections vs the block below:** (a)
+> `resolutions` carries NEITHER `confidence` NOR any naive baseline → the scorer re-joins `predictions` +
+> derives naives from `outcomes`; (b) only 2 reads had a baseline to *promote* (player_signal→`naive_ppg`,
+> playoff-odds→0.25 Brier), the rest are *declared* canonical, and the band is `skill=na` (calibration is its
+> lens). **Findings (reported, NOT tuned):** projection optimism is real + stable (`production_vor` loses to
+> carry-recent-forward every season; the band under-covers ~0.55 vs 0.80); the measurement reads HOLD
+> out-of-sample; confidence-honesty is MIXED — playoff-odds/true-rank honest, the band's `ros_cv` is
+> **INVERTED**, positional_depth's `spectrum_pos` doesn't sort, 4 reads state no confidence. Law 1 STRUCTURAL
+> (judges distributions, never a `prediction_id`); report-don't-tune / don't-promote held; seam held. **The
+> HTML dashboard is deferred to a fast-follow "Session 5b" (the markdown Trust Report is the must-have).
+> NEXT = L4 (the Tuner).**
 
 Per `(read × slice × week)`, from `resolutions`:
 
@@ -393,8 +413,8 @@ when the season starts.**
 | **1** | **L0 keying** — `league_id` + `scoring_key`, league registry, partition derived parquet **by league**, split `ros_outcome_shape` (fixes audit S1.3 / S3.1 / S3.2) | **Blocks everything.** And now it's ~10 leagues, not 2 — the partitioning also dodges the O(n²) write. |
 | **2** | **Corpus harvester** — BFS crawl (`_manager_leagues` + `classify_league`, already built) + corpus registry + the **shape matrix** (superflex, division, custom scoring, 12-team) | The asset. See [`LEAGUE_CORPUS.md`](./LEAGUE_CORPUS.md). |
 | **3** | **L2 ledger schema, populated by backfill** (`served=false`) + `outcomes` + `compute_resolutions` · **include the `prompt_version` column now** (free here, expensive later) | The schema the live path will reuse verbatim. |
-| **4** | **L3 scorer** + trust report | **First real measurement the project has ever taken.** n=hundreds of team-seasons, thousands of matchups. |
-| **5** | **L4 tuner** — constant registry + season-wise **and** league-wise holdout + retune all five constants OOS | The payoff. Expect regressions; that's the point. |
+| **4 ✅** | **L3 scorer** + trust report **(DONE — Session 5)** | **First real measurement the project has ever taken.** 3,518 slice-verdicts; projection optimism confirmed, measurement reads hold, confidence-honesty mixed (band `ros_cv` inverted). HTML dashboard → fast-follow 5b. |
+| **5** | **L4 tuner** — constant registry + season-wise **and** league-wise holdout + retune all five constants OOS **(NEXT)** | The payoff. Expect regressions; that's the point. The scorer hands it the worst skill/confidence-honesty slices as targets. |
 | **6** | *(reactive)* **Fix what the corpus broke.** Real superflex / division / custom-scoring leagues hitting synthetic-gated code **will** find bugs. Budget the session. | Better in July than in someone's live league in week 6. |
 
 ### Track B — live, at kickoff · *a small delta, not a build*
