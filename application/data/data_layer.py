@@ -1477,6 +1477,58 @@ def corpus_two_way_flags_exists() -> bool:
     return _corpus_two_way_flags_path().exists()
 
 
+# --- Predictions ledger (Improvement-Loop L2, Session 4a) ---
+# The first L2 entity: every engine read reshaped into an explicit, immutable CLAIM row — "what did the
+# engine predict, and how confident was it?". One file per season holding ALL leagues' claims for that
+# season; `league_id` is nullable (null for the scoring-scoped `ros_player_band`, set for the 5
+# league-scoped reads). Grain is one row per (read, subject, as_of_week) claim family. This session
+# backfills the frozen corpus spine as `served=false` reconstructions; the live 2026 path reuses the
+# SAME columns with `served=true`. APPEND-ONLY + IMMUTABLE by `prediction_id` (which folds in
+# `code_version`, so a spine recompute under new constants writes a distinguishable parallel population
+# instead of overwriting) — the one thing this entity must make impossible is a silent overwrite.
+# Law 1 is structural: this entity holds claims only — no grade / verdict / resolution column exists
+# (the scorer, Session 5, is the first thing that judges). See corpus/backfill_predictions.py (writer),
+# corpus/check_predictions.py (gate), corpus/constants_snapshot.py (the `constants_hash` provenance).
+def _predictions_path(season: int) -> Path:
+    return _SNAPSHOT_DIR / "derived" / "ledger" / f"predictions_{season}.parquet"
+
+
+def write_predictions(df: pl.DataFrame, season: int) -> None:
+    """Append only genuinely-new claim rows to the season's ledger (idempotent by `prediction_id`).
+
+    Immutable-append, mirroring `write_team_news_raw`: the batch is de-duplicated on `prediction_id`,
+    then any `prediction_id` already on disk is dropped, so the file only GROWS — a re-run under the
+    same `code_version` (⇒ same ids) appends nothing, and a re-run under a new `code_version` (⇒ new
+    ids) appends a parallel population while keeping the old. Concat is diagonal so a later schema tweak
+    doesn't break the append. Never overwrites an existing row.
+    """
+    path = _predictions_path(season)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df = df.unique(subset="prediction_id", keep="first")
+    if path.exists():
+        existing = pl.read_parquet(path)
+        df = df.filter(~pl.col("prediction_id").is_in(existing["prediction_id"]))
+        df = pl.concat([existing, df], how="diagonal")
+    df.write_parquet(path)
+
+
+def read_predictions(season: int, *, league_id=None, read: str | None = None) -> pl.DataFrame:
+    """Read a season's prediction claims, optionally filtered to one league and/or one read.
+
+    `league_id` filters to that league's rows (the scoring-scoped band, whose `league_id` is null, is
+    excluded by an equality filter — use `read="ros_player_band"` to reach the band population)."""
+    df = pl.read_parquet(_predictions_path(season))
+    if league_id is not None:
+        df = df.filter(pl.col("league_id") == str(league_id))
+    if read is not None:
+        df = df.filter(pl.col("read") == read)
+    return df
+
+
+def predictions_exists(season: int) -> bool:
+    return _predictions_path(season).exists()
+
+
 # --- League registry (Improvement-Loop L0 keying) ---
 # The single source of truth for "which leagues exist and how each is keyed", replacing the implicit
 # config.SLEEPER_LEAGUE_ID single-league assumption (audit S1.3 — league #2 silently overwriting #1).
