@@ -1,6 +1,53 @@
 # STATUS
 
-**Last updated:** 2026-07-16 (**BACKEND — MATCHED DIVISION SEEDING ACTIVATED (Improvement-Loop Session 3e, 2
+**Last updated:** 2026-07-16 (**BACKEND — L2 LEDGER, PART 1: the `predictions` entity built + backfilled
+`served=false` across the 270 spined league-seasons (Improvement-Loop Session 4a, 3 commits): every frozen
+read reshaped into an immutable, provenance-stamped CLAIM row — the ledger's first entity.** The 5-read
+spine + scoring-scoped band were computed, but the engine's *claims* were trapped inside per-read parquets
+with no record of what each read predicted or how confident it was. L2 turns each read into an explicit,
+immutable claim. The schema defined here is the exact one the live 2026 path reuses (`served=true` + an L1
+flag on the same columns). **C1 — schema + provenance scaffolding.** New immutable append-only
+`predictions_{season}` under `derived/ledger/` (`data_layer.write_predictions`/`read_predictions` —
+diagonal-concat append-only-of-new by `prediction_id`, never overwrite; the `team_news_raw` precedent); a
+pinned **constants snapshot** (`corpus/constants_snapshot.py`) of the full 22-constant vector the 6 reads +
+consensus consume, hashed per row (`constants_hash=a3d01b8e5f4d5131`) with a cross-check gate that reddens
+on drift; a **versioned `inputs_ok`** derivation (`corpus/inputs_ok.py`, `INPUTS_OK_THRESHOLDS`
+v2026-07-16) from four frozen integrity signals (manifest `filter_result`/`id_resolution_pct`, the
+degenerate flag, the `join_season` remainder rate), thresholds set STRICTER than selection (id≥98 vs the
+90 selection floor; remainder≤0.08 vs the 0.15 harvest bound) so **4 marginal league-seasons genuinely
+resolve `inputs_ok=false`** — real offline coverage of the `false` path, not the blanket-true trap. **C2 —
+the read→claim mapping** (`corpus/predictions_map.py` + driver `corpus/backfill_predictions.py`): **9 claim
+families** across 6 reads (production_vor→point · band→interval · player_signal→point+direction ·
+true_rank→ordinal · positional_depth→point · bracket_odds→playoff/wins/seed), with **typed sidecars** over
+the flat §L2 schema (`value` XOR `value_str` by claim_type; `lo`/`hi`/`sigma` present iff interval —
+`sigma`=band `ros_sigma` so 4b's `pit=Φ((truth−center)/sigma)` reads a typed scale and never backs it out
+of BULL_Z; a canonical Float64 `confidence` + `confidence_label` naming the signal, `confidence_json`
+audit-only, never the scorer's primary read). Backfilled **2,893,834 claims** over the 270 (221 matched +
+48 generalization + is_mine 2025), `served=false`, `prompt_version`/`model`/`created_at`=null; the band
+emitted **ONCE per (scoring_key, season)** with `league_id=null` (20 populations, not re-emitted per league
+— 4b join-safety). Budget: 25.1s, per-season files 3.3–13.0 MB (~50 MB total), incremental re-run ≈0. **C3
+— `check_predictions` gate, GREEN with teeth (26 checks, all prove-bites fire):** coverage (every league +
+band-once-per-scoring-key + sample family counts == source non-null) · schema + typing-XOR + **Law 1
+structural** (no grade/verdict/resolution column exists) · immutability (same-`code_version` re-run 0 new;
+new-`code_version` writes a parallel population, both retained) · provenance bites (drift reddens on a
+changed constant; `inputs_ok` false path exercised) · determinism (rebuild==persisted value-identical incl.
+a stable `prediction_id`, rebuilt with the PERSISTED `code_version` so it's HEAD-independent) · confidence
+honesty. **Findings (report, don't tune / don't grade):** (1) **BULL_Z drift** — STATUS narration recorded
+`1.645`, the live code is **`1.44`**; the snapshot pins the ACTUAL 1.44 and the gate documents the
+discrepancy — **NOT fixed** (changing a constant is the Tuner's job). (2) **`prediction_id` key extended**
+— added `season` + `claim_type` to the §L2 key `(scope, read, subject_id, as_of_week, horizon,
+code_version)`: `claim_type` because a read emits ≥3 families per subject-week (bracket_odds), `season`
+because the scoring-scoped band recurs yearly — without them ids collide (caught by the gate's uniqueness
+check, fixed). (3) **No-native-confidence flag list** — `production_vor`, `bracket_odds` wins/seed, **and**
+`player_signal` direction carry null confidence (Law-2 confidence-honesty is unmeasurable for these until a
+signal is defined) — FLAGGED, not fabricated. **Value-identity proven** — every claim value is byte-equal
+to its source read across all 9 families (a reshape that moved a number would be a bug). **Seam held —
+`queries.js`/views/reads/substrate untouched** (`data_layer` additive-only, +52 lines; the ledger is
+internal loop plumbing, no view consumes it, nothing observable in the app). **Next — Session 4b:
+`outcomes_{season}` + `compute_resolutions.py` (the `predictions ⋈ outcomes` join + grading primitives
+`error`/`abs_error`/`in_band`/`pit`/`brier`/`rank_error`) from the frozen `join_season` + `league_settings`;
+PIT the unifying primitive; still NO single-claim verdicts (the scorer, Session 5, is the first judge) —
+SCOPED, NOT STARTED.**) — Prior: **BACKEND — MATCHED DIVISION SEEDING ACTIVATED (Improvement-Loop Session 3e, 2
 commits): the 11 matched division leagues now seed division-aware — the last 3d latent closed, bounded to
 their `bracket_odds`.** 3d activated division seeding on the 14 generalization division leagues but
 deliberately LEFT the 11 matched division leagues flat-seeded to protect its byte-identity proof of the frozen

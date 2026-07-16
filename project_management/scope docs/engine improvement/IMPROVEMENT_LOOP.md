@@ -123,6 +123,20 @@ Two append-only entities, plus their join. These are the first entities in the p
 semantics are **immutable** — following `market_values` and `team_news_raw`, which already prove the
 pattern.
 
+> **STATUS — L2 PARTIALLY BUILT.** **`predictions` is DONE (Session 4a):** the entity, its provenance
+> scaffolding (constants snapshot + `constants_hash`, versioned `inputs_ok`), and the read→claim reshape
+> are built and backfilled `served=false` across the 270 spined league-seasons (2,893,834 claims), gated
+> green by `corpus/check_predictions.py`. Two schema refinements landed vs the block below: (a) the
+> `prediction_id` key adds **`season`** and **`claim_type`** (the scoring-scoped band recurs yearly, and
+> one read emits several claim families per subject-week — without them ids collide); (b) the flat `value`
+> / `confidence` columns gained **typed sidecars** — `value_str` (categorical `direction`), `sigma`
+> (interval scale, so PIT reads a typed param not BULL_Z), and `confidence_label` / `confidence_json`
+> (canonical numeric confidence + which signal it is + an audit-only payload). `production_vor` +
+> `bracket_odds` wins/seed + `player_signal` direction have **no native confidence** — flagged, not
+> fabricated. **`outcomes` + `resolutions` are Session 4b (NOT started).** The `predictions` schema below
+> is otherwise as-built (the corpus fills only the 5 spine reads + `ros_player_band`; the AI reads and
+> `market_vor` in the `read` enum are the live-path future).
+
 ### `predictions_{season}` — one row per *claim the engine made*
 
 ```

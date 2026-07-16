@@ -420,6 +420,22 @@ Two storage patterns:
   Paths `snapshots/sleeper/<season>/league/<league_id>/…` and
   `snapshots/nfl_sleeper_weekly_joined/league/<league_id>/…`. This is what lets a second league be pulled
   into a season without overwriting the first — the collision the corpus harvest sits on.
+- **Ledger (L2, Improvement-Loop Session 4a)** — `predictions_{season}` (`snapshots/derived/ledger/`), an
+  **immutable, append-only** entity: one row per *claim the engine made* (`write_predictions` diagonal-
+  concats append-only-of-new by `prediction_id`, never overwrites — the `team_news_raw` precedent). One
+  file per season holds ALL leagues' claims; `league_id` is **nullable** (null for the scoring-scoped
+  `ros_player_band` claims, set for the 5 league-scoped reads). `prediction_id` is a stable sha1 over
+  `(scope[league_id|scoring_key], season, read, subject_id, as_of_week, horizon, claim_type,
+  code_version)` — folding `code_version` in means a spine recompute under different constants writes a
+  distinguishable **parallel population** instead of overwriting. Provenance: `code_version` (git sha),
+  `constants_hash` (a pinned snapshot of the 22 tuning constants the 6 reads + consensus consume,
+  `corpus/constants_snapshot.py`, gated for drift), `prompt_version`/`model` (null in the corpus),
+  `inputs_ok` (a **versioned** derivation, `corpus/inputs_ok.py`, from four frozen integrity signals —
+  manifest `filter_result`/`id_resolution_pct`, the degenerate flag, the `join_season` remainder rate),
+  `served` (`false` for the backfill; the live 2026 path flips it `true` on the same columns).
+  Backfilled by `corpus/backfill_predictions.py` (reshape only — no fetch/recompute), gated by
+  `corpus/check_predictions.py`. **Law 1 is structural: no grade/verdict/resolution column exists** — the
+  scorer (Session 5) is the first judge. Session 4b adds `outcomes_{season}` + `resolutions`.
 
 The scopes are declared by the **`leagues.parquet` registry** (`league_id · season · scoring_key ·
 shape_key · is_mine · onboarded_at · pilot_cohort`), built by `shared/league_registry.py` as a projection
