@@ -1,5 +1,5 @@
 """
-backfill_division.py — Session 3d commit 2: activate division-aware playoff seeding on the corpus.
+backfill_division.py — activate division-aware playoff seeding on the corpus (Session 3d C2 + 3e).
 
 3a's teams fetcher dropped `settings.division` (the per-roster division assignment lives only on the
 /rosters endpoint), so every harvested division league was silently seeded FLAT — `_division_map` returns
@@ -8,20 +8,23 @@ The measurement reads still computed and passed mass-integrity (flat seeding sti
 `playoff_teams`), but the seed ORDER — hence the whole made-playoffs distribution — was wrong for a division
 league (standing instruction 7: "artifact exists" ≠ "consumer correct").
 
-This is the ONE sanctioned fetch of Session 3d (a static historical fact for a completed league — near-zero
-drift). It is SCOPED TO THE GENERALIZATION STRATUM (`never_tune`): the 14 generalization division leagues are
-where the any-league division path is CERTIFIED. The 11 matched division leagues are deliberately LEFT FLAT —
-their frozen 3b/3c spine must not move (standing instruction 2); backfilling division onto them would change
-their bracket_odds. So this driver only ever touches generalization teams, and `_division_map` returns None
-for the (untouched, division-column-less) matched teams — matched bracket_odds stays byte-identical.
+The Sleeper fetch is a static historical fact for a completed league (near-zero drift). Session **3d** ran
+this ONLY on the generalization stratum (`never_tune`) — the 14 generalization division leagues were where the
+any-league division path was first CERTIFIED — and deliberately left the 11 matched division leagues flat, to
+protect 3d's byte-identity proof of the frozen tuning spine. Session **3e** closes that latent: it runs the
+same driver with `--stratum matched`, activating division seeding on the 11. That CHANGES numbers by design —
+bounded to those 11 leagues' `bracket_odds` (the other 4 reads are division-independent), proven byte-identical
+everywhere else. `--stratum` selects which division leagues to (re)activate; every stratum uses the identical
+additive path.
 
 Per league: additively persist `division` onto the existing teams entity (sleeper.backfill_division — a
 left-join that preserves the name columns byte-identical) → recompute `bracket_odds` with the league-stable
 seed, now division-aware. Idempotent + per-league failure isolated + budget reported.
 
 Usage:
-    python3 -m application.data.corpus.backfill_division --dry-run   # fetch + activate, no bracket recompute
-    python3 -m application.data.corpus.backfill_division             # the 14 generalization division leagues
+    python3 -m application.data.corpus.backfill_division --dry-run                 # fetch + activate, no recompute
+    python3 -m application.data.corpus.backfill_division                           # 14 generalization div leagues (3d)
+    python3 -m application.data.corpus.backfill_division --stratum matched         # 11 matched div leagues (3e)
 """
 import argparse
 import contextlib
@@ -43,12 +46,12 @@ def _quiet():
         yield
 
 
-def targets(limit=None) -> list[dict]:
-    """The generalization division leagues (manifest has_divisions ∧ stratum==generalization), deterministic
-    order. Scoped to generalization on purpose — matched division leagues stay frozen-flat (see module doc)."""
+def targets(stratum="generalization", limit=None) -> list[dict]:
+    """A stratum's division leagues (manifest has_divisions ∧ the given stratum), deterministic order.
+    Defaults to `generalization` (3d's behavior); `matched` selects the 11 matched division leagues (3e)."""
     man = data_layer.read_corpus_manifest()
     rows = [r for r in man.iter_rows(named=True)
-            if r["stratum"] == "generalization" and bool(r["has_divisions"])]
+            if r["stratum"] == stratum and bool(r["has_divisions"])]
     rows.sort(key=lambda r: (int(r["season"]), str(r["league_id"])))
     return rows[:limit] if limit else rows
 
@@ -59,9 +62,9 @@ def _mass_ok(masses, playoff_teams, tol=0.02) -> bool:
     return all(abs(m - playoff_teams) <= tol for m in masses)
 
 
-def run(limit=None, dry_run=False, throttle: float = 0.1) -> dict:
+def run(stratum="generalization", limit=None, dry_run=False, throttle: float = 0.1) -> dict:
     sleeper.set_throttle(throttle)
-    tgts = targets(limit)
+    tgts = targets(stratum, limit)
     t0 = time.time()
     div_status = defaultdict(int)      # added/refreshed/unchanged/no-divisions/absent
     recomputed = 0
@@ -106,6 +109,7 @@ def run(limit=None, dry_run=False, throttle: float = 0.1) -> dict:
             print(f"      ✗ ERROR (isolated, will retry on re-run): {str(exc)[:160]}")
 
     report = {
+        "stratum": stratum,
         "targets": len(tgts), "division_status": dict(div_status),
         "activated": activated, "bracket_recomputed": recomputed,
         "mass_bad": mass_bad, "errored": errored,
@@ -117,7 +121,7 @@ def run(limit=None, dry_run=False, throttle: float = 0.1) -> dict:
 
 
 def _print_report(rep: dict) -> None:
-    print("\n=== division backfill report (generalization stratum) ===")
+    print(f"\n=== division backfill report ({rep.get('stratum', 'generalization')} stratum) ===")
     print(f"  targets={rep['targets']}  division={rep['division_status']}  "
           f"activated={len(rep['activated'])}  bracket recomputed={rep['bracket_recomputed']}")
     print(f"  wall-clock={rep['elapsed_s']}s  timing={rep['timing']}")
@@ -132,12 +136,14 @@ def _print_report(rep: dict) -> None:
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Activate division-aware seeding on the gen division leagues (3d C2).")
+    ap = argparse.ArgumentParser(description="Activate division-aware seeding on a stratum's division leagues (3d/3e).")
+    ap.add_argument("--stratum", default="generalization", choices=["generalization", "matched", "mine"],
+                    help="which stratum's division leagues to (re)activate (default generalization — 3d)")
     ap.add_argument("--limit", type=int, default=None, help="first N targets (deterministic order)")
     ap.add_argument("--dry-run", action="store_true", help="fetch + activate _division_map, skip bracket recompute")
     ap.add_argument("--throttle", type=float, default=0.1, help="min gap between Sleeper calls (s)")
     a = ap.parse_args()
-    run(limit=a.limit, dry_run=a.dry_run, throttle=a.throttle)
+    run(stratum=a.stratum, limit=a.limit, dry_run=a.dry_run, throttle=a.throttle)
 
 
 if __name__ == "__main__":
