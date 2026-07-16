@@ -9,5 +9,6 @@ export default defineConfig({
     esbuildOptions: { target: 'esnext' },
   },
   build: { target: 'esnext' },
-  server: { port: 5173 },
+  // host: true binds 0.0.0.0 so other devices on the LAN (e.g. your phone) can reach it.
+  server: { host: true, port: 5173 },
 });
