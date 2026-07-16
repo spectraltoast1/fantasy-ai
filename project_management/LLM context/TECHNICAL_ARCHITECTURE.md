@@ -435,7 +435,36 @@ Two storage patterns:
   `served` (`false` for the backfill; the live 2026 path flips it `true` on the same columns).
   Backfilled by `corpus/backfill_predictions.py` (reshape only — no fetch/recompute), gated by
   `corpus/check_predictions.py`. **Law 1 is structural: no grade/verdict/resolution column exists** — the
-  scorer (Session 5) is the first judge. Session 4b adds `outcomes_{season}` + `resolutions`.
+  scorer (Session 5) is the first judge.
+- **Ledger (L2, Improvement-Loop Session 4b)** — `outcomes_{season}` + `resolutions_{season}` (same
+  `snapshots/derived/ledger/` dir, same immutable append-only pattern: `write_outcomes`/`write_resolutions`
+  diagonal-concat append-only-of-new by `outcome_id`/`resolution_id`).
+  - `outcomes_{season}` — one row per **realized fact** derived from the FROZEN `join_season`/`matchups`/
+    `league_settings` (never a re-fetch); no `code_version`/`constants_hash` (realized truth, not model
+    output). `league_id` is nullable **by fact scope**: league-scoped roster facts (`roster_wins`/
+    `roster_total_pts`/`roster_final_standing`/`roster_made_playoffs`/`roster_position_pts`) carry it;
+    scoring-scoped player facts don't. **Two player-point series, because `scoring_key` is only a
+    RECEPTION-tier classifier** (two same-key leagues genuinely differ on INT penalty / bonuses /
+    first-down points): `player_weekly_pts` is **league-scoped** (each league's full-scoring
+    `sleeper_points`, the exact truth a league claim grades on) and `player_weekly_pts_canonical` is
+    **scoring-scoped** (`_scoring.actual_points_expr` under the canonical profile — league-independent,
+    the basis `ros_player_band` was projected under). Standings/made-playoffs REUSE `compute_bracket_sim`'s
+    division-aware seeding at `reg_end`; realized playoff mass == slot count is gated. Built by
+    `corpus/backfill_outcomes.py`.
+  - `resolutions_{season}` = `predictions ⋈ outcomes` (`corpus/compute_resolutions.py`), one row per claim
+    (1:1 on `prediction_id`), horizon-correct, carrying the claim's provenance + the **grading primitives**:
+    `error`/`abs_error` (point), `in_band` + `pit` (interval; `pit=Φ((truth−center)/sigma)`), `brier` + `pit`
+    (probability; `pit` = the deterministic randomized PIT of a Bernoulli, Uniform under calibration),
+    `rank_error` (ordinal; integer for `true_rank`, fractional for `avg_seed`), `direction_hit` (direction).
+    **PIT is the unifier but only where a distribution is stated** — point/ordinal/direction get `pit=null`
+    (no fabricated sigma). Unresolved claims are kept with a reason, never dropped. Gated by
+    `corpus/check_resolutions.py`.
+  - **The primitives-not-verdicts boundary is the load-bearing invariant across the entity split:** grading
+    columns are FORBIDDEN in `predictions` (4a's `_FORBIDDEN_COLS`) and REQUIRED in `resolutions` — but a
+    per-row `pit`/`error` is a **primitive**, not a judgement. `resolutions` emits **no aggregate score, no
+    per-read pass/fail, no `claim_correct`/`suppress`** (4b's `check_resolutions` asserts that forbidden
+    verdict set is absent). The scorer (L3, Session 5) is the first thing that judges, and only over
+    distributions.
 
 The scopes are declared by the **`leagues.parquet` registry** (`league_id · season · scoring_key ·
 shape_key · is_mine · onboarded_at · pilot_cohort`), built by `shared/league_registry.py` as a projection
