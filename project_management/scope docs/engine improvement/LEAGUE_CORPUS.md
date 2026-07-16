@@ -19,7 +19,18 @@ retired (six-season nfl_stats schema unified to 166 cols); and the one degenerat
 via a **reg_end sanity floor** (garbled `playoff_week_start` → sane default) + re-join from persisted raw —
 so the **matched spine is now 221/221 (0 flagged)**. A pre-existing `bracket_sim._standings_as_of`
 float-sum-order non-determinism (surfaced by that league) was fixed, proven equivalence-preserving (0 numbers
-moved across the persisted corpus).**
+moved across the persisted corpus).** → **GENERALIZATION SPINE COMPUTED (Session 3d, 2026-07-15): the 48
+`never_tune` generalization leagues computed through the same 5-read spine (`*_exp` backfilled onto their
+joins → §1 Quality lit for free). The synthetic-gated shape paths met real shapes and were **crash-clean**;
+the catalog found silent gaps: (1) 14/14 division leagues were silently flat-seeded (3a's teams fetcher
+dropped `settings.division`) → fixed by persisting `division` on `fetch_teams` + a bounded re-harvest
+(`backfill_division.py`) activating division-aware seeding on the 14 gen leagues (the 11 matched division
+leagues stay flat — frozen tuning spine); (2) one 2023 gen league (garbled `playoff_week_start=0`) re-joined
+from persisted raw via the inherited `reg_end` floor. **Superflex pools, exotic lineup slot codes, and all 8
+custom scoring keys validated clean** on real data — no shape-code fix needed (the SF pool + superflex
+caveats retired). `check_spine` extended to gate **both strata (269 leagues) + `never_tune`-intact**, green
+with teeth; matched + is_mine spine **byte-identical (0/666)**. **The corpus measurement spine is complete
+across matched + generalization → the L2 ledger is next.**
 **Companions:** [`IMPROVEMENT_LOOP.md`](./IMPROVEMENT_LOOP.md) · [`PILOT_2026.md`](./PILOT_2026.md) ·
 [`SESSION_0_5_CORPUS_SELECTION.md`](./SESSION_0_5_CORPUS_SELECTION.md) ·
 [`LLM context/SPIKE_CORPUS_FINDINGS.md`](../LLM%20context/SPIKE_CORPUS_FINDINGS.md) ·

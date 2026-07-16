@@ -235,15 +235,34 @@ def fetch_players(force: bool = False) -> None:
     print(f"  players: {len(rows)} players → cache/sleeper/players.parquet")
 
 
-def fetch_teams(league_id: str, year: int) -> None:
-    """Fetch league users + rosters and write a roster_id → names map for the season.
+def _division_by_roster(rosters) -> dict:
+    """roster_id → division label (int) from the /rosters payload's per-roster `settings.division`.
 
-    Produces teams_{year}.parquet (roster_id, team_name, owner_name, owner_id) via
+    Sleeper keeps the division ASSIGNMENT on the rosters endpoint (the league object carries only the
+    division COUNT). This is the map `compute_bracket_sim._division_map` / `_seed_table` need to seed
+    division winners ahead of wildcards. Absent/None for a roster with no division; empty for a flat
+    (no-division) league.
+    """
+    out = {}
+    for r in rosters:
+        div = (r.get("settings") or {}).get("division")
+        if div is not None:
+            out[int(r["roster_id"])] = int(div)
+    return out
+
+
+def fetch_teams(league_id: str, year: int) -> None:
+    """Fetch league users + rosters and write a roster_id → names + division map for the season.
+
+    Produces teams_{year}.parquet (roster_id, team_name, owner_name, owner_id, division) via
     data_layer. `team_name` is the manager's custom team name (users[].metadata.team_name);
     it is null when a manager never set one — the consumer falls back to `owner_name`
     (their Sleeper display_name). `owner_id` is the Sleeper user_id — the identity join
     key the cross-league manager dossiers (DECISION_READS.md §7) key on; previously
-    dropped, it's read here transiently for the name lookup already.
+    dropped, it's read here transiently for the name lookup already. `division` is the
+    per-roster division label (null for a flat league) — the bracket sim seeds division
+    winners ahead of wildcards when ≥ 2 divisions are present (Session 3d — previously the
+    assignment was dropped and division leagues were silently seeded flat).
     """
     print(f"Fetching Sleeper teams for league {league_id} ({year})...")
 
@@ -258,6 +277,7 @@ def fetch_teams(league_id: str, year: int) -> None:
         )
         for u in users
     }
+    divisions = _division_by_roster(rosters)
 
     rows = []
     for r in rosters:
@@ -267,11 +287,48 @@ def fetch_teams(league_id: str, year: int) -> None:
             "team_name": team_name,
             "owner_name": display_name,
             "owner_id": r.get("owner_id"),
+            "division": divisions.get(int(r["roster_id"])),
         })
 
     df = pl.from_dicts(rows)
     data_layer.write_sleeper_teams(df, year, league_id=league_id)
     print(f"  teams: {len(df)} rosters → snapshots/sleeper/{year}/league/{league_id}/teams_{year}.parquet")
+
+
+def backfill_division(league_id: str, year: int) -> str:
+    """Additively persist the per-roster `division` onto an ALREADY-harvested teams entity (Session 3d).
+
+    3a's teams fetcher dropped `settings.division` (it lives only on the rosters endpoint), so every
+    harvested division league was silently seeded FLAT. This backfills the assignment for one league
+    WITHOUT re-fetching names: it reads the existing teams parquet and left-joins the freshly-fetched
+    roster_id → division map, so `team_name`/`owner_name`/`owner_id` stay byte-identical and only the
+    additive `division` column is (re)written. Idempotent — rewrites only when the division actually
+    changes. Returns 'added' / 'refreshed' / 'unchanged' / 'no-divisions' / 'absent'.
+    """
+    if not data_layer._sleeper_teams_path(year, league_id).exists():
+        return "absent"
+    teams = data_layer.read_sleeper_teams(year, league_id=league_id)
+    rosters = _get_json(f"{_SLEEPER_BASE}/league/{league_id}/rosters")
+    dmap = _division_by_roster(rosters)
+    if len(set(dmap.values())) < 2:
+        return "no-divisions"   # a flat league (or a garbled single-division payload) — leave it flat
+
+    base = teams.drop("division") if "division" in teams.columns else teams
+    new_div = [dmap.get(int(rid)) for rid in base["roster_id"].to_list()]
+    out = base.with_columns(pl.Series("division", new_div, dtype=pl.Int64))
+
+    # Additive-only guarantee: no row added/removed, every pre-existing (non-division) column byte-identical.
+    if out.height != teams.height:
+        raise RuntimeError(f"backfill_division {league_id} {year}: row count {teams.height}→{out.height}")
+    moved = [c for c in base.columns if not out[c].equals(teams.select(c).to_series())]
+    if moved:
+        raise RuntimeError(f"backfill_division {league_id} {year}: pre-existing columns moved {moved}")
+
+    had = "division" in teams.columns
+    if had and out["division"].equals(teams["division"]):
+        return "unchanged"
+    data_layer.write_sleeper_teams(out, year, league_id=league_id)
+    return "refreshed" if had else "added"
 
 
 def fetch_roster_positions(league_id: str, year: int) -> None:

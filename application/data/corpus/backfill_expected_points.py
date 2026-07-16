@@ -1,9 +1,10 @@
 """
 backfill_expected_points.py — Session 3c commit 2: light up §1 Quality across the matched corpus.
+Session 3d reuses it verbatim (`--stratum generalization`) to light Quality on the 48 generalization joins.
 
-Two ADDITIVE steps over the matched 2020–2024 leagues (2025 already carries *_exp from its post-join build —
-left entirely untouched here). Runs on the C1-augmented `nfl_stats` (which now carries the 14 *_exp
-components for every season):
+Two ADDITIVE steps over the stratum's 2020–2024 leagues (2025 already carries *_exp from its post-join build —
+left entirely untouched here; verified: gen 2025 joins carry 14/14 *_exp, 2020–24 carry 0/14). Runs on the
+C1-augmented `nfl_stats` (which now carries the 14 *_exp components for every season):
 
   1. APPEND *_exp onto each league's `join_season` — read the existing join, left-join the augmented
      `nfl_stats` *_exp on **(player_id/gsis_id, week)** + fill_null(0.0), write back. Keying on the gsis
@@ -28,6 +29,7 @@ Idempotent + per-league failure isolated (the compute_spine/harvest precedent). 
 Usage:
     python3 -m application.data.corpus.backfill_expected_points --pilot 3   # small sample + budget
     python3 -m application.data.corpus.backfill_expected_points             # all matched 2020–2024
+    python3 -m application.data.corpus.backfill_expected_points --stratum generalization   # 3d: gen joins
 """
 import argparse
 import contextlib
@@ -53,11 +55,12 @@ def _quiet():
         yield
 
 
-def targets(limit=None) -> list[dict]:
-    """Matched manifest rows for the backfill seasons (2020–24), deterministic order (season, league_id)."""
+def targets(stratum="matched", limit=None) -> list[dict]:
+    """A stratum's manifest rows for the backfill seasons (2020–24), deterministic order (season, league_id).
+    Defaults to `matched` (3c's behavior); `generalization` lights §1 Quality on the gen joins (3d)."""
     man = data_layer.read_corpus_manifest()
     rows = [r for r in man.iter_rows(named=True)
-            if r["stratum"] == "matched" and int(r["season"]) in BACKFILL_SEASONS]
+            if r["stratum"] == stratum and int(r["season"]) in BACKFILL_SEASONS]
     rows.sort(key=lambda r: (int(r["season"]), str(r["league_id"])))
     return rows[:limit] if limit else rows
 
@@ -93,8 +96,8 @@ def _append_exp_to_join(lid: str, season: int) -> str:
     return "refreshed" if had else "added"
 
 
-def run(limit=None, pilot=None) -> dict:
-    tgts = targets(pilot) if pilot else targets(limit)
+def run(stratum="matched", limit=None, pilot=None) -> dict:
+    tgts = targets(stratum, pilot) if pilot else targets(stratum, limit)
     t0 = time.time()
     join_status = defaultdict(int)          # added/refreshed/unchanged/absent
     signal_recomputed = flagged = 0
@@ -128,6 +131,7 @@ def run(limit=None, pilot=None) -> dict:
             print(f"      ✗ ERROR (isolated, will retry on re-run): {str(exc)[:160]}")
 
     report = {
+        "stratum": stratum,
         "targets": len(tgts), "join_status": dict(join_status),
         "signal_recomputed": signal_recomputed, "flagged": flagged,
         "elapsed_s": round(time.time() - t0, 1),
@@ -139,7 +143,7 @@ def run(limit=None, pilot=None) -> dict:
 
 
 def _print_report(rep: dict) -> None:
-    print("\n=== expected-points backfill report (matched 2020–2024) ===")
+    print(f"\n=== expected-points backfill report ({rep.get('stratum', 'matched')} 2020–2024) ===")
     print(f"  targets={rep['targets']}  join={rep['join_status']}  "
           f"player_signal recomputed={rep['signal_recomputed']}  flagged={rep['flagged']}")
     print(f"  wall-clock={rep['elapsed_s']}s  timing={rep['timing']}")
@@ -152,11 +156,13 @@ def _print_report(rep: dict) -> None:
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Append *_exp to matched joins + re-run player_signal (3c C2).")
+    ap = argparse.ArgumentParser(description="Append *_exp to a stratum's joins + re-run player_signal (3c/3d).")
+    ap.add_argument("--stratum", default="matched", choices=["matched", "generalization", "mine"],
+                    help="which stratum to backfill (default matched — 3c; generalization — 3d)")
     ap.add_argument("--limit", type=int, default=None, help="first N targets (deterministic order)")
     ap.add_argument("--pilot", type=int, default=None, help="first N targets + budget (validate plumbing)")
     a = ap.parse_args()
-    run(limit=a.limit, pilot=a.pilot)
+    run(stratum=a.stratum, limit=a.limit, pilot=a.pilot)
 
 
 if __name__ == "__main__":
