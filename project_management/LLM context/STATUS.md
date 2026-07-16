@@ -1218,3 +1218,11 @@ age/injury/scheme).
 > Built / Unbuilt breakdown (Built Backend · Built Frontend · Unbuilt+Blocked), now lives in
 > `scope docs/READ_BUILD_ORDER.md`. Single source of truth — not duplicated here. The backend
 > hygiene backlog is in `LLM context/710_AUDIT.md`.
+
+> **Multi-league / multi-season frontend — scoped (2026-07-15, not started).** Inspection of the
+> single-league frontend produced a concrete architecture + ordered migration in
+> `scope docs/future work/MULTI_LEAGUE_STORE_MIGRATION.md`. **Locked decisions:** migrate the store
+> from in-browser DuckDB-WASM → server-side **SQLite + HTTP API** *first* (single-league parity), then
+> build the multi-league/season selectors on top (switch-league becomes an API param, not a file swap).
+> Backend content compute for ~10 demo leagues (new `compute_demo_slices.py`) + a `schedule`
+> league-scoping fix are store-agnostic prerequisites. ~8–12 sessions; see the doc for the phase order.
