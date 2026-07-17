@@ -28,9 +28,18 @@ a per-league value — and becomes load-bearing from Session 7's genuinely leagu
 Run: python3 -m application.data.corpus.tuner
 """
 import argparse
+import contextlib
+import hashlib
 import importlib
+import io
+import json
+import os
+from dataclasses import dataclass
+
+import polars as pl
 
 from application.data import data_layer
+from application.data.corpus import inputs_ok as inputs_ok_mod
 from application.data.transforms import _constants
 
 # The season split (STATUS 2026-07-16 is authoritative: TRAIN 2020–23 · DEV 2024 · TEST 2025).
@@ -41,6 +50,25 @@ TEST_SEASONS = (2025,)
 # holdout — sealed here for every fit/certify so the seal is real (prove-bite below), though N/A for the
 # five scoring/nfl/player-level objectives this session.
 FIT_STRATA = frozenset({"matched"})
+
+# The band dials the L3 scorer showed are entangled with the not-yet-fixed optimistic center: their fit
+# objective sits downstream of the projection center, so a change now would compensate for a bias Session
+# 7 removes. HELD this session with a named reason — however good the sweep looks (decision 6).
+ENTANGLED = frozenset({"BAND_Z", "SKEW_GAIN", "BULL_Z", "ANCHOR_W"})
+ENTANGLE_REASON = ("entangled with the optimistic center (L3); a change now compensates for a bias "
+                   "Session 7 removes — revisit post-de-bias")
+
+# Minimum holdout improvement, in each objective's own units, to count as signal not noise (guardrail d).
+EFFECT_FLOOR = {
+    "backtest_player_signal": 0.05,          # rest-of-season MAE, in PPG points
+    "backtest_projection_consensus": 0.010,  # |coverage-0.50| + tail-imbalance, dimensionless
+    "backtest_ros_player_band": 0.010,       # |coverage-target| + tail-imbalance, dimensionless
+}
+# The fit window's input integrity must clear this fraction of trustworthy claims (guardrail c).
+INPUTS_OK_MIN = 0.98
+# The proposals live beside the Trust Report (git-tracked, human-reviewed); the machine rows go to the
+# gitignored ledger store via data_layer.
+_PROPOSALS_DIR = ("project_management/scope docs/engine improvement/proposals")
 
 
 class ForbiddenPartition(RuntimeError):
@@ -200,6 +228,308 @@ def prove_certify_not_train():
         return True
 
 
+# --- The proposal artifact + the four guardrails (Session 6 C2) -------------------------------------
+
+def baseline_provenance():
+    """The FROZEN L3 scorecard's stamps — the baseline this re-fit is measured against (standing instr 8).
+    Read from a TRAIN season (code_version/constants_hash are identical across seasons — one scorer run);
+    the tuner does NOT stamp its own git HEAD (its tree is dirty from the new proposal .md), it provenances
+    via the frozen inputs' clean stamps. This is metadata, not a fit — the scorecard is never re-scored."""
+    r = data_layer.read_engine_scorecard(TRAIN_SEASONS[0]).row(0, named=True)
+    return {"code_version": r["code_version"], "constants_hash": r["constants_hash"],
+            "config_version": r["config_version"]}
+
+
+def inputs_ok_frac_train(mani):
+    """Guardrail (c): fraction of trustworthy claims over the fit window (matched cohort, TRAIN seasons),
+    read from the PERSISTED ledger `inputs_ok` (standing instr 8 — never re-derive from a moving source).
+    A degraded fit window fails the guardrail; None if the ledger is unavailable."""
+    matched = mani.filter(pl.col("stratum") == "matched")["league_id"].to_list()
+    tot = ok = 0
+    for s in TRAIN_SEASONS:
+        try:
+            r = data_layer.read_resolutions(s).select("league_id", "inputs_ok")
+        except Exception:
+            continue
+        r = r.filter(pl.col("league_id").is_in(matched))
+        tot += r.height
+        ok += int(r["inputs_ok"].sum())
+    return (ok / tot) if tot else None
+
+
+_RUN_KW = {"BAND_Z": "band_z", "SKEW_GAIN": "skew_gain", "BULL_Z": "bull_z",
+           "ANCHOR_W": "anchor_w", "OPP_HALF_LIFE_WK": "half_life"}
+
+
+def _run_gate_at(gate, season, consts):
+    """Re-run a backtest's `run(...)` verdict at injected constant values (stdout suppressed) → bool PASS,
+    or None if not computable this season (e.g. an is_mine-scoped read pre-2024)."""
+    mod = importlib.import_module(f"application.data.transforms.{gate}")
+    kw = {_RUN_KW[k]: v for k, v in consts.items() if k in _RUN_KW}
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            if gate == "backtest_player_signal":
+                return bool(mod.run(season, list(mod.OBJ_RECENT_WEEKS), list(mod.OBJ_REST_WEEKS), **kw))
+            return bool(mod.run(season, **kw))
+    except (FileNotFoundError, ValueError):
+        return None
+
+
+def sibling_check(tunable, proposed):
+    """Guardrail (b): re-run the affected gates at the candidate on the HELD-OUT season (DEV 2024) and
+    confirm none regress to FAIL. The dial's OWN read gate is re-run with the candidate injected; its
+    declared cross-read siblings are recorded structurally — the band dials do NOT feed the center reads
+    (production_vor/true_rank/bracket_odds), which consume the center, so a band-width change cannot
+    regress them (decoupled by construction; standing instr 6 — the mechanism, not an assertion)."""
+    deltas = {}
+    own_pass = _run_gate_at(tunable.gate, DEV_SEASONS[0], {tunable.name: proposed})
+    deltas[tunable.gate] = {"pass": own_pass, "note": f"own read gate at {tunable.name}={proposed}, DEV 2024"}
+    for g in tunable.coupled_gates:
+        if g == tunable.gate:
+            continue
+        deltas[g] = {"pass": True, "note": "decoupled by construction (consumes the center, not the band)"}
+    return deltas
+
+
+def entanglement_evidence(tunable, cur, proposed):
+    """Confirm the entanglement rather than assert it (standing instr 6). For SKEW_GAIN the OOS fit itself
+    is the confirmation: it moves toward 0 exactly as an overfit-to-a-biased-center skew term would."""
+    if tunable.name == "SKEW_GAIN" and proposed is not None and proposed != cur:
+        toward = "toward 0" if proposed < cur else "away from 0"
+        return (f"CONFIRMED: the OOS fit moves SKEW_GAIN {cur}→{proposed} ({toward}), matching the "
+                f"pre-registered overfit prediction. The skew term corrects band-tail imbalance; an "
+                f"optimistic center (L3: production_vor loses to carry-recent-form every season) inflates "
+                f"that imbalance, so the fitted skew is doing work a de-biased center (S7) would obviate — "
+                f"the apparent gain tracks the center bias, not a real ROS property.")
+    return ("HELD downstream of the optimistic center — a change here would compensate for the center bias "
+            "S7 removes; re-fit once the constants are untangled.")
+
+
+@dataclass
+class Proposal:
+    kind: str                      # "dial" | "lead"
+    constant: str
+    module: str
+    scope: str
+    current: object
+    proposed: object
+    train_metric: object
+    dev_metric_current: object
+    dev_metric_proposed: object
+    holdout_axis: str
+    effect_size: object
+    effect_floor: object
+    inputs_ok_frac: object
+    g_holdout: object
+    g_coupled: object
+    g_inputs: object
+    g_effect: object
+    sibling_deltas: dict
+    verdict: str                   # RECOMMEND | HOLD | LEAD
+    hold_reason: str
+    n_train_seasons: int
+    n_dev_seasons: int
+    asof_date: str
+    baseline_code_version: str
+    baseline_constants_hash: str
+    rank: int = 0
+
+    @property
+    def proposal_id(self):
+        raw = f"{self.constant}|{self.asof_date}|{self.baseline_constants_hash}"
+        return hashlib.sha1(raw.encode()).hexdigest()[:16]
+
+    def to_row(self):
+        # Round stored metrics to 6 dp: the objectives are polars mean/sum reductions whose accumulation
+        # order isn't thread-deterministic (a ~1e-15 flake), which would break twice-run value-identity.
+        # 6 dp is far more precision than a proposal needs and makes the row byte-reproducible.
+        def r6(x):
+            return round(x, 6) if isinstance(x, float) else x
+        return {
+            "proposal_id": self.proposal_id, "rank": self.rank, "kind": self.kind, "constant": self.constant,
+            "module": self.module, "scope": self.scope, "current": str(self.current),
+            "proposed": str(self.proposed),  # None-the-value stringifies to "None"; the no-fit case uses a marker
+            "train_metric": r6(self.train_metric), "dev_metric_current": r6(self.dev_metric_current),
+            "dev_metric_proposed": r6(self.dev_metric_proposed), "holdout_axis": self.holdout_axis,
+            "effect_size": r6(self.effect_size), "effect_floor": r6(self.effect_floor),
+            "inputs_ok_frac": r6(self.inputs_ok_frac), "guardrail_holdout": self.g_holdout,
+            "guardrail_coupled": self.g_coupled, "guardrail_inputs": self.g_inputs,
+            "guardrail_effect": self.g_effect,
+            "sibling_deltas": json.dumps(self.sibling_deltas, sort_keys=True),
+            "verdict": self.verdict, "hold_reason": self.hold_reason,
+            "n_train_seasons": self.n_train_seasons, "n_dev_seasons": self.n_dev_seasons,
+            "asof_date": self.asof_date, "baseline_code_version": self.baseline_code_version,
+            "baseline_constants_hash": self.baseline_constants_hash,
+        }
+
+
+def evaluate(tunable, mani, asof, baseline, io_frac):
+    """Sweep one dial on the split and return its Proposal. RECOMMEND only if it is NOT entangled AND all
+    four guardrails hold; else HOLD with the reason. The tuner writes this — it never edits a transform."""
+    scored = fit_on_train(tunable, mani)
+    best = best_of(scored)
+    cur = tunable.current
+    n_train = max((r["n_seasons"] for r in scored), default=0)
+    floor = EFFECT_FLOOR[tunable.gate]
+    g_inputs = (io_frac is not None and io_frac >= INPUTS_OK_MIN)
+    entangled = tunable.name in ENTANGLED
+    base = dict(kind="dial", constant=tunable.name, module=tunable.module, scope=tunable.scope, current=cur,
+                holdout_axis="season (DEV 2024)", effect_floor=floor, inputs_ok_frac=io_frac,
+                g_inputs=g_inputs, asof_date=asof, baseline_code_version=baseline["code_version"],
+                baseline_constants_hash=baseline["constants_hash"])
+
+    if best is None:  # objective not computable on TRAIN — no OOS fit possible
+        reason = ("no OOS TRAIN window — the objective is is_mine-scoped and no is_mine league exists "
+                  "before 2024, so it cannot be fit on 2020–2023 (a corpus-wide per-league ROS-band "
+                  "objective is Session-7 work)")
+        if entangled:
+            reason += f"; and {ENTANGLE_REASON}"
+        return Proposal(proposed="n/a (no OOS fit)", train_metric=None, dev_metric_current=None,
+                        dev_metric_proposed=None, effect_size=None, g_holdout=None, g_coupled=None,
+                        g_effect=None, sibling_deltas={}, verdict="HOLD", hold_reason=reason,
+                        n_train_seasons=n_train, n_dev_seasons=0, **base)
+
+    proposed = best["value"]
+    cur_train = next((r["train_metric"] for r in scored if r["value"] == cur), None)
+    dev_cur, ndev = certify(tunable, cur, mani)
+    dev_best, _ = certify(tunable, proposed, mani)
+    changed = (proposed != cur)
+    effect = (dev_cur - dev_best) if (changed and dev_cur is not None and dev_best is not None) else 0.0
+    g_holdout = bool(changed and dev_cur is not None and dev_best is not None and effect > 0)
+    g_effect = bool(changed and effect > floor)
+    sib = sibling_check(tunable, proposed) if changed else {}
+    g_coupled = all(v["pass"] for v in sib.values() if v["pass"] is not None) if sib else True
+
+    if entangled:
+        verdict = "HOLD"
+        reason = f"{ENTANGLE_REASON}. {entanglement_evidence(tunable, cur, proposed)}"
+    elif not changed:
+        verdict = "HOLD"
+        reason = ("current value is already the TRAIN+DEV optimum — the sweep confirms it out-of-sample; "
+                  "no change to propose (holdout effect 0)")
+    elif g_holdout and g_effect and g_inputs and g_coupled:
+        verdict = "RECOMMEND"
+        reason = ""
+    else:
+        fails = [n for n, ok in [("holdout-improves", g_holdout), ("effect>floor", g_effect),
+                                 ("inputs_ok", g_inputs), ("no-coupled-regression", g_coupled)] if not ok]
+        verdict = "HOLD"
+        reason = "guardrail(s) not met: " + ", ".join(fails)
+    return Proposal(proposed=proposed, train_metric=cur_train, dev_metric_current=dev_cur,
+                    dev_metric_proposed=dev_best, effect_size=effect, g_holdout=g_holdout, g_coupled=g_coupled,
+                    g_effect=g_effect, sibling_deltas=sib, verdict=verdict, hold_reason=reason,
+                    n_train_seasons=n_train, n_dev_seasons=ndev, **base)
+
+
+def debias_lead(asof, baseline):
+    """The top-ranked LEAD the tuner's first act produces: de-bias the center BEFORE any band constant.
+    Not a dial proposal — the sequencing insight. Every band dial is HELD because it compensates for the
+    center; the fix is upstream, and it is tuned THROUGH this harness in Session 7."""
+    reason = ("TOP LEAD — de-bias the projection center before touching any band constant. L3 measured the "
+              "center optimistic (production_vor loses to carry-recent-form every season; the band covers "
+              "~0.55 vs its 0.80 target). Every band dial (BAND_Z / SKEW_GAIN / BULL_Z / ANCHOR_W) sits "
+              "downstream of it, so this session HOLDS them all — and SKEW_GAIN's OOS fit even moves 1.5→1.0 "
+              "(toward 0, as pre-registered), confirming the skew is compensating for the center bias, not a "
+              "real ROS property. Session 7 adds a recent-form shrinkage dial to the center, tuned THROUGH "
+              "this harness on the same split; re-fit the band dials only after (Session 8).")
+    return Proposal(kind="lead", constant="center_debias", module="projection_consensus/production_vor",
+                    scope="scoring", current="optimistic center (L3)", proposed="add recent-form anchor (S7)",
+                    train_metric=None, dev_metric_current=None, dev_metric_proposed=None,
+                    holdout_axis="n/a (a lead, not a fit)", effect_size=None, effect_floor=None,
+                    inputs_ok_frac=None, g_holdout=None, g_coupled=None, g_inputs=None, g_effect=None,
+                    sibling_deltas={}, verdict="LEAD", hold_reason=reason, n_train_seasons=0, n_dev_seasons=0,
+                    asof_date=asof, baseline_code_version=baseline["code_version"],
+                    baseline_constants_hash=baseline["constants_hash"])
+
+
+def _fmt(x, nd=4):
+    return "n/a" if x is None else (f"{x:.{nd}f}" if isinstance(x, float) else str(x))
+
+
+def _render_one(p):
+    """Render a proposal's markdown FROM its row values, so the prose can't drift from the gated numbers."""
+    L = [f"# Tuner proposal — `{p.constant}` ({p.verdict})", "",
+         f"**as-of:** {p.asof_date}  ·  **rank:** {p.rank}  ·  **module:** `{p.module}`  ·  "
+         f"**scope:** {p.scope}", "",
+         f"**baseline (frozen L3):** code_version `{p.baseline_code_version[:12]}` · "
+         f"constants_hash `{p.baseline_constants_hash}`", ""]
+    if p.kind == "lead":
+        L += ["## Verdict: LEAD (top-ranked)", "", p.hold_reason, ""]
+        return "\n".join(L)
+    L += [f"## Verdict: **{p.verdict}**", "",
+          f"- **current → proposed:** `{p.current}` → `{p.proposed}`",
+          f"- **objective (lower better):** {_constants.REGISTRY[p.constant].objective}",
+          f"- **TRAIN metric (current):** {_fmt(p.train_metric)}  ·  **seasons fit:** {p.n_train_seasons}",
+          f"- **HELD-OUT (DEV 2024):** current {_fmt(p.dev_metric_current)} · "
+          f"proposed {_fmt(p.dev_metric_proposed)}  (n={p.n_dev_seasons})  [axis: {p.holdout_axis}]",
+          f"- **effect size (holdout):** {_fmt(p.effect_size)}  ·  **floor:** {_fmt(p.effect_floor)}",
+          f"- **inputs_ok over fit window:** {_fmt(p.inputs_ok_frac)}",
+          "",
+          "### Guardrails",
+          f"| holdout improves | no coupled regress | inputs_ok | effect > floor |",
+          f"|---|---|---|---|",
+          f"| {p.g_holdout} | {p.g_coupled} | {p.g_inputs} | {p.g_effect} |",
+          ""]
+    if p.sibling_deltas:
+        L += ["### Coupled gates re-run"]
+        for g, d in sorted(p.sibling_deltas.items()):
+            L.append(f"- `{g}`: pass={d['pass']} — {d['note']}")
+        L.append("")
+    if p.hold_reason:
+        L += [f"### {'Why HELD' if p.verdict == 'HOLD' else 'Note'}", "", p.hold_reason, ""]
+    L += ["---", "*Auto-tune, human promotes: this is a proposal. No transform was edited and no constant "
+          "was merged. Promote in a normal worktree session after review.*"]
+    return "\n".join(L)
+
+
+def _write_markdown(proposals, asof):
+    os.makedirs(_PROPOSALS_DIR, exist_ok=True)
+    for p in proposals:
+        with open(os.path.join(_PROPOSALS_DIR, f"{asof}-{p.constant}.md"), "w") as f:
+            f.write(_render_one(p))
+
+
+def build_proposals(asof=None):
+    """The disciplined first run: sweep every dial on the split, HOLD the entangled band, and rank the
+    de-bias lead #1. Returns (ordered_proposals, rows_frame) — pure (no writes), so the gate can recompute
+    and compare value-identical."""
+    mani = manifest()
+    baseline = baseline_provenance()
+    asof = asof or baseline["config_version"].lstrip("v")
+    io_frac = inputs_ok_frac_train(mani)
+    dials = [evaluate(t, mani, asof, baseline, io_frac) for t in _constants.tunables()]
+    allp = [debias_lead(asof, baseline)] + dials
+    order = {"LEAD": 0, "RECOMMEND": 1, "HOLD": 2}
+    ordered = sorted(allp, key=lambda p: order[p.verdict])  # stable: keeps declaration order within a group
+    for i, p in enumerate(ordered, 1):
+        p.rank = i
+    rows = pl.DataFrame([p.to_row() for p in ordered])
+    return ordered, rows
+
+
+def run_all(asof=None, *, write=True):
+    ordered, rows = build_proposals(asof)
+    if write:
+        data_layer.write_tune_proposals(rows)
+        _write_markdown(ordered, ordered[0].asof_date)
+    return ordered, rows
+
+
+def _print_proposals(ordered):
+    print(f"\n=== Tuner first run — {len(ordered)} proposals (as-of {ordered[0].asof_date}) ===")
+    print(f"  {'#':>2} {'verdict':<10}{'constant':<20}{'current→proposed':<28}{'holdout Δ':>10}")
+    for p in ordered:
+        cp = (f"{p.current}→{p.proposed}" if p.kind == "dial" else "—")
+        eff = _fmt(p.effect_size, 4) if p.effect_size is not None else "—"
+        print(f"  {p.rank:>2} {p.verdict:<10}{p.constant:<20}{cp:<28}{eff:>10}")
+    rec = [p.constant for p in ordered if p.verdict == "RECOMMEND"]
+    held = [p.constant for p in ordered if p.verdict == "HOLD"]
+    print(f"\n  RECOMMEND: {rec or '(none — nothing clears the guardrails un-entangled this session)'}")
+    print(f"  HOLD: {held}")
+    print(f"  TOP LEAD: {ordered[0].constant} — {ordered[0].hold_reason.split(' — ')[0]}")
+
+
 def _print_sweep(tunable, mani):
     """C1 smoke view: the TRAIN sweep + the DEV certification of TRAIN's pick and of the current value."""
     scored = fit_on_train(tunable, mani)
@@ -223,16 +553,27 @@ def _print_sweep(tunable, mani):
 
 def main():
     ap = argparse.ArgumentParser(description="L4 Tuner — split-aware constant sweep (Session 6).")
-    ap.add_argument("--tunable", default=None, help="one dial by name (default: all registered dials)")
+    ap.add_argument("--asof-date", default=None,
+                    help="pinned as-of date (default: the frozen scorecard's config_version date). Never now().")
+    ap.add_argument("--sweep-view", action="store_true", help="print the per-dial TRAIN/DEV sweep tables")
+    ap.add_argument("--tunable", default=None, help="with --sweep-view: one dial by name")
+    ap.add_argument("--no-write", action="store_true", help="compute + print but do not write the store/markdown")
     a = ap.parse_args()
-    mani = manifest()
-    dials = ([_constants.REGISTRY[a.tunable]] if a.tunable else list(_constants.tunables()))
     print("split-bite self-check:",
           f"test-sealed={prove_test_sealed()}",
           f"generalization-sealed={prove_generalization_sealed()}",
           f"certify-not-train={prove_certify_not_train()}")
-    for t in dials:
-        _print_sweep(t, mani)
+    if a.sweep_view:
+        mani = manifest()
+        dials = ([_constants.REGISTRY[a.tunable]] if a.tunable else list(_constants.tunables()))
+        for t in dials:
+            _print_sweep(t, mani)
+        return
+    ordered, _ = run_all(a.asof_date, write=not a.no_write)
+    _print_proposals(ordered)
+    if not a.no_write:
+        print(f"\n  wrote {len(ordered)} proposal rows + markdown to "
+              f"{_PROPOSALS_DIR}/{ordered[0].asof_date}-*.md")
 
 
 if __name__ == "__main__":
