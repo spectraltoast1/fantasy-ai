@@ -306,6 +306,23 @@ def entanglement_evidence(tunable, cur, proposed):
             "S7 removes; re-fit once the constants are untangled.")
 
 
+def decide_verdict(*, entangled, changed, g_holdout, g_effect, g_inputs, g_coupled):
+    """The pure verdict from the guardrail booleans — the teeth of the four guardrails, testable in
+    isolation. RECOMMEND iff a real change clears ALL four guardrails AND is not entangled; else HOLD.
+    Returns (verdict, kind) where kind ∈ {'entangled','no-change','recommend'} or the 'guardrail(s) not
+    met: …' string. The order matters: entanglement is an absolute override (decision 6 — the band dials
+    are HELD however good the sweep looks)."""
+    if entangled:
+        return "HOLD", "entangled"
+    if not changed:
+        return "HOLD", "no-change"
+    if g_holdout and g_effect and g_inputs and g_coupled:
+        return "RECOMMEND", "recommend"
+    fails = [n for n, ok in [("holdout-improves", g_holdout), ("effect>floor", g_effect),
+                             ("inputs_ok", g_inputs), ("no-coupled-regression", g_coupled)] if not ok]
+    return "HOLD", "guardrail(s) not met: " + ", ".join(fails)
+
+
 @dataclass
 class Proposal:
     kind: str                      # "dial" | "lead"
@@ -401,21 +418,17 @@ def evaluate(tunable, mani, asof, baseline, io_frac):
     sib = sibling_check(tunable, proposed) if changed else {}
     g_coupled = all(v["pass"] for v in sib.values() if v["pass"] is not None) if sib else True
 
-    if entangled:
-        verdict = "HOLD"
+    verdict, kind = decide_verdict(entangled=entangled, changed=changed, g_holdout=g_holdout,
+                                   g_effect=g_effect, g_inputs=g_inputs, g_coupled=g_coupled)
+    if kind == "entangled":
         reason = f"{ENTANGLE_REASON}. {entanglement_evidence(tunable, cur, proposed)}"
-    elif not changed:
-        verdict = "HOLD"
+    elif kind == "no-change":
         reason = ("current value is already the TRAIN+DEV optimum — the sweep confirms it out-of-sample; "
                   "no change to propose (holdout effect 0)")
-    elif g_holdout and g_effect and g_inputs and g_coupled:
-        verdict = "RECOMMEND"
+    elif kind == "recommend":
         reason = ""
     else:
-        fails = [n for n, ok in [("holdout-improves", g_holdout), ("effect>floor", g_effect),
-                                 ("inputs_ok", g_inputs), ("no-coupled-regression", g_coupled)] if not ok]
-        verdict = "HOLD"
-        reason = "guardrail(s) not met: " + ", ".join(fails)
+        reason = kind  # the "guardrail(s) not met: …" string
     return Proposal(proposed=proposed, train_metric=cur_train, dev_metric_current=dev_cur,
                     dev_metric_proposed=dev_best, effect_size=effect, g_holdout=g_holdout, g_coupled=g_coupled,
                     g_effect=g_effect, sibling_deltas=sib, verdict=verdict, hold_reason=reason,

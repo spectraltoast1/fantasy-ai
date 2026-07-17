@@ -2,7 +2,23 @@
 
 > Engineering context document for Claude Code. Describes the stack, folder structure, data layer design, and technical principles. Updated regularly as the project evolves.
 
-**Last reviewed:** 2026-07-14 (**Backend — Roster Substrate Reproducibility: pin the registry
+**Last reviewed:** 2026-07-17 (**Backend — L4 Tuner: the constant registry + the split-aware sweep harness
+(Improvement-Loop Session 6).** The **config seam** TECH long flagged as coming now exists:
+`application/data/transforms/_constants.py` is the **dials registry** — a pure leaf module holding the
+constants the Tuner sweeps as `Tunable(name, module, current, grid, gate, objective, scope, coupled_gates,
+…)`. **The principle: it is dials-by-purpose, not all-constants — ONE home per constant; a dial migrates
+into the registry the FIRST time it is tuned, a pin (a seed, a sim count, a not-yet-tuned dial) never
+migrates.** A module that owns a migrated dial **re-exports** it (`from …_constants import BAND_Z`), so the
+canonical dotted path, the `constants_snapshot` drift gate, and the backtests all still resolve — and the
+re-exported value equals the prior in-code literal (promoting a constant moves NO live number). The Tuner
+(`application/data/corpus/tuner.py`) is the **one split-aware sweep harness**: it drives each read's frozen
+`backtest.objective(season, consts, *, reader)` on a disciplined split (fit TRAIN 2020–23 / certify DEV 2024
+/ seal TEST 2025 + the generalization cohort), where the split is enforced STRUCTURALLY by a `SplitReader`
+that raises on any read of a sealed partition (peeking is unrepresentable, not gated after the fact). It
+writes `proposals/{asof}-{constant}.md` + an immutable-append `tune_proposals` ledger row (via
+`data_layer.write/read_tune_proposals`) gated by four guardrails (holdout-improves · no coupled regression ·
+inputs_ok · effect>floor) — and **edits no transform and merges no constant: auto-tune, human promotes.** The
+gate is `corpus/check_tuner.py`. — Prior: **Backend — Roster Substrate Reproducibility: pin the registry
 (Improvement-Loop Session 1.7)** — the principle to carry: **a rostered player's skill-eligibility is a
 FANTASY question, answered by the Sleeper registry ("what slot does he fill?"), not an NFL question answered
 by nflreadpy ("what did he produce?").** A two-way player (Travis Hunter — nflreadpy CB, Sleeper WR) was

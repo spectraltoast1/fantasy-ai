@@ -286,6 +286,26 @@ the DuckDB-WASM/`build-dashboard` idiom already in the stack):
 
 ## L4 — The Tuner (auto-tune · **human promotes**)
 
+> **BUILT — Improvement-Loop Session 6 (2026-07-17).** `transforms/_constants.py` (the dials registry) +
+> `corpus/tuner.py` (the one split-aware sweep harness) + `data_layer.tune_proposals` + `corpus/check_tuner.py`.
+> Two refinements to the spec below, both from building it against the real corpus:
+> 1. **Dials-by-purpose, not all-constants.** The registry holds only the constants actually swept — ONE
+>    home per constant (a dial migrates in the first time it is tuned; a pin never migrates). A module
+>    re-exports a migrated dial, so no live number moves and `constants_snapshot` stays the full-vector
+>    fingerprint. The `BULL_Z` drift is resolved by DECLARING the real 1.44, not by re-tuning.
+> 2. **Two holdouts, one binds per session.** Season-wise (TRAIN/DEV/TEST) is the operative OOS test.
+>    League-wise (hold out the generalization cohort) is built + structurally sealed now, but is
+>    **N/A-by-construction for a constant whose objective doesn't fit a per-league value** — it binds from
+>    Session 7's genuinely league-scoped reads. ("The only honest test of an any-league constant" below is
+>    right in general, but was an overstatement for the five scoring/nfl/player-level dials tuned first.)
+>
+> First run (as-of 2026-07-16): `de-bias-the-center-first` is the top LEAD; all four band dials HELD
+> (entangled with the optimistic center — `SKEW_GAIN`'s OOS fit even moves 1.5→1.0, confirming it);
+> `OPP_HALF_LIFE_WK`/`BAND_Z` already OOS-optimal → HOLD; zero RECOMMENDs (nothing clears the guardrails
+> un-entangled — the constants are already well-fit except where entangled with the center). The split is
+> enforced STRUCTURALLY: a `SplitReader` raises on any read of a sealed partition, so a peeking fit is
+> unrepresentable (proven to bite in `check_tuner`).
+
 Generalises the five ad-hoc `--sweep` flags into one harness.
 
 ### 4a. Constant registry — `transforms/_constants.py`
