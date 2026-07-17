@@ -46,15 +46,14 @@ import polars as pl
 from application.data import data_layer
 from application.data.transforms._analytics import round1
 from application.data.transforms.compute_production_vor import _ros_values
+# BULL_Z (bull/bear half-width in σ units) and ANCHOR_W (max preseason-anchor weight) are swept dials,
+# backtest-tuned JOINTLY to (1.44, 0.25) (freeze-week coverage 0.817). Homed in the L4 dials registry and
+# re-exported here so their canonical path (ros_player_band.BULL_Z) and every `from …import BULL_Z`
+# resolve. The registry declares BULL_Z=1.44 — resolving the recorded 1.645-vs-1.44 STATUS drift by
+# declaration, not a re-tune. See _constants.py for the grids.
+from application.data.transforms._constants import ANCHOR_W, BULL_Z  # noqa: F401  (re-exported dials)
 
 SKILL_POSITIONS = ["QB", "RB", "WR", "TE"]
-
-# Bull/bear half-width in σ units and the max preseason-anchor weight — backtest-tuned JOINTLY against
-# the 2025 answer key (backtest_ros_player_band.py --sweep) to (1.44, 0.25): freeze-week coverage 0.817
-# with balanced miss tails (below-bear 0.091 / above-bull 0.091). Unchanged by the L0 split — the storage
-# scope moved, the math did not. (See the pre-split module history for the full derivation.)
-BULL_Z = 1.44
-ANCHOR_W = 0.25
 
 # --- Calibrated pool (S1.6) -------------------------------------------------------------------------
 # The band is emitted for the WHOLE projected skill pool, but a band is only honest *within* the

@@ -17,10 +17,10 @@ assumption. Two verdicts (exit 0 iff both pass):
     season / bad season" range, §2's realistic high/low). The two tail rates (below-bear /
     above-bull) are reported as evidence: the skeleton's band is symmetric-by-design (no ROS-level
     skew term — a documented deferral; the §3 per-week band already carries the skew this sums
-    over), so we gate combined coverage and *report* tail balance. `--sweep` tunes BULL_Z against
-    the answer key — the ROS analog of the §3 gate's BAND_Z sweep. This is the real test: summing
-    independent weekly bands assumes zero residual autocorrelation, and BULL_Z absorbs whatever
-    that assumption gets wrong.
+    over), so we gate combined coverage and *report* tail balance. `objective(season, {BULL_Z, ANCHOR_W})`
+    returns the freeze-week score the split-aware harness (corpus/tuner.py) sweeps BULL_Z against — the
+    ROS analog of the §3 gate's BAND_Z sweep. This is the real test: summing independent weekly bands
+    assumes zero residual autocorrelation, and BULL_Z absorbs whatever that assumption gets wrong.
   - **Decision-relevant** — sort players by ros_bull (the ceiling) into terciles and confirm actual
     realised ROS rises monotonically (dead < mid < stud), the way backtest_production_vor tests VOR
     tiers. Confirms the bull ceiling carries ranking signal, not just width.
@@ -41,13 +41,13 @@ league-wide over/under-projection correlates their misses, so pooling the nested
 (N=1..4) sits in the **early / prior-heavy** regime — the anchor weight w_N = ANCHOR_W · (remaining/
 total) is near its max here (≈0.19 at the freeze). The late-season, evidence-heavy tail of the decay
 (w_N → 0 as the horizon closes) is asserted by construction, not exercised by this answer key; it
-cannot be until an as-of week past the freeze exists. The sweep therefore tunes ANCHOR_W where the
+cannot be until an as-of week past the freeze exists. The tuner therefore sweeps ANCHOR_W where the
 anchor matters most, which is the honest place to tune it. The gate reports the pre-anchor vs
 anchored freeze-week tails so the anchor's calibration contribution is visible, not assumed.
 
 Usage:
-    python3 -m application.data.transforms.backtest_ros_player_band --season 2025
-    python3 -m application.data.transforms.backtest_ros_player_band --season 2025 --sweep
+    python3 -m application.data.transforms.backtest_ros_player_band --season 2025   # verdict
+    python3 -m application.data.corpus.tuner                                         # the split-aware sweep
 """
 
 import argparse
@@ -67,21 +67,17 @@ from application.data.transforms.compute_ros_player_band import (
 TARGET_COVERAGE = 0.80
 # The freeze-week combined coverage must land within this of TARGET_COVERAGE.
 COVERAGE_TOL = 0.05
-# BULL_Z candidates swept against the answer key. Labelled by their normal-theory coverage so the
-# sweep output is legible; residuals summed over the ROS horizon are near-normal by CLT, so the
-# empirical best sits near the 0.80 target's 1.28 unless autocorrelation shifts it.
-BULL_Z_GRID = [0.674, 0.842, 1.036, 1.150, 1.282, 1.440, 1.645, 1.960]
-# Preseason-anchor max weight candidates. 0.0 = pure-projection band (the pre-anchor read), so the
-# sweep is free to conclude the §2 anchor earns nothing at the freeze and drive it to 0 — the shipped
-# weight is whatever the answer key rewards, jointly with BULL_Z (the anchor reshapes the band, so
-# the two must be tuned together, not in sequence).
-ANCHOR_W_GRID = [0.0, 0.25, 0.5, 0.75, 1.0]
+# The BULL_Z / ANCHOR_W candidate grids are homed in the L4 registry (_constants.py) — the one home for
+# a swept dial. The joint sweep is retired into the split-aware harness (corpus/tuner.py). This objective
+# is is_mine-scoped (grades the roster the freeze band was fit on), so it computes only where an is_mine
+# league exists (2024–25); the tuner reports that honestly and HOLDS these constants (entangled with the
+# optimistic center) — a corpus-wide per-league ROS-band objective is Session-7 work.
 
 
-def _actual_weekly(season: int) -> dict:
+def _actual_weekly(season: int, *, reader=data_layer) -> dict:
     """(sleeper_player_id, week) → actual PPR points, the answer key for realised ROS."""
     df = (
-        data_layer.read_nfl_stats(season)
+        reader.read_nfl_stats(season)
         .filter(pl.col("position").is_in(SKILL_POSITIONS))
         .select("sleeper_player_id", pl.col("week").cast(pl.Int64), "fantasy_points_ppr")
         .drop_nulls("sleeper_player_id")
@@ -91,21 +87,23 @@ def _actual_weekly(season: int) -> dict:
     return {(r["sleeper_player_id"], r["week"]): float(r["actual"]) for r in df.iter_rows(named=True)}
 
 
-def _test_points(season: int, bull_z: float, anchor_w: float):
+def _test_points(season: int, bull_z: float, anchor_w: float, *, reader=data_layer):
     """One row per (as_of_week N, player): the shipped bull/bear band + the actual ROS over the same
     remaining weeks. Rebuilds the band through the transform's own `_preseason_anchor` / `_blended_band`
     (and `_load_anchor_inputs`), so what's validated is exactly what serves the read — no re-derivation.
-    Returns (rows, freeze_week). Security is carried for the situation-axis evidence line."""
-    vor = data_layer.read_production_vor(season, as_of_week="all").select(
+    Returns (rows, freeze_week). Security is carried for the situation-axis evidence line. `reader` is the
+    data seam (default `data_layer`); the tuner passes a `SplitReader` that raises on a sealed season —
+    the first read below (production_vor) bites, so a peeking fit cannot reach the answer key."""
+    vor = reader.read_production_vor(season, as_of_week="all").select(
         "as_of_week", "roster_id", "sleeper_player_id", "position", "ros_value", "n_weeks"
     )
-    consensus = data_layer.read_projection_consensus(season).select(
+    consensus = reader.read_projection_consensus(season).select(
         "week", "sleeper_player_id", "band_ppr"
     )
-    signal = data_layer.read_player_signal(season, as_of_week="all").select(
+    signal = reader.read_player_signal(season, as_of_week="all").select(
         "as_of_week", "sleeper_player_id", "security"
     )
-    actual = _actual_weekly(season)
+    actual = _actual_weekly(season, reader=reader)
     adp_map, curve_lookup, curve_max_rank = _load_anchor_inputs(season)
 
     weeks = sorted(vor["as_of_week"].unique().to_list())
@@ -199,29 +197,20 @@ def _pool_coverage_evidence(season: int, freeze: int) -> None:
           f"(no BULL_Z change); the whole-pool number is the honest cost of pricing waiver fodder.")
 
 
-def sweep(season: int) -> None:
-    """Sweep (BULL_Z × ANCHOR_W) jointly against the answer key: pick the pair whose freeze-week
-    coverage is closest to TARGET_COVERAGE (tails reported so an asymmetric miss is visible). Joint
-    because the preseason anchor reshapes the band, so the calibrated width depends on the anchor
-    weight — tuning them in sequence would miss the interaction."""
-    print(f"=== BULL_Z × ANCHOR_W sweep (freeze week): season={season}  target coverage={TARGET_COVERAGE:.2f} ===")
-    print(f"  {'bull_z':>8}{'anchor_w':>10}{'coverage':>10}{'below-bear':>12}{'above-bull':>12}{'score':>9}")
-    # Selection objective = |coverage − target| + |below-bear − above-bull|: calibrated AND centered.
-    # The band is symmetric-by-design (no ROS skew term), so among equally-calibrated pairs the honest
-    # choice is the one whose miss tails are balanced, not one skewed low or high — this is why a
-    # coverage-only pick can mislead (it will chase target coverage into a lopsided band).
-    best = (None, None, 9.9)
-    for w in ANCHOR_W_GRID:
-        for z in BULL_Z_GRID:
-            rows, freeze = _test_points(season, z, w)
-            fz = pl.DataFrame(rows).filter(pl.col("as_of_week") == freeze)
-            cov, below, above = _coverage(fz)
-            score = abs(cov - TARGET_COVERAGE) + abs(below - above)
-            if score < best[2]:
-                best = (z, w, score)
-            print(f"  {z:>8.3f}{w:>10.2f}{cov:>10.3f}{below:>12.3f}{above:>12.3f}{score:>9.3f}")
-    print(f"  → best (BULL_Z, ANCHOR_W) at this answer key: ({best[0]}, {best[1]}) "
-          f"score={best[2]:.3f} (|cov-tgt|+|tail imbalance|) — bake into compute_ros_player_band.py")
+def objective(season: int, consts: dict, *, reader=data_layer) -> float:
+    """The tuner's scalar fit objective for BULL_Z / ANCHOR_W, at the values in `consts`, on `reader`'s
+    allowed partition: the freeze-week |coverage−TARGET| + |below-bear − above-bull| (the joint sweep's
+    own score — LOWER is better; calibrated AND centered, since the band is symmetric-by-design). Reuses
+    the shipped `_test_points`/`_coverage` (standing instr 5). Unspecified dials default to their
+    registered current. is_mine-scoped: raises (FileNotFoundError/ValueError) where no is_mine league
+    exists, so the tuner treats such a season as an absent fit point — pre-2024 has none, leaving no OOS
+    TRAIN window, which (with the L3 center entanglement) is why these two are HELD this session."""
+    z = consts.get("BULL_Z", BULL_Z)
+    w = consts.get("ANCHOR_W", ANCHOR_W)
+    rows, freeze = _test_points(season, z, w, reader=reader)
+    fz = pl.DataFrame(rows).filter(pl.col("as_of_week") == freeze)
+    cov, below, above = _coverage(fz)
+    return abs(cov - TARGET_COVERAGE) + abs(below - above)
 
 
 def run(season: int, bull_z: float = BULL_Z, anchor_w: float = ANCHOR_W) -> bool:
@@ -303,12 +292,9 @@ def run(season: int, bull_z: float = BULL_Z, anchor_w: float = ANCHOR_W) -> bool
 def __main():
     parser = argparse.ArgumentParser(description="Backtest ROS Outcome Shape against the 2025 answer key.")
     parser.add_argument("--season", type=int, required=True)
-    parser.add_argument("--sweep", action="store_true",
-                        help="sweep BULL_Z against the answer key instead of running the verdict")
     args = parser.parse_args()
-    if args.sweep:
-        sweep(args.season)
-        sys.exit(0)
+    # The BULL_Z × ANCHOR_W sweep is retired into the split-aware harness:
+    #   python3 -m application.data.corpus.tuner
     sys.exit(0 if run(args.season) else 1)
 
 

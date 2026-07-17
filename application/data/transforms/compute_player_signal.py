@@ -69,6 +69,11 @@ import polars as pl
 from application.data import data_layer
 from application.data.transforms._analytics import mean, pearson, round1, spectrum_positions
 from application.data.transforms._scoring import EXP_COMPONENT_COLS, expected_points_expr
+# OPP_HALF_LIFE_WK (opportunity-rate recency half-life; None = cumulative) is a swept dial, homed in the
+# L4 dials registry and re-exported here so `player_signal.OPP_HALF_LIFE_WK` and every importer resolve.
+# Every OTHER constant below (SHRINK_K, MIN_GAMES, POS_MEAN_MIN_OPP, SPIKE/STICKY_BAND, DIRECTION_*) is a
+# pin, not a dial — it stays defined in this module.
+from application.data.transforms._constants import OPP_HALF_LIFE_WK  # noqa: F401  (re-exported dial)
 
 SKILL_POSITIONS = ["QB", "RB", "WR", "TE"]
 
@@ -89,24 +94,11 @@ POS_MEAN_MIN_OPP = 3.0
 # middle is genuinely mixed and should be framed as such, not as a confident call.
 SPIKE_BAND = 0.15
 STICKY_BAND = 0.05
-# Opportunity windowing (Season-replay Part 2). The per-game rates (opportunity, ppg,
-# TD ppg) are read off a player's recent weeks through an injected EWMA half-life:
-# each week's weight halves every OPP_HALF_LIFE_WK weeks back from his most recent game;
-# `None` = equal weight (cumulative). This is the per-analytic *window*, declared by the
-# stationarity principle (how fast does the measured quantity drift?) and decoupled from
-# the as_of_week cutoff. The design intuition was that a player's role drifts (a back
-# loses a committee, a WR's target share climbs) and so recent usage should be weighted
-# up — but that's a bet, and the project validates bets rather than guessing.
-#
-# The 2025 answer-key sweep (backtest_player_signal.py --sweep, freezes W4/W6/W8) is
-# decisive and runs *against* that intuition: short half-lives hurt rest-of-season MAE
-# monotonically, and cumulative wins outright at W6/W8 (a ~6wk half-life ties it at W4).
-# For the rest-of-season horizon, opportunity is sticky enough that max sample beats
-# recency. So the window ships cumulative — the empirically-best choice, not the guessed
-# one. The half-life stays an injected parameter (not hard-coded) so it is re-tunable
-# in-season against a nearer-horizon truth without touching the read; flip this constant
-# and re-run the sweep to revisit.
-OPP_HALF_LIFE_WK = None
+# Opportunity windowing (Season-replay Part 2): the per-game rates (opportunity, ppg, TD ppg) are read
+# off a player's recent weeks through an injected EWMA half-life (each week's weight halves every
+# OPP_HALF_LIFE_WK weeks back; None = cumulative). It ships cumulative — the 2025 sweep found short
+# half-lives hurt rest-of-season MAE monotonically. OPP_HALF_LIFE_WK is a swept dial, homed in
+# _constants.py and re-exported at the top of this module; the tuner re-fits it OOS on the corpus split.
 
 # --- Trust axis (DECISION_READS.md §1 refinement) ---
 # Direction's own recency weighting for the slope fit itself — separate from
