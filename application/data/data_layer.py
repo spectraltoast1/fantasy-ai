@@ -1670,6 +1670,45 @@ def engine_scorecard_exists(season: int) -> bool:
     return _engine_scorecard_path(season).exists()
 
 
+# --- Tuner proposals (Improvement-Loop L4) ---
+# The L4 Tuner's only write: one row per (constant, asof_date) sweep decision — current → proposed with its
+# train-vs-holdout evidence, coupled-gate deltas, effect size, inputs_ok, and a RECOMMEND/HOLD verdict.
+# NOT season-partitioned (a proposal spans the split); keyed by `proposal_id`. Immutable-append like the
+# scorecard: a re-run at the same asof over the same frozen baseline appends nothing (determinism); the
+# human reads the co-rendered markdown and promotes in a normal worktree session ("auto-tune, human
+# promotes"). The tuner never edits a transform or merges a constant.
+
+def _tune_proposals_path() -> Path:
+    return _SNAPSHOT_DIR / "derived" / "ledger" / "tune_proposals.parquet"
+
+
+def write_tune_proposals(df: pl.DataFrame) -> None:
+    """Append only genuinely-new proposals (idempotent by `proposal_id`). De-dup on proposal_id, drop ids
+    already on disk, diagonal-concat so the file only GROWS — a re-run at the same asof_date over the same
+    frozen inputs appends nothing; a new asof or a changed baseline appends a parallel population. Never
+    overwrites (immutable-append, mirroring `write_engine_scorecard`)."""
+    path = _tune_proposals_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df = df.unique(subset="proposal_id", keep="first")
+    if path.exists():
+        existing = pl.read_parquet(path)
+        df = df.filter(~pl.col("proposal_id").is_in(existing["proposal_id"]))
+        df = pl.concat([existing, df], how="diagonal")
+    df.write_parquet(path)
+
+
+def read_tune_proposals(asof_date: str | None = None) -> pl.DataFrame:
+    """All proposals, optionally filtered to one asof_date."""
+    df = pl.read_parquet(_tune_proposals_path())
+    if asof_date is not None:
+        df = df.filter(pl.col("asof_date") == asof_date)
+    return df
+
+
+def tune_proposals_exists() -> bool:
+    return _tune_proposals_path().exists()
+
+
 # --- League registry (Improvement-Loop L0 keying) ---
 # The single source of truth for "which leagues exist and how each is keyed", replacing the implicit
 # config.SLEEPER_LEAGUE_ID single-league assumption (audit S1.3 — league #2 silently overwriting #1).

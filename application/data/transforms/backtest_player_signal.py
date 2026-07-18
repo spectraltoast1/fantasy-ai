@@ -42,7 +42,7 @@ import polars as pl
 
 from application.data import data_layer
 from application.data.transforms._analytics import round1
-from application.data.transforms._scoring import EXP_COMPONENT_COLS, expected_points_expr
+from application.data.transforms._scoring import EXP_COMPONENT_COLS, expected_points_expr, standard_scoring
 from application.data.transforms.compute_player_signal import (
     MIN_GAMES,
     OPP_HALF_LIFE_WK,
@@ -58,10 +58,11 @@ from application.data.transforms.compute_player_signal import (
 )
 
 MIN_REST_GAMES = 4  # a player needs a real rest-of-season sample to be a fair test point
-# Opportunity-EWMA half-lives swept against the answer key. None = equal weight
-# (cumulative); the rest are candidate half-lives in weeks. The winner sets
-# OPP_HALF_LIFE_WK in the transform.
-SWEEP_HALF_LIVES = [None, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0]
+# Canonical corpus freeze the tuner's objective evaluates at: input weeks 1–4, truth weeks 5–18 (the CLI
+# default). The OPP_HALF_LIFE_WK grid the tuner sweeps is homed in the L4 registry (_constants.py) — the
+# per-backtest --sweep flag is retired into the one split-aware harness (corpus/tuner.py).
+OBJ_RECENT_WEEKS = tuple(range(1, 5))
+OBJ_REST_WEEKS = tuple(range(5, 19))
 
 
 def _series(df: pl.DataFrame) -> pl.DataFrame:
@@ -144,12 +145,17 @@ def _corr(p, y):
     return float(pl.DataFrame({"p": p, "y": y}).select(pl.corr("p", "y")).item())
 
 
-def _load(season: int, *, league_id=None) -> pl.DataFrame:
+def _load(season: int, *, league_id=None, reader=data_layer, scoring_key=None) -> pl.DataFrame:
     """Cleaned skill-position stats (usage/score nulls → 0) for the season, with `exp_pts` — the
     league-scored expected points (the Quality basis) — derived from the ff_opportunity components
-    exactly as the transform does (`expected_points_expr`), so the gate exercises the shipped math."""
-    scoring = data_layer.read_scoring_settings(season, league_id=league_id)
-    return data_layer.read_nfl_stats(season).filter(
+    exactly as the transform does (`expected_points_expr`), so the gate exercises the shipped math.
+    `reader` is the data seam (default `data_layer`); the tuner passes a `SplitReader` that raises on a
+    sealed season, so a fit literally cannot read a held-out partition. `scoring_key` selects a canonical
+    scoring profile (the corpus path — no is_mine league pre-2024, and tuning the *opportunity* half-life
+    is scoring-independent); default None keeps the shipped is_mine-league behaviour for the CLI verdict."""
+    scoring = (standard_scoring(scoring_key) if scoring_key is not None
+               else reader.read_scoring_settings(season, league_id=league_id))
+    return reader.read_nfl_stats(season).filter(
         pl.col("position").is_in(SKILL_POSITIONS)
     ).with_columns(
         [
@@ -187,29 +193,19 @@ def _evaluate(stats: pl.DataFrame, recent_weeks, rest_weeks, half_life):
     return df, pos_mean
 
 
-def sweep(season: int, recent_weeks, rest_weeks, *, league_id=None) -> None:
-    """Tune the opportunity half-life: for each candidate, report the signal's MAE on the
-    answer key at this freeze. Run across several freezes to choose OPP_HALF_LIFE_WK —
-    the window earns its keep mid/late season, where role drift has had time to show."""
-    stats = _load(season, league_id=league_id)
-    print(f"=== Half-life sweep: season={season}  input wks {recent_weeks[0]}–{recent_weeks[-1]}  "
-          f"truth wks {rest_weeks[0]}–{rest_weeks[-1]} ===")
-    print(f"  {'half_life':<12}{'signal MAE':>12}{'corr':>8}   (naive MAE held fixed = equal-weight recent)")
-    base = None
-    best = (None, float("inf"))
-    for hl in SWEEP_HALF_LIVES:
-        df, _ = _evaluate(stats, recent_weeks, rest_weeks, hl)
-        if base is None:
-            base = _mae(df["naive_ppg"], df["rest_ppg"])
-        mae = _mae(df["expected_ppg"], df["rest_ppg"])
-        corr = _corr(df["expected_ppg"], df["rest_ppg"])
-        label = "cumulative" if hl is None else f"{hl:g}wk"
-        flag = " ←best" if mae < best[1] else ""
-        if mae < best[1]:
-            best = (hl, mae)
-        print(f"  {label:<12}{mae:>12.3f}{corr:>8.3f}{flag}")
-    print(f"  naive (equal-weight recent) MAE = {base:.3f}")
-    print(f"  → best half-life at this freeze: {'cumulative' if best[0] is None else f'{best[0]:g}wk'} (MAE {best[1]:.3f})")
+def objective(season: int, consts: dict, *, reader=data_layer, scoring_key="ppr",
+              recent_weeks=OBJ_RECENT_WEEKS, rest_weeks=OBJ_REST_WEEKS) -> float:
+    """The tuner's scalar fit objective for OPP_HALF_LIFE_WK, at the constant values in `consts`, on
+    `reader`'s allowed partition: the signal's rest-of-season MAE at the canonical 1–4 → 5–18 freeze
+    (LOWER is better). Reuses the shipped `_load`/`_evaluate` so the number is exactly what the verdict
+    path computes — no parallel re-derivation (standing instr 5). `consts` defaults any unspecified dial
+    to its registered current, so a 1-D sweep needs only its own key. Scores under a canonical PPR
+    profile (the matched cohort's scoring; the truth `rest_ppg` is PPR and the tuned window is on
+    opportunity, which is scoring-independent) — so it needs no is_mine league and runs every season."""
+    hl = consts.get("OPP_HALF_LIFE_WK", OPP_HALF_LIFE_WK)
+    stats = _load(season, reader=reader, scoring_key=scoring_key)
+    df, _ = _evaluate(stats, list(recent_weeks), list(rest_weeks), hl)
+    return _mae(df["expected_ppg"], df["rest_ppg"])
 
 
 def run(season: int, recent_weeks, rest_weeks, half_life=OPP_HALF_LIFE_WK, *, league_id=None) -> bool:
@@ -296,16 +292,12 @@ if __name__ == "__main__":
     parser.add_argument("--season", type=int, required=True)
     parser.add_argument("--recent", default="1-4", help="input week range, e.g. 1-4")
     parser.add_argument("--rest", default=None, help="truth week range, e.g. 5-18 (default: after recent)")
-    parser.add_argument("--sweep", action="store_true",
-                        help="sweep the opportunity half-life against the answer key instead of running the verdict")
     parser.add_argument("--opp-half-life", default=None,
                         help="override the opportunity half-life for the verdict run, e.g. 3 or 'none' (cumulative)")
     args = parser.parse_args()
     recent = _parse_weeks(args.recent)
     rest = _parse_weeks(args.rest) if args.rest else list(range(recent[-1] + 1, 19))
-    if args.sweep:
-        sweep(args.season, recent, rest)
-        sys.exit(0)
+    # The half-life SWEEP is retired into the split-aware harness: python3 -m application.data.corpus.tuner
     hl = OPP_HALF_LIFE_WK
     if args.opp_half_life is not None:
         hl = None if args.opp_half_life.lower() in ("none", "cumulative", "inf") else float(args.opp_half_life)

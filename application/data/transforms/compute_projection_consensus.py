@@ -69,6 +69,11 @@ from application.data.transforms._analytics import round1, skewness, stdev
 from application.data.transforms._scoring import (
     scoring_profile, projection_points_expr, actual_points_expr, standard_scoring,
 )
+# BAND_Z (weekly p25/p75 half-width) and SKEW_GAIN (Cornish-Fisher skew multiplier) are swept dials,
+# homed in the L4 dials registry and re-exported here so their canonical path
+# (projection_consensus.BAND_Z) and every `from …compute_projection_consensus import BAND_Z` resolve.
+# The non-dial shrink weights (SHRINK_K, SKEW_SHRINK_K) stay defined below — pins, not dials.
+from application.data.transforms._constants import BAND_Z, SKEW_GAIN  # noqa: F401  (re-exported dials)
 
 # Variance-shrink weight, in "games of prior": the player's residual variance is pooled
 # with the positional prior as (n·player_var + K·pos_var)/(n + K). Mirrors
@@ -76,23 +81,16 @@ from application.data.transforms._scoring import (
 # the week-4 freeze a player has ≤ 3 residuals, so K = 4 gives the prior a shade over
 # half the weight — honest for thin samples, tilting to his own history as it accrues.
 SHRINK_K = 4
-# Band half-width multiplier on the residual std: p25/p75 = center + band·(∓BAND_Z + shift).
-# The normal-theory value for the 25th/75th percentiles is 0.6745·σ; residuals are non-normal
-# (peaked in the middle with fat boom/bust tails that inflate σ), so the empirical
-# multiplier that lands IQR coverage at ~50% is tuned on the 2025 answer key
-# (backtest_projection_consensus.py --sweep) and baked here — tested, not guessed. The
-# 2025 sweep chose 0.55 once the skew term (below) shares the calibration load. Re-tune
-# in-season — width and skew are swept jointly.
-BAND_Z = 0.55
+# BAND_Z (band half-width multiplier: p25/p75 = center + band·(∓BAND_Z + shift)) is a swept dial —
+# homed in _constants.py, re-exported at the top of this module. See the registry for its derivation
+# and grid; the tuner re-fits it OOS on the corpus split.
 # Skew-shrink weight, in "games of prior": the player's residual *skewness* (third moment)
 # is pooled with the positional-skew prior as (n·g_player + K·g_pos)/(n + K). Larger than
 # SHRINK_K because a third moment is noisier than a variance, so it leans on the prior
 # longer — early season the skew is essentially the position's.
 SKEW_SHRINK_K = 8
-# Multiplier on the Cornish-Fisher skewness term: shift = SKEW_GAIN·(g/6)·(BAND_Z²−1). Pure
-# Cornish-Fisher is gain 1.0; the 2025 answer-key sweep chose 1.5 (both tails within ~0.006
-# of the 0.25 target). Tuned, not assumed — same discipline as BAND_Z.
-SKEW_GAIN = 1.5
+# SKEW_GAIN (Cornish-Fisher shift multiplier: shift = SKEW_GAIN·(g/6)·(BAND_Z²−1)) is a swept dial —
+# homed in _constants.py, re-exported at the top of this module. See the registry for its grid.
 
 
 def _consensus(proj_ppr) -> dict:

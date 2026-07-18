@@ -18,10 +18,10 @@ Method (no peeking — each week's band uses only weeks strictly before it):
     actual exists), build the band from that player's residuals over weeks < W (expanding,
     out-of-sample), then test: did the actual land in [p25, p75]?
   - Coverage = fraction inside the band (target 0.50); the two tail rates target 0.25 each.
-  - `--sweep` jointly tunes BAND_Z (p25/p75 half-width) and SKEW_GAIN (the Cornish-Fisher
-    skew-shift multiplier) to land combined coverage at 0.50 AND both tails at 0.25 —
-    residuals are non-normal and right-skewed, so both are tuned on the answer key, not
-    assumed. The winning pair sets BAND_Z + SKEW_GAIN in the transform.
+  - `objective(season, {BAND_Z, SKEW_GAIN})` returns the joint score |coverage−0.50| + the two tail
+    errors; the split-aware harness (corpus/tuner.py) sweeps BAND_Z (p25/p75 half-width) and SKEW_GAIN
+    (the Cornish-Fisher skew multiplier) over their registry grids, fitting on TRAIN and certifying on a
+    held-out season — residuals are non-normal and right-skewed, so both are earned on data, not assumed.
 
 Verdict (exit 0 iff: combined coverage within COVERAGE_TOL of 0.50, both tails within
 TAIL_TOL of 0.25, AND the skew term improves tail balance vs a re-tuned symmetric band).
@@ -31,8 +31,8 @@ volatile players both near 50%, where a one-size band over-covers the steady and
 under-covers the volatile.
 
 Usage:
-    python3 -m application.data.transforms.backtest_projection_consensus --season 2025
-    python3 -m application.data.transforms.backtest_projection_consensus --season 2025 --sweep
+    python3 -m application.data.transforms.backtest_projection_consensus --season 2025   # verdict
+    python3 -m application.data.corpus.tuner                                              # the split-aware sweep
 """
 
 import argparse
@@ -43,6 +43,7 @@ import polars as pl
 
 from application.data import data_layer
 from application.data.transforms._analytics import skewness
+from application.data.transforms._constants import REGISTRY
 from application.data.transforms.compute_projection_consensus import (
     BAND_Z,
     SHRINK_K,
@@ -58,24 +59,23 @@ COVERAGE_TOL = 0.03
 # Per-tail tolerance: the below-p25 and above-p75 rates must each land within this of 0.25.
 # The skew term earns its keep by balancing the tails, not just the combined middle.
 TAIL_TOL = 0.03
-# BAND_Z candidates swept against the answer key. 0.6745 is the normal-theory IQR
-# half-width; residuals are fatter-tailed, so the empirical best usually sits above it.
-BAND_Z_GRID = [0.5, 0.55, 0.6, 0.6745, 0.7, 0.75, 0.8, 0.85, 0.9, 1.0, 1.1, 1.25, 1.4]
-# SKEW_GAIN candidates swept jointly with BAND_Z. 0.0 = the old symmetric band; 1.0 = pure
-# Cornish-Fisher; > 1 sharpens the tail balance if the answer key wants it.
-SKEW_GAIN_GRID = [0.0, 0.5, 1.0, 1.5, 2.0]
+# The BAND_Z / SKEW_GAIN candidate grids are homed in the L4 registry (_constants.py) — the one home
+# for a swept dial. `_best_z` (the symmetric-baseline evidence in the verdict) reads BAND_Z's grid from
+# there; the joint sweep is retired into the split-aware harness (corpus/tuner.py).
+_BAND_Z_GRID = REGISTRY["BAND_Z"].grid
 # A player needs this many played+projected weeks to estimate his volatility for the
 # steady-vs-volatile calibration split (evidence, not the gate).
 MIN_STRATA_GAMES = 4
 
 
-def _prep(season: int):
+def _prep(season: int, *, reader=data_layer):
     """Consensus centers ⋈ actuals → the matched (player, week, center, actual, resid)
     frame, plus the per-player residual index and the positional-prior residual std — the
-    exact inputs the transform's band is built from."""
-    proj = data_layer.read_projections(season)
+    exact inputs the transform's band is built from. `reader` is the data seam (default
+    `data_layer`); the tuner passes a `SplitReader` that raises on a sealed season."""
+    proj = reader.read_projections(season)
     actual = (
-        data_layer.read_nfl_stats(season)
+        reader.read_nfl_stats(season)
         .select("sleeper_player_id", pl.col("week").cast(pl.Int64), "fantasy_points_ppr")
         .drop_nulls("sleeper_player_id")
         .group_by("sleeper_player_id", "week")
@@ -141,7 +141,7 @@ def _best_z(prep, skew_gain, *, player_shrink):
     """The BAND_Z on the grid whose coverage is closest to 0.50, at a fixed skew_gain."""
     matched, rbp, pos_prior, gp, pos_skew, gsk = prep
     best = (None, 0.0, 1.0)  # (z, coverage, |coverage-0.5|)
-    for z in BAND_Z_GRID:
+    for z in _BAND_Z_GRID:
         cov = _cov(_coverage_frame(matched, rbp, pos_prior, gp, pos_skew, gsk, z, skew_gain,
                                    player_shrink=player_shrink))
         if abs(cov - 0.5) < best[2]:
@@ -164,27 +164,21 @@ def _strata(matched):
     return {r["sleeper_player_id"]: ("volatile" if r["vol"] > med else "steady") for r in vol.iter_rows(named=True)}
 
 
-def sweep(season: int) -> None:
-    """Joint (BAND_Z × SKEW_GAIN) sweep: pick the pair that lands the combined 25–75
-    coverage near 0.50 AND both tails near 0.25 — the skew term only earns its keep if it
-    balances the tails, so the winner minimises combined |coverage−0.5| + the two tail errors."""
-    prep = _prep(season)
-    matched, rbp, pos_prior, gp, pos_skew, gsk = prep
-    print(f"=== BAND_Z × SKEW_GAIN sweep (per-player band): season={season}  test points={matched.height} ===")
-    print(f"  {'band_z':>8}{'skew_gain':>11}{'coverage':>10}{'below-p25':>11}{'above-p75':>11}{'score':>8}")
-    best = (None, None, 9.9)  # (band_z, skew_gain, score)
-    for gain in SKEW_GAIN_GRID:
-        for z in BAND_Z_GRID:
-            cf = _coverage_frame(matched, rbp, pos_prior, gp, pos_skew, gsk, z, gain, player_shrink=True)
-            cov = _cov(cf)
-            below, above = _tails(cf)
-            score = abs(cov - 0.5) + abs(below - 0.25) + abs(above - 0.25)
-            if score < best[2]:
-                best = (z, gain, score)
-            flag = " ←best" if (z, gain) == (best[0], best[1]) else ""
-            print(f"  {z:>8}{gain:>11}{cov:>10.3f}{below:>11.3f}{above:>11.3f}{score:>8.3f}{flag}")
-    print(f"  → best (BAND_Z, SKEW_GAIN) at this answer key: ({best[0]}, {best[1]}) "
-          f"— bake into compute_projection_consensus.py")
+def objective(season: int, consts: dict, *, reader=data_layer) -> float:
+    """The tuner's scalar fit objective for BAND_Z / SKEW_GAIN, at the values in `consts`, on `reader`'s
+    allowed partition: the per-player band's combined |coverage−0.50| + |below−0.25| + |above−0.25| (the
+    joint sweep's own score — LOWER is better). Reuses the shipped `_coverage_frame`/`_cov`/`_tails` so
+    the number matches the verdict path (standing instr 5). Unspecified dials default to their registered
+    current, so a 1-D sweep (hold the sibling at current) needs only its own key. NFL-global (reads only
+    projections + actuals), so it runs every season — this is the clearest window on the center
+    entanglement: the weekly band sits directly on the consensus center the L3 scorer flagged optimistic."""
+    z = consts.get("BAND_Z", BAND_Z)
+    gain = consts.get("SKEW_GAIN", SKEW_GAIN)
+    matched, rbp, pos_prior, gp, pos_skew, gsk = _prep(season, reader=reader)
+    cf = _coverage_frame(matched, rbp, pos_prior, gp, pos_skew, gsk, z, gain, player_shrink=True)
+    cov = _cov(cf)
+    below, above = _tails(cf)
+    return abs(cov - 0.5) + abs(below - 0.25) + abs(above - 0.25)
 
 
 def run(season: int, band_z=BAND_Z, skew_gain=SKEW_GAIN) -> bool:
@@ -253,12 +247,9 @@ def run(season: int, band_z=BAND_Z, skew_gain=SKEW_GAIN) -> bool:
 def __main():
     parser = argparse.ArgumentParser(description="Backtest the projection spread band's calibration.")
     parser.add_argument("--season", type=int, required=True)
-    parser.add_argument("--sweep", action="store_true",
-                        help="sweep BAND_Z × SKEW_GAIN against the answer key instead of running the verdict")
     args = parser.parse_args()
-    if args.sweep:
-        sweep(args.season)
-        sys.exit(0)
+    # The BAND_Z × SKEW_GAIN sweep is retired into the split-aware harness:
+    #   python3 -m application.data.corpus.tuner
     ok = run(args.season)
     sys.exit(0 if ok else 1)
 

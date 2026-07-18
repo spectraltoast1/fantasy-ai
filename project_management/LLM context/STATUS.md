@@ -1,6 +1,73 @@
 # STATUS
 
-**Last updated:** 2026-07-16 (**BACKEND — L3 SCORER COMPLETE: the FIRST MEASUREMENT the project has ever
+**Last updated:** 2026-07-17 (**BACKEND — L4 TUNER 6b: the ROS-band objective is now CORPUS-WIDE, so
+BULL_Z/ANCHOR_W are testable out-of-sample (still HELD).** Session 6 left the band objective is_mine-scoped
+→ no is_mine league pre-2024 → the tuner HELD `BULL_Z`/`ANCHOR_W` on "no OOS train window." 6b rewires
+`backtest_ros_player_band.objective` to pool rostered-freeze players across the 221 **matched** leagues
+grouped by `scoring_key` (`_corpus_test_points`): per-league `production_vor` freeze roster + the
+scoring-scoped canonical answer key (`read_outcomes(…,"player_weekly_pts_canonical")` — nfl_stats PPR
+mis-scores half by up to 7 pts/wk) + the SAME shipped `_blended_band`/`_preseason_anchor`/`_ros_sigma` math
+(no re-derivation). Graded at **`GRADE_WEEK=4`** — the is_mine roster-freeze analog, an **INTERIM single
+parameter** (the across-as-of-weeks objective is Session 8's; comparable to the is_mine 0.817 baseline),
+**deduped to one row per (scoring_key, player, season)** (same-key leagues share the band + realized, so
+duplicates are pure roster-popularity weight). Now **all 5 dials fit on a full TRAIN 2020–23 window.**
+**FINDING:** the corpus band UNDER-covers at the is_mine-fit values — the OOS fit wants **BULL_Z 1.44→1.96**
+(DEV 0.367→0.192) and **ANCHOR_W 0.25→1.0** (DEV 0.367→0.193), i.e. a much wider band / full anchor — but
+both stay **HELD, entanglement CONFIRMED**: widening/anchoring compensates for the OPTIMISTIC center
+(realized falls short of an over-high projection, so the bear tail breaks low); a de-biased center (S7)
+needs less of it — the gain tracks the center bias, not real ROS width (re-fit in Session 8, post-de-bias).
+**Testability, NOT promotion:** `BULL_Z=1.44`/`ANCHOR_W=0.25` unchanged, RECOMMEND still none, nothing
+merged. The is_mine `run()` verdict is untouched (2025 freeze-week coverage **0.817 unchanged** —
+equivalence). The split stays STRUCTURAL (the corpus objective's answer-key read raises on a sealed season;
+`BULL_Z`/`ANCHOR_W` test-sealed + certify-not-train bite). **Guardrail honesty:** the band's own is_mine
+gate has no computed 2024 spine, so `guardrail_coupled` reads **null (unverified)**, not a silent pass.
+`corpus/check_tuner.py` **GREEN WITH TEETH** incl. the 6b bite (the corpus objective computes on TRAIN;
+the is_mine-only grade still raises). **Session 7 no longer needs to build the corpus band objective — it
+exists.** — Prior (same day): **BACKEND — L4 TUNER COMPLETE: the first thing that re-fits a constant —
+honestly (Improvement-Loop Session 6, 3 commits).** `transforms/_constants.py` is the **dials registry** —
+the ONE home for the 5 swept constants (`BAND_Z`, `SKEW_GAIN`, `BULL_Z`, `ANCHOR_W`, `OPP_HALF_LIFE_WK`) as
+`Tunable(name, module, current, grid, gate, objective, scope, coupled_gates, …)`; the 3 owning modules
+**re-export** their dial(s) so the canonical dotted path + drift gate + backtests still resolve, and every
+re-exported value == its prior in-code literal (equivalence-gated — **NO live number moved**). **Registry
+rule (durable, dials-by-purpose): one home per constant — a dial migrates into the registry the FIRST time
+it is tuned; a pin never migrates.** Pins (`SEED`/`SIMS`/week-starts) + not-yet-tuned dials (`GAP_VOR`,
+`MAGIC_ODDS`, the shrink Ks…) stay in their module; `constants_snapshot.py` is UNCHANGED (still fingerprints
+the full 22-constant vector; `constants_hash` unmoved). **The recorded `BULL_Z` drift is RESOLVED by
+declaration** — the registry declares the real **1.44** and the module imports it, so a STATUS-vs-code
+disagreement is now structurally impossible (not a re-tune). `corpus/tuner.py` is the **one split-aware
+sweep harness**: given a `Tunable` it drives the read's FROZEN `objective(season, consts, *, reader)` per
+season, **fits on TRAIN 2020–23 (matched cohort), certifies on DEV 2024, seals TEST 2025 + the 48
+`never_tune` generalization leagues** — the seal is STRUCTURAL (a `SplitReader` raises `ForbiddenPartition`
+on any sealed read, so peeking is *unrepresentable*; proven to bite: test-sealed / generalization-sealed /
+certify-not-train). **Two holdouts, one binds this session:** season-wise TRAIN/DEV/TEST is the operative
+OOS test for all 5 dials; the **league-wise (generalization) seal is built + prove-bitten but
+N/A-by-construction** here (these objectives don't fit a per-league value) and becomes load-bearing from
+Session 7. The 3 backtests each gained `objective(...)` reusing their shipped internals; the 3 ad-hoc
+`--sweep` flags retired into the one harness (grids now homed in the registry); all 3 default verdicts still
+PASS (band freeze-week coverage 0.817 unchanged — the refactor moved no number). **`data_layer.write/
+read_tune_proposals`** (immutable-append L4 ledger entity) + a human `proposals/{asof}-{constant}.md`
+rendered FROM the machine row (prose can't drift from the gated numbers); `asof_date` pinned to the frozen
+scorecard's config_version (never `now()`), provenanced by the frozen inputs' clean stamps (the tuner never
+stamps its own dirty HEAD). **Four guardrails** — RECOMMEND only if ALL hold AND un-entangled: (a) the DEV
+holdout improves (not train), (b) no coupled/own gate regresses (re-run at the candidate; band dials
+decoupled-by-construction from the center reads), (c) `inputs_ok` over the fit window (read from the
+persisted ledger), (d) effect > a per-objective floor. **The DISCIPLINED first run (as-of 2026-07-16):
+`de-bias-the-center-first` is the rank-1 LEAD; `OPP_HALF_LIFE_WK` + `BAND_Z` are ALREADY the TRAIN+DEV
+optimum → HOLD (no change — the harness refuses to churn); `SKEW_GAIN`'s OOS fit moves 1.5→1.0 (toward 0,
+the pre-registered overfit) and improves DEV by 0.033 but is HELD — entanglement CONFIRMED (the skew
+compensates for the optimistic center, and it also fails the read's OWN calibration verdict at 1.0 on DEV);
+`BULL_Z`/`ANCHOR_W` have no OOS train window (is_mine-scoped pre-2024) → HOLD. RECOMMEND: none — nothing
+clears the guardrails un-entangled this session (honest: the constants are already well-fit except where
+entangled with the center).** `corpus/check_tuner.py` **GREEN WITH TEETH** (registry-is-truth · split-
+structural · harness-general · the four guardrails bite — incl. a synthetic clean pass proving the harness
+CAN recommend · first-run disciplined · determinism value-identical, + prove-bites for each). **Seam held —
+`queries.js`/views/reads/substrate/ledger/scorer untouched; the tuner writes proposals only, edits NO
+transform and merges NO constant (auto-tune, human promotes).** **NEXT — Session 7: the de-bias
+read-improvement** — add a recent-form shrinkage dial to the projection center (a second anchor toward the
+recent form the scorer showed is *beating* the projection), tuned THROUGH this harness on the split, +
+delta-tracking for a future seasonal auto-update; re-score to measure the win, THEN Session 8 re-fits the
+now-untangled band dials. **Session 5b (the self-contained HTML Trust Report dashboard) is still a named
+fast-follow.** — Prior (2026-07-16): **BACKEND — L3 SCORER COMPLETE: the FIRST MEASUREMENT the project has ever
 taken (Improvement-Loop Session 5, 3 commits) — `compute_engine_scorecard.py` turns the 2.89M frozen
 `resolutions` primitives into per-read VERDICTS, and it is the first thing in the project allowed to JUDGE —
 but only DISTRIBUTIONS, never a single claim (Law 1 structural: the grain is a slice, never a
@@ -135,7 +202,8 @@ changed constant; `inputs_ok` false path exercised) · determinism (rebuild==per
 a stable `prediction_id`, rebuilt with the PERSISTED `code_version` so it's HEAD-independent) · confidence
 honesty. **Findings (report, don't tune / don't grade):** (1) **BULL_Z drift** — STATUS narration recorded
 `1.645`, the live code is **`1.44`**; the snapshot pins the ACTUAL 1.44 and the gate documents the
-discrepancy — **NOT fixed** (changing a constant is the Tuner's job). (2) **`prediction_id` key extended**
+discrepancy — NOT fixed here (changing a constant is the Tuner's job). **[RESOLVED in Session 6: the dials
+registry declares 1.44 and the module imports it — the drift class is now structurally impossible.]** (2) **`prediction_id` key extended**
 — added `season` + `claim_type` to the §L2 key `(scope, read, subject_id, as_of_week, horizon,
 code_version)`: `claim_type` because a read emits ≥3 families per subject-week (bracket_odds), `season`
 because the scoring-scoped band recurs yearly — without them ids collide (caught by the gate's uniqueness
