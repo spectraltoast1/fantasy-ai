@@ -68,9 +68,7 @@ import polars as pl
 
 from application.data import data_layer
 from application.data.transforms._analytics import mean, pearson, round1, spectrum_positions
-from application.data.transforms._scoring import (
-    EXP_COMPONENT_COLS, actual_points_expr, expected_points_expr, scoring_profile,
-)
+from application.data.transforms._scoring import EXP_COMPONENT_COLS, expected_points_expr
 # OPP_HALF_LIFE_WK (opportunity-rate recency half-life; None = cumulative) is a swept dial, homed in the
 # L4 dials registry and re-exported here so `player_signal.OPP_HALF_LIFE_WK` and every importer resolve.
 # Every OTHER constant below (SHRINK_K, MIN_GAMES, POS_MEAN_MIN_OPP, SPIKE/STICKY_BAND, DIRECTION_*) is a
@@ -343,23 +341,21 @@ def _recent_aggregate(df: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def positional_mean_ppo(season: int, weeks, *, scoring=None) -> dict:
+def positional_mean_ppo(season: int, weeks) -> dict:
     """League-wide mean points-per-opportunity per position, from the full NFL stat pool
     (not just this league's rostered players) so the efficiency norm is stable — this is
     the borrowed substrate the per-player read regresses toward. Volume-weighted (total
     points / total opportunity) over players clearing POS_MEAN_MIN_OPP per game, across
     the given `weeks` (the weeks ≤ the as-of cutoff). The norm is a structural baseline,
     so it is cumulative within the cutoff (max sample available as of week N) — never
-    peeking past N. Session 9: the points basis is the league's CANONICAL scoring
-    (`actual_points_expr`; == fantasy_points_ppr for a PPR league → is_mine byte-identical).
+    peeking past N.
     """
-    pts = actual_points_expr(scoring_profile(scoring), scoring) if scoring else pl.col("fantasy_points_ppr")
     pool = (
         data_layer.read_nfl_stats(season)
         .filter(pl.col("position").is_in(SKILL_POSITIONS) & pl.col("week").is_in(weeks))
         .with_columns(
             opportunity_expr().alias("opp"),
-            pts.fill_null(0.0).alias("fantasy_points_ppr"),
+            pl.col("fantasy_points_ppr").fill_null(0.0),
         )
     )
     per_player = pool.group_by("player_display_name", "position").agg(
@@ -522,14 +518,6 @@ def compute(season: int, *, league_id=None) -> pl.DataFrame:
     else:
         full = join.with_columns(pl.lit(0.0).alias("exp_pts"))
 
-    # Session 9: score realized weekly points on the league's CANONICAL scoring (was raw fantasy_points_ppr —
-    # a fixed-PPR yardstick that mis-scored non-PPR keys by up to ~7 pts/wk). actual_points_expr("ppr") ==
-    # fantasy_points_ppr, so is_mine (a PPR league) is byte-identical; overwrite in place so _recent_aggregate
-    # + point_correlation pick it up as `pts`. (For non-PPR corpus keys the CODE now diverges from the frozen
-    # spine predictions — realized only on a future re-backfill; the frozen parquet stays immutable.)
-    full = full.with_columns(
-        actual_points_expr(scoring_profile(scoring), scoring).fill_null(0.0).alias("fantasy_points_ppr"))
-
     security_map = _security_map()
 
     # Materialize one tall snapshot per as-of week N = 1..maxweek: the dashboard exactly
@@ -541,7 +529,7 @@ def compute(season: int, *, league_id=None) -> pl.DataFrame:
         sub = full.filter(pl.col("week") <= n)
         # Structural efficiency baseline: cumulative over weeks ≤ N (max sample within
         # the cutoff), never peeking past N.
-        pos_mean = positional_mean_ppo(season, list(range(1, n + 1)), scoring=scoring)
+        pos_mean = positional_mean_ppo(season, list(range(1, n + 1)))
         all_rows.extend(
             _compute_as_of(sub, pos_mean, n, opp_half_life=OPP_HALF_LIFE_WK,
                            security_map=security_map, has_exp=has_exp)
