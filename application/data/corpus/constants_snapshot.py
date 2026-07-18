@@ -11,12 +11,13 @@ exact provenance-lie the ledger exists to prevent). The hash CHANGES when any co
 Keys are namespaced `<module>.<CONST>` because two modules legitimately share a constant name
 (`projection_consensus.SHRINK_K=4` vs `player_signal.SHRINK_K=6`).
 
-⚠️ BULL_Z DRIFT (recorded, NOT fixed — changing a constant is the Tuner's job, standing instr 4):
-STATUS.md narration records `BULL_Z = 1.645`; the live code (`compute_ros_player_band.py`) is `1.44`
-(the joint (BULL_Z, ANCHOR_W) = (1.44, 0.25) freeze-week tune, coverage 0.817). This snapshot pins the
-ACTUAL live value **1.44** — so the fingerprint documents what the code really did, and the drift gate
-would fire only if the code changed without updating this snapshot. The STATUS↔code discrepancy is a
-narration-vs-code documentation drift, surfaced here; it is not a code change to make in this session.
+TWO EPOCHS (Session 8c — the honest-engine promotion). `SNAPSHOT` tracks the LIVE shipped engine, so it was
+RE-PINNED in 8c: `ros_player_band.BULL_Z` 1.44→0.524, `ANCHOR_W` 0.25→0.0 (the joint re-fit at the promoted
+`CENTER_SHRINK=0.8`). `constants_hash()` therefore now fingerprints the shipped honest engine, and
+`check_constants_drift()` is green against it. The FROZEN corpus (the immutable 2.9M served=false rows) was
+made at the OLD vector — `FROZEN_CORPUS_HASH` records that baseline, and the frozen-corpus gates validate
+against IT, not the moving live hash. `CENTER_SHRINK`/`BEAR_Z` are post-corpus dials, deliberately OUT of the
+snapshot (they never fingerprinted the frozen rows; keeping them out preserves the frozen rows' reproducibility).
 """
 import hashlib
 import importlib
@@ -31,9 +32,12 @@ SNAPSHOT: dict[str, object] = {
     "projection_consensus.SKEW_GAIN": 1.5,
     "projection_consensus.SHRINK_K": 4,
     "projection_consensus.SKEW_SHRINK_K": 8,
-    # compute_ros_player_band (§2/§3 interval substrate)
-    "ros_player_band.BULL_Z": 1.44,
-    "ros_player_band.ANCHOR_W": 0.25,
+    # compute_ros_player_band (§2/§3 interval substrate) — RE-PINNED in Session 8c (the honest-engine
+    # promotion): BULL_Z 1.44→0.524, ANCHOR_W 0.25→0.0, the joint re-fit at the promoted CENTER_SHRINK=0.8.
+    # This moves the LIVE constants_hash to the shipped engine; the frozen corpus keeps FROZEN_CORPUS_HASH
+    # (below) — the two epochs are the "distinguishable population" without persisting a second copy.
+    "ros_player_band.BULL_Z": 0.524,
+    "ros_player_band.ANCHOR_W": 0.0,
     "ros_player_band.POOL_SIZE": 300,
     "ros_player_band.POSITION_FLOORS": {"QB": 32, "RB": 80, "WR": 90, "TE": 32},
     # compute_player_signal (§1 repeatability / trust)
@@ -67,12 +71,21 @@ TUNABLES: tuple[str, ...] = (
 
 
 def constants_hash() -> str:
-    """Stable 16-char fingerprint of the full snapshot vector (the `constants_hash` provenance column).
+    """Stable 16-char fingerprint of the full snapshot vector (the `constants_hash` provenance column) —
+    tracks the LIVE shipped engine (moves on a promotion re-pin).
 
     Canonicalised exactly like `_keys.scoring_key`: `json.dumps(sort_keys, compact)` → `sha1[:16]`.
     Deterministic + machine-independent (hashlib, never Python's salted `hash()`)."""
     norm = json.dumps(SNAPSHOT, sort_keys=True, separators=(",", ":"))
     return hashlib.sha1(norm.encode()).hexdigest()[:16]
+
+
+# The constants_hash that produced the FROZEN corpus (the immutable L2/L3 baseline: the 2.9M served=false
+# predictions + their resolutions + scorecard). Recorded in Session 8c when the live snapshot was re-pinned to
+# the promoted honest engine — so `constants_hash()` (live) now differs from the frozen rows' stamp. The
+# frozen-corpus gates validate against THIS baseline, not the moving live hash; a future re-backfill under a
+# new engine appends a new-hash population beside the frozen one (append-only) — the annual pipeline's job.
+FROZEN_CORPUS_HASH = "a3d01b8e5f4d5131"
 
 
 def _live_value(key: str):

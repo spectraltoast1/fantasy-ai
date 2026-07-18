@@ -83,8 +83,11 @@ NAIVE_BASELINES: dict[tuple, dict] = {
 # primitive: the realized error the honesty test stratifies (the band uses abs_error, NOT pit — pit is the
 #   calibration verdict; ros_cv claims to rank FRAGILITY, so honesty = "fragile bands miss by more").
 CONF_SIGNALS: dict[tuple, dict] = {
+    # Session 8c: shipped the raw-points spread ros_sigma as the band's confidence signal (ros_cv was proven
+    # INVERTED in S5 — its narrowest-% "most confident" stars miss most; ros_sigma is monotone-honest). Both
+    # are strength "neg" (↑ → less confident); ros_cv retires to the predictions_map confidence_json audit.
     ("ros_player_band", "interval"): {
-        "signal": "ros_cv", "strength": "neg", "primitive": "abs_error", "label": "ros_cv"},
+        "signal": "ros_sigma", "strength": "neg", "primitive": "abs_error", "label": "ros_sigma"},
     ("player_signal", "point"): {
         "signal": "regression_risk", "strength": "neg", "primitive": "abs_error", "label": "regression_risk"},
     ("true_rank", "ordinal"): {

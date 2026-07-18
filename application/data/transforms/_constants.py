@@ -87,20 +87,18 @@ _DIALS = (
              "(suspected overfit, expected toward 0 once the center is de-biased) — entangled with the center.",
     ),
     Tunable(
-        name="BULL_Z", module="ros_player_band", current=1.44,
+        name="BULL_Z", module="ros_player_band", current=0.524,
         grid=(0.0, 0.126, 0.253, 0.385, 0.524, 0.674, 0.842, 1.036, 1.150, 1.282, 1.440, 1.645, 1.960,
               2.2, 2.5, 3.0),
         gate="backtest_ros_player_band", objective="|coverage-target| + |below-above| (across as-of weeks)",
         scope="league", coupled_gates=("backtest_ros_player_band",),
         fitted_on="2025",
-        note="ROS UP-side half-width in sigma units, tuned jointly with BEAR_Z + ANCHOR_W. Was (1.44, 0.25) "
-             "with ANCHOR_W (freeze-week coverage 0.817). RESOLVES the recorded drift: STATUS narrated 1.645; "
-             "live + snapshot are 1.44 — 1.44 is the truth, DECLARED here. Grid EXTENDED both ways in S8: up "
-             "past 1.96 (6b's symmetric fit was right-censored there) AND DOWN toward 0 — with a separate "
-             "BEAR_Z the up-side wants to SHRINK (the projection centre is optimistic, so reality rarely "
-             "exceeds it; ~2% above-bull at 1.44). BULL_Z=0 is the semantic floor (bull=centre; no negative "
-             "up-width). S6 HELD; S7's null showed the band under-covers on its OWN (a WIDTH problem) → "
-             "UN-HELD in S8, re-fit jointly on the corpus objective; the fitted value is a PROPOSAL.",
+        note="ROS UP-side half-width in sigma units. **SHIPPED in Session 8c** = 0.524 — the joint re-fit at "
+             "the promoted CENTER_SHRINK=0.8 honest centre (a tight up-side: even the shrunk centre is high "
+             "enough that reality rarely far exceeds it). History: S6 (1.44, 0.25) with ANCHOR_W (freeze-week "
+             "coverage 0.817); S8 un-held it (S7's null → a WIDTH problem) and found the all-downside BULL_Z=0 "
+             "at the un-shrunk centre; 8b showed a shrunk centre gives a two-sided range; 8c promotes 0.8 + "
+             "this 0.524 band (NOT S8's all-downside). Grid extended both ways.",
     ),
     # Session 8: the DOWN-side half-width, born at 1.44 == BULL_Z so the historically-symmetric band
     # recomputes value-identical. Like FORM_ANCHOR_W (the S7 6th dial) it is a NEW dial with NO
@@ -108,26 +106,28 @@ _DIALS = (
     # predictions; the symmetric default keeps constants_hash reproducible) — check_band_honesty gates its
     # identity + the coverage recovery instead.
     Tunable(
-        name="BEAR_Z", module="ros_player_band", current=1.44,
+        name="BEAR_Z", module="ros_player_band", current=2.5,
         grid=(0.674, 0.842, 1.036, 1.150, 1.282, 1.440, 1.645, 1.960, 2.2, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0),
         gate="backtest_ros_player_band", objective="|coverage-target| + |below-above| (across as-of weeks)",
         scope="league", coupled_gates=("backtest_ros_player_band",),
         fitted_on="", last_tuned="",
-        note="ROS DOWN-side half-width in sigma units (Session 8): bear = center − BEAR_Z·sigma. Skews the "
-             "band low so the bear reaches the busts — ~0.43 of realised fell below the symmetric bear at "
-             "1.44 (S5/S7). Grid runs WIDE (to 5.0) because the down-miss is large; the joint fit lands an "
-             "INTERIOR optimum ~3.5 (not censored). current=1.44 == BULL_Z → symmetric identity; the skewed "
-             "value is a PROPOSAL (auto-tune, human promotes). Re-fit jointly with BULL_Z + ANCHOR_W.",
+        note="ROS DOWN-side half-width in sigma units (Session 8): bear = center − BEAR_Z·sigma. **SHIPPED in "
+             "Session 8c** = 2.5 — the joint re-fit at CENTER_SHRINK=0.8 (INTERIOR, not censored). The bear "
+             "stays wide because the down-side is real (busts): even at the honest centre ~0.06-0.11 of "
+             "realised falls below it. Post-corpus dial like FORM_ANCHOR_W: NO constants_snapshot pin, NO "
+             "check_tuner._MODULES entry — check_band_honesty gates it. Grid runs to 5.0. (Was 1.44 == BULL_Z "
+             "symmetric identity through 8b; 8c promotes the asymmetric two-sided band.)",
     ),
     Tunable(
-        name="ANCHOR_W", module="ros_player_band", current=0.25,
+        name="ANCHOR_W", module="ros_player_band", current=0.0,
         grid=(0.0, 0.25, 0.5, 0.75, 1.0),
         gate="backtest_ros_player_band", objective="|coverage-target| + |below-above| (across as-of weeks)",
         scope="league", coupled_gates=("backtest_ros_player_band",),
         fitted_on="2025",
-        note="Max preseason-anchor weight (early-season blend toward the ADP-curve prior). S6 HELD; "
-             "S7's null (band under-covers on its own) → UN-HELD in S8, re-fit jointly with BULL_Z + BEAR_Z "
-             "on the corpus objective; the fitted value is a PROPOSAL (human promotes).",
+        note="Max preseason-anchor weight (early-season blend toward the ADP-curve prior). **SHIPPED in "
+             "Session 8c** = 0.0 — the joint re-fit at CENTER_SHRINK=0.8 wants no preseason anchor (once the "
+             "centre is honest, the ADP anchor is counter-productive; ANCHOR_W=0 is the semantic floor = "
+             "pure-projection band). Was 0.25 (S6); S8 un-held it; 8c promotes 0.0.",
     ),
     # The 6th dial (Session 7, the de-bias): a SECOND anchor toward recent form, born in the registry at
     # 0.0 (a strict no-op — the shipped engine is value-identical until Will promotes λ*). Unlike the 5
@@ -151,17 +151,18 @@ _DIALS = (
     # constants_snapshot pin and NO check_tuner._MODULES drift entry (it post-dates the frozen corpus; the
     # identity default keeps constants_hash reproducible) — check_center_shrink gates its 1.0 identity.
     Tunable(
-        name="CENTER_SHRINK", module="production_vor", current=1.0,
+        name="CENTER_SHRINK", module="production_vor", current=0.8,
         grid=(1.0, 0.95, 0.9, 0.85, 0.8, 0.75, 0.7, 0.65, 0.6, 0.55, 0.5),
         gate="backtest_production_vor", objective="MAE(shrunk ROS centre, realized ROS canonical)",
         scope="scoring", coupled_gates=("backtest_ros_player_band", "backtest_true_rank"),
         fitted_on="", last_tuned="",
         note="Flat multiplicative shrink of the borrowed ROS centre: center' = CENTER_SHRINK·center, applied "
              "in the shared _ros_values so production_vor AND the band inherit it (composes with FORM_ANCHOR_W). "
-             "The SYSTEMATIC-shrink lever S7 parked: the centre sits at ~98th pct of realised (S8), which "
-             "forced the honest band all-downside (BULL_Z→0); center-MAE is minimised at the median, so a "
-             "shrink toward it should re-symmetrise the band (BULL_Z≈BEAR_Z). current=1.0 → identity; "
-             "multiplicative ⇒ rank-preserving. SHRINK* is a PROPOSAL (auto-tune, human promotes).",
+             "**SHIPPED in Session 8c = 0.8** (the honest centre; the projection sat ~98th pct of realised — "
+             "~43% too high). 0.8 is the OOS-safe value (TRAIN-best was 0.7; DEV/TEST centre-MAE bottom nearer "
+             "0.8). Multiplicative ⇒ RANK-PRESERVING: VOR / true-rank / playoff-odds are invariant (proven, "
+             "prove_shrink_invariance) — only projected points ~0.8× + the band move. Post-corpus dial: NO "
+             "constants_snapshot pin; check_center_shrink gates the invariance + honesty. current=0.8 shipped.",
     ),
 )
 
