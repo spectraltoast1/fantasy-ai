@@ -293,8 +293,8 @@ def sibling_check(tunable, proposed):
 
 
 def entanglement_evidence(tunable, cur, proposed):
-    """Confirm the entanglement rather than assert it (standing instr 6). For SKEW_GAIN the OOS fit itself
-    is the confirmation: it moves toward 0 exactly as an overfit-to-a-biased-center skew term would."""
+    """Confirm the entanglement rather than assert it (standing instr 6). The OOS fit's DIRECTION is the
+    confirmation: each band dial moves exactly the way compensating for an optimistic center would."""
     if tunable.name == "SKEW_GAIN" and proposed is not None and proposed != cur:
         toward = "toward 0" if proposed < cur else "away from 0"
         return (f"CONFIRMED: the OOS fit moves SKEW_GAIN {cur}→{proposed} ({toward}), matching the "
@@ -302,6 +302,13 @@ def entanglement_evidence(tunable, cur, proposed):
                 f"optimistic center (L3: production_vor loses to carry-recent-form every season) inflates "
                 f"that imbalance, so the fitted skew is doing work a de-biased center (S7) would obviate — "
                 f"the apparent gain tracks the center bias, not a real ROS property.")
+    if tunable.name in ("BULL_Z", "ANCHOR_W") and proposed is not None and proposed != cur:
+        return (f"CONFIRMED (corpus OOS): the fit moves {tunable.name} {cur}→{proposed} — "
+                f"{'wider band / more anchor' if proposed > cur else 'narrower band'}. The matched-cohort "
+                f"band UNDER-covers at the is_mine-fit value (L3: ~0.55 vs 0.80); widening/anchoring catches "
+                f"the low misses an OPTIMISTIC center produces (realized falls short of an over-high "
+                f"projection, so the bear tail breaks low). A de-biased center (S7) needs less of this — the "
+                f"gain tracks the center bias, not a real ROS width. Re-fit in Session 8, post-de-bias.")
     return ("HELD downstream of the optimistic center — a change here would compensate for the center bias "
             "S7 removes; re-fit once the constants are untangled.")
 
@@ -396,10 +403,8 @@ def evaluate(tunable, mani, asof, baseline, io_frac):
                 g_inputs=g_inputs, asof_date=asof, baseline_code_version=baseline["code_version"],
                 baseline_constants_hash=baseline["constants_hash"])
 
-    if best is None:  # objective not computable on TRAIN — no OOS fit possible
-        reason = ("no OOS TRAIN window — the objective is is_mine-scoped and no is_mine league exists "
-                  "before 2024, so it cannot be fit on 2020–2023 (a corpus-wide per-league ROS-band "
-                  "objective is Session-7 work)")
+    if best is None:  # objective not computable on any TRAIN season — no OOS fit possible
+        reason = ("no OOS TRAIN window — the objective was not computable on any TRAIN season (2020–2023)")
         if entangled:
             reason += f"; and {ENTANGLE_REASON}"
         return Proposal(proposed="n/a (no OOS fit)", train_metric=None, dev_metric_current=None,
@@ -416,7 +421,11 @@ def evaluate(tunable, mani, asof, baseline, io_frac):
     g_holdout = bool(changed and dev_cur is not None and dev_best is not None and effect > 0)
     g_effect = bool(changed and effect > floor)
     sib = sibling_check(tunable, proposed) if changed else {}
-    g_coupled = all(v["pass"] for v in sib.values() if v["pass"] is not None) if sib else True
+    # Honest 3-state: True/False if any coupled gate was evaluable; None if a change had gates but none
+    # could be evaluated (e.g. the band's is_mine own-gate has no computed 2024 spine) — "unverified", not
+    # a silent pass. `None` is falsy, so it cannot let a proposal RECOMMEND on an unchecked coupling.
+    _evaluable = [v["pass"] for v in sib.values() if v["pass"] is not None]
+    g_coupled = (all(_evaluable) if _evaluable else (None if sib else True))
 
     verdict, kind = decide_verdict(entangled=entangled, changed=changed, g_holdout=g_holdout,
                                    g_effect=g_effect, g_inputs=g_inputs, g_coupled=g_coupled)

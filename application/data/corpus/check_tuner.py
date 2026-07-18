@@ -136,6 +136,11 @@ def check(seasons=None) -> bool:
         all(rows[c].null_count() == 0 for c in ev_cols), results)
     _ok("SKEW_GAIN confirms the entanglement (OOS fit moves toward 0 — 1.5→1.0)",
         by["SKEW_GAIN"].proposed == 1.0 and "CONFIRMED" in by["SKEW_GAIN"].hold_reason, results)
+    # 6b: the band dials now fit on a REAL OOS window (the corpus objective), where the is_mine objective
+    # had none — testability, not promotion (still HELD, still not recommended).
+    _ok("BULL_Z/ANCHOR_W now fit on a full TRAIN window (n=4, corpus objective) — was n=0 is_mine",
+        by["BULL_Z"].n_train_seasons == len(tuner.TRAIN_SEASONS)
+        and by["ANCHOR_W"].n_train_seasons == len(tuner.TRAIN_SEASONS), results)
 
     # 6 — determinism ----------------------------------------------------------------------------------
     print("  6 — determinism (rebuild value-identical; the pinned as-of + rounded metrics):")
@@ -171,6 +176,19 @@ def check(seasons=None) -> bool:
         .alias("effect_size"))
     _ok("check-6 bites (a perturbed metric ≠; a row permutation ==)",
         (not _frame_eq(rows, perturbed)) and _frame_eq(rows, rows.reverse()), results)
+    # 6b: the corpus band objective returns a real TRAIN window where the is_mine-only path does NOT — the
+    # rewire's scope is exactly the fix. Positive: objective computable on a TRAIN season. Inverse bite: the
+    # is_mine _test_points (no league_id) still raises on that season (no is_mine spine pre-2024).
+    from application.data.transforms import backtest_ros_player_band as _brb
+    _train = tuner.TRAIN_SEASONS[0]
+    corpus_ok = isinstance(_brb.objective(_train, {}), float)
+    try:
+        _brb._test_points(_train, 1.44, 0.25)          # is_mine default (no league_id)
+        ismine_empty = False
+    except (FileNotFoundError, ValueError):
+        ismine_empty = True
+    _ok("check-6b bites (corpus band objective computes on TRAIN; the is_mine-only grade still raises)",
+        corpus_ok and ismine_empty, results)
 
     ok = all(results) and bool(results)
     print()

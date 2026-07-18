@@ -1,6 +1,29 @@
 # STATUS
 
-**Last updated:** 2026-07-17 (**BACKEND — L4 TUNER COMPLETE: the first thing that re-fits a constant —
+**Last updated:** 2026-07-17 (**BACKEND — L4 TUNER 6b: the ROS-band objective is now CORPUS-WIDE, so
+BULL_Z/ANCHOR_W are testable out-of-sample (still HELD).** Session 6 left the band objective is_mine-scoped
+→ no is_mine league pre-2024 → the tuner HELD `BULL_Z`/`ANCHOR_W` on "no OOS train window." 6b rewires
+`backtest_ros_player_band.objective` to pool rostered-freeze players across the 221 **matched** leagues
+grouped by `scoring_key` (`_corpus_test_points`): per-league `production_vor` freeze roster + the
+scoring-scoped canonical answer key (`read_outcomes(…,"player_weekly_pts_canonical")` — nfl_stats PPR
+mis-scores half by up to 7 pts/wk) + the SAME shipped `_blended_band`/`_preseason_anchor`/`_ros_sigma` math
+(no re-derivation). Graded at **`GRADE_WEEK=4`** — the is_mine roster-freeze analog, an **INTERIM single
+parameter** (the across-as-of-weeks objective is Session 8's; comparable to the is_mine 0.817 baseline),
+**deduped to one row per (scoring_key, player, season)** (same-key leagues share the band + realized, so
+duplicates are pure roster-popularity weight). Now **all 5 dials fit on a full TRAIN 2020–23 window.**
+**FINDING:** the corpus band UNDER-covers at the is_mine-fit values — the OOS fit wants **BULL_Z 1.44→1.96**
+(DEV 0.367→0.192) and **ANCHOR_W 0.25→1.0** (DEV 0.367→0.193), i.e. a much wider band / full anchor — but
+both stay **HELD, entanglement CONFIRMED**: widening/anchoring compensates for the OPTIMISTIC center
+(realized falls short of an over-high projection, so the bear tail breaks low); a de-biased center (S7)
+needs less of it — the gain tracks the center bias, not real ROS width (re-fit in Session 8, post-de-bias).
+**Testability, NOT promotion:** `BULL_Z=1.44`/`ANCHOR_W=0.25` unchanged, RECOMMEND still none, nothing
+merged. The is_mine `run()` verdict is untouched (2025 freeze-week coverage **0.817 unchanged** —
+equivalence). The split stays STRUCTURAL (the corpus objective's answer-key read raises on a sealed season;
+`BULL_Z`/`ANCHOR_W` test-sealed + certify-not-train bite). **Guardrail honesty:** the band's own is_mine
+gate has no computed 2024 spine, so `guardrail_coupled` reads **null (unverified)**, not a silent pass.
+`corpus/check_tuner.py` **GREEN WITH TEETH** incl. the 6b bite (the corpus objective computes on TRAIN;
+the is_mine-only grade still raises). **Session 7 no longer needs to build the corpus band objective — it
+exists.** — Prior (same day): **BACKEND — L4 TUNER COMPLETE: the first thing that re-fits a constant —
 honestly (Improvement-Loop Session 6, 3 commits).** `transforms/_constants.py` is the **dials registry** —
 the ONE home for the 5 swept constants (`BAND_Z`, `SKEW_GAIN`, `BULL_Z`, `ANCHOR_W`, `OPP_HALF_LIFE_WK`) as
 `Tunable(name, module, current, grid, gate, objective, scope, coupled_gates, …)`; the 3 owning modules
