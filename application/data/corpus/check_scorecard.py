@@ -60,6 +60,18 @@ def _frame_eq(a: pl.DataFrame, b: pl.DataFrame) -> bool:
     return a.select(cols).sort(cols).equals(b.select(cols).sort(cols))
 
 
+def _latest_population(sc: pl.DataFrame) -> pl.DataFrame:
+    """The current scorer population. A re-score APPENDS a new code_version population beside the frozen one
+    (std instr 8 — additive + provenanced), so a season file can hold >1 population; the newest is concatenated
+    last (write_engine_scorecard appends), and code_version is an unordered sha with a null recorded_at, so
+    append order is the only signal. Mirrors trust_report._load — the gate validates the latest population,
+    the frozen one is retained on disk as history."""
+    if sc.is_empty():
+        return sc
+    latest_cv = sc.filter(pl.col("slice_dim") == "overall")["code_version"][-1]
+    return sc.filter(pl.col("code_version") == latest_cv)
+
+
 # --- predicates shared by the real checks AND the prove-bites ---------------------------------------
 
 def _coverage_ok(sc: pl.DataFrame) -> bool:
@@ -137,7 +149,7 @@ def check(seasons=SPINED_SEASONS) -> bool:
         print("  no engine_scorecard on disk — run compute_engine_scorecard first.")
         return False
     results = []
-    frames = {s: data_layer.read_engine_scorecard(s) for s in seasons}
+    frames = {s: _latest_population(data_layer.read_engine_scorecard(s)) for s in seasons}
     allsc = pl.concat(frames.values(), how="diagonal")
     print(f"\n  gate over {len(seasons)} spined seasons, {allsc.height:,} scorecard rows")
 
@@ -180,6 +192,18 @@ def check(seasons=SPINED_SEASONS) -> bool:
     _ok("no prediction_id/single-claim column; overall+base rows on the clean population only",
         all(_law1_ok(frames[s]) for s in seasons), results)
 
+    print("  7 — additive re-score (a re-score APPENDS a new population; the gate scores the latest):")
+    on_disk = {s: data_layer.read_engine_scorecard(s) for s in seasons}
+    npops = {s: on_disk[s].filter(pl.col("slice_dim") == "overall")["code_version"].n_unique() for s in seasons}
+    # the selected latest population is a COMPLETE single population (exactly the 9 families, one code_version);
+    # and wherever a re-score has appended (npops>1), the frozen population's rows are RETAINED beside it.
+    latest_complete = all(_coverage_ok(frames[s])
+                          and frames[s].filter(pl.col("slice_dim") == "overall")["code_version"].n_unique() == 1
+                          for s in seasons)
+    frozen_retained = all(on_disk[s].height > frames[s].height for s in seasons if npops[s] > 1)
+    _ok(f"latest population complete + single-versioned; frozen retained where re-scored (per-season pops: {npops})",
+        latest_complete and frozen_retained, results)
+
     print("  PROVE-BITES:")
     demo = frames[s0]
     a_scid = demo["scorecard_id"][0]
@@ -212,6 +236,11 @@ def check(seasons=SPINED_SEASONS) -> bool:
         not _law1_ok(demo.with_columns(pl.when(pl.col("scorecard_id") == base_scid)
                                        .then(pl.col("n_resolved") - 1).otherwise(pl.col("n_resolved"))
                                        .alias("n_resolved"))), results)
+    # check-7 selection bite: two stacked populations diverge from one recompute (so determinism would fail
+    # WITHOUT _latest_population), and the selector recovers exactly the appended-last population.
+    stacked = pl.concat([demo.with_columns(pl.lit("frozen_older_cv").alias("code_version")), demo], how="vertical")
+    _ok("check-7 selection bites (a 2-population frame ≠ one recompute; _latest_population recovers the latest)",
+        (not _frame_eq(demo, stacked)) and _frame_eq(_latest_population(stacked), demo), results)
 
     ok = all(results) and bool(results)
     print()

@@ -47,8 +47,11 @@ def _load() -> pl.DataFrame:
     if not frames:
         raise SystemExit("no engine_scorecard on disk — run compute_engine_scorecard first.")
     sc = pl.concat(frames, how="diagonal")
-    # keep only the current scorer population (latest code_version) so a re-score doesn't double the report
-    latest = sc.filter(pl.col("slice_dim") == "overall")["code_version"].mode().to_list()[0]
+    # keep only the current scorer population (latest code_version) so a re-score doesn't double the report.
+    # Select by APPEND ORDER (the re-score is concatenated last): with two equal-sized populations `.mode()`
+    # is a tie and order-undefined, so it could render the stale population — the last overall row's
+    # code_version is the appended-last (latest) one. Mirrors check_scorecard._latest_population.
+    latest = sc.filter(pl.col("slice_dim") == "overall")["code_version"][-1]
     return sc.filter(pl.col("code_version") == latest)
 
 
@@ -132,10 +135,13 @@ def build_report(sc: pl.DataFrame) -> str:
     L.append("")
     L.append("## Headline")
     L.append("")
-    L.append("- **Projection optimism is real and stable.** `production_vor` **loses to "
-             "carry-recent-form-forward every season** (skill < 0) while ranking well — it prices the ORDER "
-             "right but the LEVEL high. The `ros_player_band` under-covers (~0.55 vs 0.80 target) with PIT "
-             "piled at the edges. Two independent reads, one story. *(A Tuner lead, not fixed here.)*")
+    L.append("- **Projection optimism is real but MODEST.** `production_vor` prices the ORDER well "
+             "(Spearman ~0.88) but runs the LEVEL somewhat high — it still trails a **leak-safe** "
+             "carry-recent-form-forward naive every season, but only by a small margin (pooled skill ~−0.10; "
+             "2023–24 essentially even), not the steep every-season loss first reported. That earlier number "
+             "leaned on a naive with a **hindsight** realized forward-week count; on the scheduled remaining "
+             "weeks a real forecast has (Session 9 fix), the gap collapses. The `ros_player_band` still "
+             "under-covers (~0.56 vs 0.80 target) with PIT piled at the edges. *(A Tuner lead, not fixed here.)*")
     L.append("- **The measurement reads hold out-of-sample** (§1 signal, §5 rank, §6 depth) — the "
              "pre-registered prediction stands.")
     L.append("- **Confidence-honesty (law 2) — the headline — is mixed.** Playoff odds and true-rank sort "

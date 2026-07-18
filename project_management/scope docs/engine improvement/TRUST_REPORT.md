@@ -4,7 +4,7 @@
 
 ## Headline
 
-- **Projection optimism is real and stable.** `production_vor` **loses to carry-recent-form-forward every season** (skill < 0) while ranking well — it prices the ORDER right but the LEVEL high. The `ros_player_band` under-covers (~0.55 vs 0.80 target) with PIT piled at the edges. Two independent reads, one story. *(A Tuner lead, not fixed here.)*
+- **Projection optimism is real but MODEST.** `production_vor` prices the ORDER well (Spearman ~0.88) but runs the LEVEL somewhat high — it still trails a **leak-safe** carry-recent-form-forward naive every season, but only by a small margin (pooled skill ~−0.10; 2023–24 essentially even), not the steep every-season loss first reported. That earlier number leaned on a naive with a **hindsight** realized forward-week count; on the scheduled remaining weeks a real forecast has (Session 9 fix), the gap collapses. The `ros_player_band` still under-covers (~0.56 vs 0.80 target) with PIT piled at the edges. *(A Tuner lead, not fixed here.)*
 - **The measurement reads hold out-of-sample** (§1 signal, §5 rank, §6 depth) — the pre-registered prediction stands.
 - **Confidence-honesty (law 2) — the headline — is mixed.** Playoff odds and true-rank sort honestly by error; the **band's `ros_cv` is INVERTED** (its narrowest bands miss by the most) and positional_depth's `spectrum_pos` doesn't sort. 4 reads state no confidence at all.
 
@@ -12,7 +12,7 @@
 
 | Read | n | Skill | Calibration | Confidence-honesty (law 2) | Pre-registered |
 |---|--:|---|---|---|---|
-| production_vor — rest-of-season VOR (the foundation) | 692,671 | 🔴 -0.25 | ⚪ n/a (no stated distribution) | ⚪ unmeasurable (no native confidence — law-2 gap) | — |
+| production_vor — rest-of-season VOR (the foundation) | 692,671 | 🔴 -0.10 | ⚪ n/a (no stated distribution) | ⚪ unmeasurable (no native confidence — law-2 gap) | — |
 | ros_player_band — the ROS range (bear/center/bull) | 86,547 | ⚪ n/a (calibration read) | 🔴 KS 0.47, cover 0.57/0.80 | 🔴 INVERTED/flat — laundering noise (ρ=+0.58, ros_cv) | §3 band calibrated to ~0.80: SURPRISE ✗ |
 | player_signal — expected ppg (§1 repeatability) | 658,395 | 🟡 +0.03 | ⚪ n/a (no stated distribution) | 🟢 honest (ρ=-0.04, regression_risk) | §1 signal HOLD (measurement): HOLD ✓ |
 | player_signal — trend direction | 658,395 | 🔴 -0.11 | ⚪ n/a (no stated distribution) | ⚪ unmeasurable (no native confidence — law-2 gap) | — |
@@ -38,7 +38,7 @@
 
 | Read | 2020 | 2021 | 2022 | 2023 | 2024 | 2025 |
 |---|--:|--:|--:|--:|--:|--:|
-| production_vor/point | -0.39 | -0.36 | -0.24 | -0.17 | -0.16 | -0.34 |
+| production_vor/point | -0.20 | -0.21 | -0.09 | -0.03 | -0.00 | -0.20 |
 | player_signal/point | -0.02 | +0.01 | +0.03 | +0.03 | +0.03 | +0.04 |
 | player_signal/direction | -0.17 | -0.26 | -0.11 | -0.09 | -0.06 | -0.12 |
 | true_rank/ordinal | +0.31 | +0.30 | +0.36 | +0.33 | +0.32 | +0.39 |
@@ -51,7 +51,7 @@
 
 | Read | matched (skill) | generalization (skill) | Δ |
 |---|--:|--:|--:|
-| production_vor/point | -0.27 | -0.15 | +0.13 |
+| production_vor/point | -0.11 | -0.05 | +0.06 |
 | player_signal/point | +0.03 | +0.02 | -0.01 |
 | player_signal/direction | -0.12 | -0.07 | +0.05 |
 | true_rank/ordinal | +0.32 | +0.47 | +0.14 |

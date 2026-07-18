@@ -230,7 +230,8 @@ def _schedule(matchups: pl.DataFrame, weeks: range, idx: dict) -> dict:
     so the pair order is deterministic: polars group_by doesn't guarantee intra-group row order, and on
     a zero-score tie (e.g. two all-OUT bye rosters, μ=σ=0) the winner otherwise flips with row order,
     making the fixed-SEED sim non-reproducible run-to-run. Sorting makes the fixed seed actually
-    deterministic (a latent fixed here alongside the division-seeding work)."""
+    deterministic — a determinism fix that landed with the Session 3d/3e division-seeding work,
+    proven a no-op on the persisted corpus."""
     sched: dict = {}
     sub = matchups.filter(pl.col("week").is_in(list(weeks)) & pl.col("matchup_id").is_not_null())
     for (wk, _mid), g in sub.group_by("week", "matchup_id"):
