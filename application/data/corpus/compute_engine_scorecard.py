@@ -33,6 +33,7 @@ import time
 import polars as pl
 
 from application.data import data_layer
+from application.data.corpus import constants_snapshot
 from application.data.corpus import scorecard_registry as reg
 from application.data.corpus.compute_resolutions import _DIR_ABS, _DIR_REL
 
@@ -140,14 +141,22 @@ def _cohort_map() -> pl.DataFrame:
 
 
 def _naive_forward_points(res: pl.DataFrame, pwp: pl.DataFrame, join_on: list) -> pl.DataFrame:
-    """recent-ppg-forward naive for a ROS point read: naive = mean(pts | wk ≤ as_of) × #{realized fwd weeks
-    (≥ as_of)} — the same window `truth` was summed over. Returns prediction_id → naive_pred."""
+    """recent-ppg-forward naive for a ROS point read: naive = mean(pts | wk ≤ as_of) × #{SCHEDULED remaining
+    weeks in the truth window (≥ as_of)}. The remaining-week count is the LEAGUE-WIDE scheduled horizon
+    (`max played week − as_of + 1`), a leak-safe schedule property identical for every player at a given
+    (league, as_of). NOT the player's own #realized forward weeks (Session 9: that was hindsight a leak-safe
+    forecast can't use — injuries/byes shrink it and flattered the naive, making `production_vor` "lose to
+    recent form every season" too harsh). Returns prediction_id → naive_pred."""
     if not res.height:
         return pl.DataFrame(schema={"prediction_id": pl.Utf8, "naive_pred": pl.Float64})
+    # League-wide scheduled ROS horizon: last played week in the league − as_of + 1 (weeks ≥ as_of, matching
+    # compute_resolutions' inclusive truth window). A schedule fact, not a per-player realized count.
+    sched = pwp.group_by("league_id").agg(pl.col("week").max().alias("_lg_max_week"))
     j = res.select("prediction_id", "as_of_week", *join_on).join(pwp, on=join_on, how="left")
-    agg = j.group_by("prediction_id").agg(
-        recent=pl.col("pts").filter(pl.col("week") <= pl.col("as_of_week")).mean(),
-        n_fwd=(pl.col("week").is_not_null() & (pl.col("week") >= pl.col("as_of_week"))).sum())
+    agg = j.group_by("prediction_id", "league_id", "as_of_week").agg(
+        recent=pl.col("pts").filter(pl.col("week") <= pl.col("as_of_week")).mean())
+    agg = agg.join(sched, on="league_id", how="left").with_columns(
+        n_fwd=pl.max_horizontal(pl.lit(0), pl.col("_lg_max_week") - pl.col("as_of_week") + 1))
     return agg.with_columns((pl.col("recent") * pl.col("n_fwd")).alias("naive_pred")).select("prediction_id", "naive_pred")
 
 
@@ -280,6 +289,9 @@ def enrich(season: int) -> pl.DataFrame:
 
 _SKILL_KIND = {k: v["skill_kind"] for k, v in reg.NAIVE_BASELINES.items()}
 _PROVENANCE = {k: v["provenance"] for k, v in reg.NAIVE_BASELINES.items()}
+# Retained for frozen_era()'s epoch patch (constants_snapshot restores ces._CONF_LABEL[band]=ros_cv). The
+# scorer itself now reads the label from reg.CONF_SIGNALS at runtime (see `lab` in _finalize) so it's correct
+# under `python -m` too (where __main__ ≠ the fully-qualified module frozen_era patches).
 _CONF_LABEL = {k: v["label"] for k, v in reg.CONF_SIGNALS.items()}
 _CONF_POLARITY = {k: v["strength"] for k, v in reg.CONF_SIGNALS.items()}
 CONF_MONO_MARGIN = reg.CONF_MONO_MARGIN   # re-exported for the report / gate
@@ -368,8 +380,12 @@ def _finalize(agg: pl.DataFrame, slice_dim: str, slice_val_col, ctx: dict, *,
         lambda s: _SKILL_KIND.get((s["read"], s["claim_type"]), "na"), return_dtype=pl.Utf8)
     prov = pl.struct("read", "claim_type").map_elements(
         lambda s: _PROVENANCE.get((s["read"], s["claim_type"]), "na"), return_dtype=pl.Utf8)
+    # Read the label from reg.CONF_SIGNALS at RUNTIME (like `ml2` below), NOT the import-time _CONF_LABEL
+    # cache: under `python -m …` the scorer runs as __main__ while frozen_era() patches the fully-qualified
+    # module's _CONF_LABEL — a different object — so a cached read would stamp the live label (ros_sigma) on a
+    # frozen-era re-score whose numbers are ros_cv. reg.CONF_SIGNALS is a single shared dict frozen_era patches.
     lab = pl.struct("read", "claim_type").map_elements(
-        lambda s: _CONF_LABEL.get((s["read"], s["claim_type"])), return_dtype=pl.Utf8)
+        lambda s: reg.CONF_SIGNALS.get((s["read"], s["claim_type"]), {}).get("label"), return_dtype=pl.Utf8)
     pol = pl.struct("read", "claim_type").map_elements(
         lambda s: _CONF_POLARITY.get((s["read"], s["claim_type"])), return_dtype=pl.Utf8)
     ml2 = pl.struct("read", "claim_type").map_elements(
@@ -653,7 +669,12 @@ def main():
     ap = argparse.ArgumentParser(description="Compute the L3 engine scorecard (Session 5).")
     ap.add_argument("--season", type=int, default=None, help="one season (default: all spined)")
     a = ap.parse_args()
-    run((a.season,) if a.season else SPINED_SEASONS)
+    # Session 9: score the FROZEN resolutions at the epoch that made them (the band's confidence in the frozen
+    # ledger is ros_cv, not the shipped ros_sigma) so a re-score reproduces every non-production_vor row and the
+    # only change is the corrected production_vor naive. Mirrors check_scorecard.main(). This wrap becomes
+    # epoch-conditional once the annual re-backfill lands a live-engine population (parked).
+    with constants_snapshot.frozen_era():
+        run((a.season,) if a.season else SPINED_SEASONS)
 
 
 if __name__ == "__main__":

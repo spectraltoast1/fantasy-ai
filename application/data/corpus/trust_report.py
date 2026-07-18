@@ -47,8 +47,11 @@ def _load() -> pl.DataFrame:
     if not frames:
         raise SystemExit("no engine_scorecard on disk — run compute_engine_scorecard first.")
     sc = pl.concat(frames, how="diagonal")
-    # keep only the current scorer population (latest code_version) so a re-score doesn't double the report
-    latest = sc.filter(pl.col("slice_dim") == "overall")["code_version"].mode().to_list()[0]
+    # keep only the current scorer population (latest code_version) so a re-score doesn't double the report.
+    # Select by APPEND ORDER (the re-score is concatenated last): with two equal-sized populations `.mode()`
+    # is a tie and order-undefined, so it could render the stale population — the last overall row's
+    # code_version is the appended-last (latest) one. Mirrors check_scorecard._latest_population.
+    latest = sc.filter(pl.col("slice_dim") == "overall")["code_version"][-1]
     return sc.filter(pl.col("code_version") == latest)
 
 

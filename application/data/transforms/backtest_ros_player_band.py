@@ -58,6 +58,8 @@ import polars as pl
 
 from application.data import data_layer
 from application.data.transforms._analytics import mean
+from application.data.transforms._scoring import actual_points_expr, scoring_profile
+from application.data.transforms.compute_production_vor import _resolve_scoring
 from application.data.transforms.compute_ros_player_band import (
     ANCHOR_W, BEAR_Z, BULL_Z, SKILL_POSITIONS, _blended_band, _load_anchor_inputs, _preseason_anchor,
     _ros_sigma,
@@ -85,15 +87,21 @@ COVERAGE_TOL = 0.05
 GRADE_WEEK = 4
 
 
-def _actual_weekly(season: int, *, reader=data_layer) -> dict:
-    """(sleeper_player_id, week) → actual PPR points, the answer key for realised ROS."""
+def _actual_weekly(season: int, *, reader=data_layer, scoring=None) -> dict:
+    """(sleeper_player_id, week) → actual points under the league's CANONICAL scoring, the answer key for
+    realised ROS. Session 9: was raw `fantasy_points_ppr`, a fixed-PPR yardstick mis-scoring non-PPR keys by
+    up to ~7 pts/wk; now `actual_points_expr(profile, scoring)` (the basis the stored `player_weekly_pts_
+    canonical` is built from). For a PPR league `actual_points_expr` == `fantasy_points_ppr`, so is_mine is
+    byte-identical. `scoring` None → raw PPR fallback (the is_mine default is a PPR league)."""
+    profile = scoring_profile(scoring) if scoring else "ppr"
+    pts = actual_points_expr(profile, scoring) if scoring else pl.col("fantasy_points_ppr")
     df = (
         reader.read_nfl_stats(season)
         .filter(pl.col("position").is_in(SKILL_POSITIONS))
-        .select("sleeper_player_id", pl.col("week").cast(pl.Int64), "fantasy_points_ppr")
+        .select("sleeper_player_id", pl.col("week").cast(pl.Int64), pts.alias("actual"))
         .drop_nulls("sleeper_player_id")
         .group_by("sleeper_player_id", "week")
-        .agg(pl.col("fantasy_points_ppr").first().alias("actual"))
+        .agg(pl.col("actual").first().alias("actual"))
     )
     return {(r["sleeper_player_id"], r["week"]): float(r["actual"]) for r in df.iter_rows(named=True)}
 
@@ -123,7 +131,7 @@ def _test_points(season: int, bull_z: float, anchor_w: float, *, bear_z: float |
         "as_of_week", "sleeper_player_id", "security"
     )
     if actual is None:
-        actual = _actual_weekly(season, reader=reader)
+        actual = _actual_weekly(season, reader=reader, scoring=_resolve_scoring(season, scoring_key, reader=reader))
     adp_map, curve_lookup, curve_max_rank = anchor_inputs if anchor_inputs is not None \
         else _load_anchor_inputs(season)
     bz = bull_z if bear_z is None else bear_z   # bear_z defaults to bull_z → historically-symmetric band

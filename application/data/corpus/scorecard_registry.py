@@ -47,7 +47,8 @@ CONF_MONO_MARGIN = 0.03
 NAIVE_BASELINES: dict[tuple, dict] = {
     ("production_vor", "point"): {
         "skill_kind": "mae", "baseline": "recent_ppg_forward", "provenance": "declared",
-        "desc": "carry recent form forward: mean(pts | wk ≤ as_of) × #realized forward weeks (≥ as_of)"},
+        "desc": "carry recent form forward: mean(pts | wk ≤ as_of) × #scheduled remaining weeks "
+                "(league-wide horizon, ≥ as_of — leak-safe; Session 9 retired the hindsight realized count)"},
     ("ros_player_band", "interval"): {
         "skill_kind": "na", "baseline": None, "provenance": "na",
         "desc": "skill n/a by design — the band's native lens is CALIBRATION (PIT/coverage), not center-MAE; "

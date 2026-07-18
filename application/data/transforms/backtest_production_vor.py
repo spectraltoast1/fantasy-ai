@@ -32,6 +32,7 @@ import polars as pl
 
 from application.data import data_layer
 from application.data.transforms._analytics import mean, pearson
+from application.data.transforms._scoring import actual_points_expr, scoring_profile
 from application.data.transforms.compute_production_vor import (
     CENTER_SHRINK,
     FORM_ANCHOR_W,
@@ -56,16 +57,22 @@ CORR_MIN = 0.60
 GRADE_WEEK = 4
 
 
-def _actual_ros(season: int) -> pl.DataFrame:
-    """Per (player, week) actual PPR points — the answer key the projected ROS is summed
-    against over the matching remaining weeks."""
+def _actual_ros(season: int, *, scoring=None) -> pl.DataFrame:
+    """Per (player, week) actual points under the league's CANONICAL scoring — the answer key the projected
+    ROS is summed against over the matching remaining weeks. Session 9: was raw `fantasy_points_ppr`, a
+    fixed-PPR yardstick that mis-scored non-PPR keys by up to ~7 pts/wk; now scored via
+    `actual_points_expr(profile, scoring)` (the same basis the stored `player_weekly_pts_canonical` is built
+    from). For a PPR league `actual_points_expr` == `fantasy_points_ppr`, so is_mine is byte-identical.
+    `scoring` None (or unresolvable-custom) → raw PPR fallback (the is_mine default is a PPR league)."""
+    profile = scoring_profile(scoring) if scoring else "ppr"
+    pts = actual_points_expr(profile, scoring) if scoring else pl.col("fantasy_points_ppr")
     return (
         data_layer.read_nfl_stats(season)
         .filter(pl.col("position").is_in(SKILL_POSITIONS))
-        .select("sleeper_player_id", pl.col("week").cast(pl.Int64), "fantasy_points_ppr")
+        .select("sleeper_player_id", pl.col("week").cast(pl.Int64), pts.alias("actual"))
         .drop_nulls("sleeper_player_id")
         .group_by("sleeper_player_id", "week")
-        .agg(pl.col("fantasy_points_ppr").first().alias("actual"))
+        .agg(pl.col("actual").first().alias("actual"))
     )
 
 
@@ -77,7 +84,8 @@ def _test_points(season: int, *, league_id=None, scoring_key=None) -> pl.DataFra
     ).filter(pl.col("position").is_in(SKILL_POSITIONS))
     season_df = data_layer.read_join_season(season, league_id=league_id).filter(pl.col("position").is_in(SKILL_POSITIONS))
     pool_of = _pool_of(data_layer.read_lineup_slots(season, league_id=league_id))
-    actual = _actual_ros(season)
+    # Grade against the league's CANONICAL scoring (None → is_mine settings, a PPR league → identical to raw PPR).
+    actual = _actual_ros(season, scoring=_resolve_scoring(season, scoring_key))
 
     max_proj_week = int(consensus["week"].max())
     max_roster_week = int(season_df["week"].max())
