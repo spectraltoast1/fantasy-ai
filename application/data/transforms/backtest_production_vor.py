@@ -33,6 +33,7 @@ import polars as pl
 from application.data import data_layer
 from application.data.transforms._analytics import mean, pearson
 from application.data.transforms.compute_production_vor import (
+    CENTER_SHRINK,
     FORM_ANCHOR_W,
     SKILL_POSITIONS,
     _pool_lines,
@@ -118,7 +119,8 @@ def _test_points(season: int, *, league_id=None, scoring_key=None) -> pl.DataFra
 
 
 def objective(season: int, consts: dict, *, reader=data_layer) -> float:
-    """The tuner's scalar fit objective for FORM_ANCHOR_W (the S7 de-bias λ), at the value in `consts`, on
+    """The tuner's scalar fit objective for the CENTRE dials — FORM_ANCHOR_W (the S7 de-bias λ) and
+    CENTER_SHRINK (the flat systematic shrink) — at the values in `consts`, on
     `reader`'s allowed partition — LOWER is better. Scoring-scoped: for each scoring_key in the season's
     MATCHED cohort it builds the DE-BIASED ROS centre (the shipped `_ros_values` blend at λ) over the
     projected skill pool at as-of weeks 1..GRADE_WEEK, and scores MAE against the realised ROS under that
@@ -130,6 +132,7 @@ def objective(season: int, consts: dict, *, reader=data_layer) -> float:
     borrowed-centre MAE — the baseline the de-bias must beat. Graded over players with realised season
     signal (present in the answer key), so the never-played deep bench doesn't dilute the fit."""
     lam = consts.get("FORM_ANCHOR_W", FORM_ANCHOR_W)
+    cs = consts.get("CENTER_SHRINK", CENTER_SHRINK)   # flat systematic shrink (Session center-shrink)
     manifest = data_layer.read_corpus_manifest()  # metadata (no season arg → not a sealed read)
     keys = (manifest.filter((pl.col("stratum") == "matched") & (pl.col("season") == season))
             ["scoring_key"].unique().to_list())
@@ -153,7 +156,8 @@ def objective(season: int, consts: dict, *, reader=data_layer) -> float:
             if not remaining:
                 continue
             recent_form = _recent_form(realized, n) if realized.height else None
-            ros = _ros_values(consensus, remaining, recent_form=recent_form, form_anchor_w=lam)
+            ros = _ros_values(consensus, remaining, recent_form=recent_form, form_anchor_w=lam,
+                              center_shrink=cs)
             for r in ros.iter_rows(named=True):
                 pid = r["sleeper_player_id"]
                 if pid not in played:

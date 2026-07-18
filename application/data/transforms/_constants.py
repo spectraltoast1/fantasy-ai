@@ -147,6 +147,22 @@ _DIALS = (
              "season); this anchors toward the signal that beats it. current=0.0 → identity; λ* is a PROPOSAL "
              "(auto-tune, human promotes). Interior optimum expected (λ=1 = pure form is over-noisy).",
     ),
+    # A second post-corpus center dial (the flat systematic shrink S7 parked): like FORM_ANCHOR_W it has NO
+    # constants_snapshot pin and NO check_tuner._MODULES drift entry (it post-dates the frozen corpus; the
+    # identity default keeps constants_hash reproducible) — check_center_shrink gates its 1.0 identity.
+    Tunable(
+        name="CENTER_SHRINK", module="production_vor", current=1.0,
+        grid=(1.0, 0.95, 0.9, 0.85, 0.8, 0.75, 0.7, 0.65, 0.6, 0.55, 0.5),
+        gate="backtest_production_vor", objective="MAE(shrunk ROS centre, realized ROS canonical)",
+        scope="scoring", coupled_gates=("backtest_ros_player_band", "backtest_true_rank"),
+        fitted_on="", last_tuned="",
+        note="Flat multiplicative shrink of the borrowed ROS centre: center' = CENTER_SHRINK·center, applied "
+             "in the shared _ros_values so production_vor AND the band inherit it (composes with FORM_ANCHOR_W). "
+             "The SYSTEMATIC-shrink lever S7 parked: the centre sits at ~98th pct of realised (S8), which "
+             "forced the honest band all-downside (BULL_Z→0); center-MAE is minimised at the median, so a "
+             "shrink toward it should re-symmetrise the band (BULL_Z≈BEAR_Z). current=1.0 → identity; "
+             "multiplicative ⇒ rank-preserving. SHRINK* is a PROPOSAL (auto-tune, human promotes).",
+    ),
 )
 
 REGISTRY: dict = {t.name: t for t in _DIALS}
@@ -162,6 +178,7 @@ BULL_Z = REGISTRY["BULL_Z"].current
 BEAR_Z = REGISTRY["BEAR_Z"].current   # S8 down-side half-width; 1.44 == BULL_Z = symmetric identity
 ANCHOR_W = REGISTRY["ANCHOR_W"].current
 FORM_ANCHOR_W = REGISTRY["FORM_ANCHOR_W"].current   # S7 de-bias λ; 0.0 = identity (re-exported by production_vor)
+CENTER_SHRINK = REGISTRY["CENTER_SHRINK"].current    # flat systematic centre shrink; 1.0 = identity (re-exported by production_vor)
 
 
 def tunable(name: str) -> Tunable:
