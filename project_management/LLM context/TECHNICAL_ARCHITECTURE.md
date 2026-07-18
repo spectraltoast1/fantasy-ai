@@ -2,7 +2,29 @@
 
 > Engineering context document for Claude Code. Describes the stack, folder structure, data layer design, and technical principles. Updated regularly as the project evolves.
 
-**Last reviewed:** 2026-07-17 (**Backend — L4 Tuner: the constant registry + the split-aware sweep harness
+**Last reviewed:** 2026-07-18 (**Backend — L4 THE DE-BIAS (Improvement-Loop Session 7): a decision-layer
+SECOND ANCHOR toward recent form, tuned through the harness — HELD, and the lever is band width (S8).** The
+de-bias is a **convex blend in the ONE shared ROS-centre aggregator** `compute_production_vor._ros_values`:
+`ros_value = (1−λ)·borrowed_centre + λ·(recent_ppg × n_weeks)`, `λ = FORM_ANCHOR_W` (the **6th dials-registry
+dial**, `current=0.0` → ships at **identity**; born in the registry with NO frozen-snapshot pin and NO
+`check_tuner._MODULES` drift entry — it post-dates the frozen `constants_hash`). `recent_ppg = mean(pts|wk≤N)`
+(the scorer's `recent_ppg_forward` proxy) on the centre's own scoring basis (`nfl_stats` via
+`actual_points_expr` == canonical for ppr/half/std). Because the band's `ros_center` **is** production_vor's
+`ros_value` (the shared aggregator), ONE blend de-biases both reads identically — a convex blend of two
+existing series, **not a projection model** (design law 3); `λ=0` recomputes the frozen spine value-identical.
+Tuned through the Session-6 harness (`backtest_production_vor.objective` = scoring-scoped MAE vs the CANONICAL
+answer key): **λ*=0.1, HELD** (DEV effect 0.20 < floor). **The shadow re-score** (`corpus/rescore_debias.py`,
+no frozen-corpus mutation) found de-biasing the centre does **NOT** recover band coverage at the frozen dials
+(~0.57, flat/declining; the ~0.43 below-bear tail unmoved) — the under-coverage is a band-**WIDTH** problem, so
+the lever is **Session 8's `BULL_Z` re-tune**, not the centre. **Seasonal delta-tracking:**
+`data_layer.write/read_center_gap` (append-only, provenanced to the frozen L3 baseline) persists the
+predicted-vs-realized centre gap per `(season, scoring_key)` — **+23…+43 pts/season, always positive** — the
+substrate for a future SEASONAL auto-update via a SYSTEMATIC-shrink de-bias (recent form is itself optimistic).
+Gate: `corpus/check_debias.py` (λ=0 identity + λ>0 bites · decision-layer convex-blend algebra · both reads
+consume it · re-score writes nothing to the frozen corpus · delta-tracking idempotent · determinism — the
+blend `.round(6)`s to kill a round1-boundary ULP flake so a promoted λ recomputes value-identical).
+**Auto-tune, human promotes — `FORM_ANCHOR_W` ships at 0.0, λ* is a proposal, no band dial touched; seam
+held.** — Prior (2026-07-17): **Backend — L4 Tuner: the constant registry + the split-aware sweep harness
 (Improvement-Loop Session 6).** The **config seam** TECH long flagged as coming now exists:
 `application/data/transforms/_constants.py` is the **dials registry** — a pure leaf module holding the
 constants the Tuner sweeps as `Tunable(name, module, current, grid, gate, objective, scope, coupled_gates,

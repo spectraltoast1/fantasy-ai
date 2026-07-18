@@ -63,6 +63,7 @@ EFFECT_FLOOR = {
     "backtest_player_signal": 0.05,          # rest-of-season MAE, in PPG points
     "backtest_projection_consensus": 0.010,  # |coverage-0.50| + tail-imbalance, dimensionless
     "backtest_ros_player_band": 0.010,       # |coverage-target| + tail-imbalance, dimensionless
+    "backtest_production_vor": 0.5,          # de-biased ROS-centre MAE, in season-total fantasy points (S7)
 }
 # The fit window's input integrity must clear this fraction of trustworthy claims (guardrail c).
 INPUTS_OK_MIN = 0.98
@@ -445,18 +446,21 @@ def evaluate(tunable, mani, asof, baseline, io_frac):
 
 
 def debias_lead(asof, baseline):
-    """The top-ranked LEAD the tuner's first act produces: de-bias the center BEFORE any band constant.
-    Not a dial proposal — the sequencing insight. Every band dial is HELD because it compensates for the
-    center; the fix is upstream, and it is tuned THROUGH this harness in Session 7."""
-    reason = ("TOP LEAD — de-bias the projection center before touching any band constant. L3 measured the "
-              "center optimistic (production_vor loses to carry-recent-form every season; the band covers "
-              "~0.55 vs its 0.80 target). Every band dial (BAND_Z / SKEW_GAIN / BULL_Z / ANCHOR_W) sits "
-              "downstream of it, so this session HOLDS them all — and SKEW_GAIN's OOS fit even moves 1.5→1.0 "
-              "(toward 0, as pre-registered), confirming the skew is compensating for the center bias, not a "
-              "real ROS property. Session 7 adds a recent-form shrinkage dial to the center, tuned THROUGH "
-              "this harness on the same split; re-fit the band dials only after (Session 8).")
+    """The rank-1 LEAD — now carrying the Session 7 OUTCOME. The de-bias was built + tuned through this
+    harness (FORM_ANCHOR_W, HELD) and the re-score found it does NOT recover coverage: the lever is the
+    band width (Session 8), not the center. Kept as the top lead because it still sequences the band re-tune."""
+    reason = ("TOP LEAD — de-bias the center was tried (Session 7) and did NOT fix the optimism. "
+              "FORM_ANCHOR_W (recent-form second anchor) was built + tuned on the split: λ*=0.1, DEV effect "
+              "0.20 < floor → HELD, and the shadow re-score (rescore_debias) shows de-biasing the center does "
+              "NOT recover band coverage at the frozen dials (~0.57, flat/declining; the ~0.43 below-bear "
+              "low-miss tail is unmoved). The honest, leak-safe recent form doesn't beat the borrowed center "
+              "(the scorer's naive used a hindsight forward-week count). MECHANISM: the under-coverage is a "
+              "band-WIDTH problem, not center height (miss is ~0.43 below-bear vs ~0.00 above-bull). "
+              "SESSION 8 is the lever — re-tune BULL_Z (widen + low-skew) on the corpus objective; SKEW_GAIN "
+              "still moves 1.5→1.0. center_gap delta-tracking (+~30 pts/season) is the substrate for a future "
+              "SYSTEMATIC-shrink de-bias, not recent form.")
     return Proposal(kind="lead", constant="center_debias", module="projection_consensus/production_vor",
-                    scope="scoring", current="optimistic center (L3)", proposed="add recent-form anchor (S7)",
+                    scope="scoring", current="optimistic center (L3)", proposed="band width is the lever (S8)",
                     train_metric=None, dev_metric_current=None, dev_metric_proposed=None,
                     holdout_axis="n/a (a lead, not a fit)", effect_size=None, effect_floor=None,
                     inputs_ok_frac=None, g_holdout=None, g_coupled=None, g_inputs=None, g_effect=None,

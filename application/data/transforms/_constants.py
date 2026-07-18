@@ -105,6 +105,24 @@ _DIALS = (
         note="Max preseason-anchor weight (early-season blend toward the ADP-curve prior). HELD in S6 "
              "(open OOS worry, but downstream of the center — revisit post-de-bias).",
     ),
+    # The 6th dial (Session 7, the de-bias): a SECOND anchor toward recent form, born in the registry at
+    # 0.0 (a strict no-op — the shipped engine is value-identical until Will promotes λ*). Unlike the 5
+    # migrated dials it has NO frozen-snapshot pin (it did not exist when the 2.9M predictions were made,
+    # so it is NOT in constants_hash) and NO check_tuner `_MODULES` drift entry — the snapshot cross-check
+    # covers only the frozen 5. `check_debias` gates it instead (λ=0 identity). The blend lives in the shared
+    # ROS-centre aggregator `compute_production_vor._ros_values`, so production_vor AND the band inherit it.
+    Tunable(
+        name="FORM_ANCHOR_W", module="production_vor", current=0.0,
+        grid=(0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
+        gate="backtest_production_vor", objective="MAE(debiased ROS centre, realized ROS canonical)",
+        scope="scoring", coupled_gates=("backtest_ros_player_band", "backtest_true_rank"),
+        fitted_on="", last_tuned="",
+        note="Recent-form second-anchor weight λ on the borrowed ROS centre: debiased = (1-λ)·borrowed + "
+             "λ·(recent_ppg × n_weeks), recent_ppg = mean(pts|wk≤N) (the scorer's recent_ppg_forward proxy). "
+             "L3 found the borrowed centre optimistic (production_vor loses to carry-recent-form every "
+             "season); this anchors toward the signal that beats it. current=0.0 → identity; λ* is a PROPOSAL "
+             "(auto-tune, human promotes). Interior optimum expected (λ=1 = pure form is over-noisy).",
+    ),
 )
 
 REGISTRY: dict = {t.name: t for t in _DIALS}
@@ -118,6 +136,7 @@ BAND_Z = REGISTRY["BAND_Z"].current
 SKEW_GAIN = REGISTRY["SKEW_GAIN"].current
 BULL_Z = REGISTRY["BULL_Z"].current
 ANCHOR_W = REGISTRY["ANCHOR_W"].current
+FORM_ANCHOR_W = REGISTRY["FORM_ANCHOR_W"].current   # S7 de-bias λ; 0.0 = identity (re-exported by production_vor)
 
 
 def tunable(name: str) -> Tunable:

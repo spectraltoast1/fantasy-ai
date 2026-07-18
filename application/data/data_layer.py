@@ -1709,6 +1709,44 @@ def tune_proposals_exists() -> bool:
     return _tune_proposals_path().exists()
 
 
+# --- Center-gap delta-tracking (Improvement-Loop Session 7, the de-bias) ---
+# Per (season, scoring_key): the predicted-vs-realized ROS-centre gap — the SYSTEMATIC optimism magnitude
+# each season (positive = the borrowed centre runs high). The substrate for a future SEASONAL auto-update of
+# FORM_ANCHOR_W (re-fit the dial when a season resolves — the optimism is a slow structural bias, so a
+# season-cadence re-fit, not a twitchy weekly one). Immutable-append like tune_proposals / the scorecard:
+# keyed by `gap_id` (season|scoring_key|as_of_week|code_version), a re-run over the same frozen inputs
+# appends nothing. Provenanced to the FROZEN L3 baseline (std instr 8) — this is a measurement, never a fit.
+
+def _center_gap_path() -> Path:
+    return _SNAPSHOT_DIR / "derived" / "ledger" / "center_gap.parquet"
+
+
+def write_center_gap(df: pl.DataFrame) -> None:
+    """Append only genuinely-new gap rows (idempotent by `gap_id`). De-dup on gap_id, drop ids already on
+    disk, diagonal-concat so the file only GROWS — never overwrites (immutable-append, mirroring
+    write_tune_proposals). A re-run at the same code_version over the same frozen inputs appends nothing."""
+    path = _center_gap_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df = df.unique(subset="gap_id", keep="first")
+    if path.exists():
+        existing = pl.read_parquet(path)
+        df = df.filter(~pl.col("gap_id").is_in(existing["gap_id"]))
+        df = pl.concat([existing, df], how="diagonal")
+    df.write_parquet(path)
+
+
+def read_center_gap(season: int | None = None) -> pl.DataFrame:
+    """All center-gap rows, optionally filtered to one season."""
+    df = pl.read_parquet(_center_gap_path())
+    if season is not None:
+        df = df.filter(pl.col("season") == season)
+    return df
+
+
+def center_gap_exists() -> bool:
+    return _center_gap_path().exists()
+
+
 # --- League registry (Improvement-Loop L0 keying) ---
 # The single source of truth for "which leagues exist and how each is keyed", replacing the implicit
 # config.SLEEPER_LEAGUE_ID single-league assumption (audit S1.3 — league #2 silently overwriting #1).
