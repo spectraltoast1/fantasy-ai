@@ -160,6 +160,12 @@ def check(seasons=None) -> bool:
     _ok("FORM_ANCHOR_W (S7 de-bias) swept on the split, ships at 0.0, HELD (proposal only)",
         fa is not None and fa.current == 0.0 and fa.verdict == "HOLD"
         and fa.n_train_seasons == len(tuner.TRAIN_SEASONS), results)
+    # The systematic centre shrink: a second post-corpus production_vor dial, swept on the split, ships at
+    # IDENTITY (1.0). Its own identity + de-skew re-score are gated by check_center_shrink, not here.
+    cs = by.get("CENTER_SHRINK")
+    _ok("CENTER_SHRINK (systematic shrink) swept on the split, ships at 1.0, RECOMMEND (proposal only)",
+        cs is not None and cs.current == 1.0 and cs.verdict == "RECOMMEND"
+        and cs.n_train_seasons == len(tuner.TRAIN_SEASONS), results)
 
     # 6 — determinism ----------------------------------------------------------------------------------
     print("  6 — determinism (rebuild value-identical; the pinned as-of + rounded metrics):")

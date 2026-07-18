@@ -1,6 +1,31 @@
 # STATUS
 
-**Last updated:** 2026-07-18 (**BACKEND — L4 BAND HONESTY (Session 8, 3 commits): the ROS bull/bear band
+**Last updated:** 2026-07-18 (**BACKEND — CENTER-SHRINK (read-improvement, 3 commits): the flat systematic
+centre-shrink lever S7 parked — tested, and it works. PROPOSED not shipped.** `CENTER_SHRINK` is the **8th
+dials-registry dial** (`_constants.py`), a multiplicative scalar on the borrowed ROS centre applied in the
+shared `_ros_values` (production_vor AND the band inherit it, composing with `FORM_ANCHOR_W`): `center' =
+CENTER_SHRINK·centre`, **before** the λ=0 short-circuit so it takes effect at the shipped λ=0. Ships at
+**1.0 = byte-exact identity** (guarded `shrink!=1.0`; `.round(6)`); a new dial like FORM_ANCHOR_W — NO
+snapshot pin / NO `check_tuner._MODULES` entry; `check_center_shrink` gates it. Multiplicative ⇒
+**rank-preserving** (discrimination + the ordinal reads provably invariant — Spearman identical to 6dp).
+Threaded into `backtest_production_vor.objective` (which recomputes the centre in-memory) so the centre-MAE
+sweep moves. **THE RESULT — the centre WAS ~43% too high** (S8: ~98th pct of realised): the tuner RECOMMENDs
+**CENTER_SHRINK 1.0→0.7** (an INTERIOR optimum — 0.65/0.75 both worse, extended grid to 0.5, NOT censored),
+centre-MAE **DEV 21.95→16.44** (effect 5.5 ≫ the 0.5 floor); DEV/TEST optima are slightly milder (~0.8), so
+the shrink generalises strongly but the exact value is soft in **0.7–0.8**. **THE HEADLINE (`rescore_center_shrink.py`,
+SHADOW)** — re-fit the band jointly at the shrunk centre and measure the EFFECTIVE up/down half-widths (the
+honest range shape; raw BULL_Z/BEAR_Z are muddied by the ADP anchor): unshrunk = S8's all-downside band
+(up:down **0.00**, up 0.0 / down 45.5); shrunk (0.7) = a genuine **TWO-SIDED range** (up:down **0.70**, up
+19.7 / down 28.2 — near-symmetric, the residual down-skew honest since busts are real), coverage **~0.80 with
+balanced tails** on DEV / sealed TEST / generalization. **An honest centre → a natural range** — the
+competing hypothesis to S8's width-only fix, confirmed. `corpus/check_center_shrink.py` **GREEN WITH TEETH**
+(1.0 identity value-identical + shrink<1 bites · rank-preserving · both reads consume it · re-score is a
+shadow · the de-skew consequence · determinism); `check_tuner` extended (CENTER_SHRINK swept, ships 1.0,
+RECOMMEND) + `check_debias` GREEN. **PROPOSE-ONLY** — CENTER_SHRINK ships at 1.0; frozen corpus + shipped
+dials + is_mine gate (0.817) untouched; seam held. **NEXT — the follow-on: re-tune the band AT the shrunk
+centre and promote the pair (centre-shrink + the re-symmetrised band) together**, vs S8's all-downside band
+at the optimistic centre — Will's call; plus Session 9 (cleanup) + silent-reads confidence. — Prior
+(Session 8 band honesty): **BACKEND — L4 BAND HONESTY (Session 8, 3 commits): the ROS bull/bear band
 re-tuned for honest coverage — ASYMMETRIC tails + a raw-points confidence signal, PROPOSED not shipped.**
 `BEAR_Z` is the **7th dials-registry dial** (`_constants.py`) — the DOWN-side half-width (`bear = centre −
 BEAR_Z·σ`; `bull = centre + BULL_Z·σ`), born at **1.44 == BULL_Z** so the historically-symmetric band

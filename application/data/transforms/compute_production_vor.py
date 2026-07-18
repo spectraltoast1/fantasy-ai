@@ -54,9 +54,10 @@ import polars as pl
 from application.data import data_layer
 from application.data.transforms._analytics import round1, position_pools
 from application.data.transforms._scoring import scoring_profile, actual_points_expr, standard_scoring
-# FORM_ANCHOR_W (the S7 de-bias λ) is homed in the L4 dials registry and re-exported here so its canonical
-# path (production_vor.FORM_ANCHOR_W) and any `from …import FORM_ANCHOR_W` resolve. Ships at 0.0 → identity.
-from application.data.transforms._constants import FORM_ANCHOR_W  # noqa: F401  (re-exported dial)
+# FORM_ANCHOR_W (the S7 de-bias λ) and CENTER_SHRINK (the flat systematic centre shrink) are homed in the L4
+# dials registry and re-exported here so their canonical path (production_vor.FORM_ANCHOR_W) and any
+# `from …import FORM_ANCHOR_W` resolve. Both ship at IDENTITY (FORM_ANCHOR_W=0.0, CENTER_SHRINK=1.0).
+from application.data.transforms._constants import CENTER_SHRINK, FORM_ANCHOR_W  # noqa: F401  (re-exported dials)
 
 SKILL_POSITIONS = ["QB", "RB", "WR", "TE"]
 
@@ -134,7 +135,8 @@ def _pool_of(lineup_slots: pl.DataFrame) -> dict:
 
 def _ros_values(consensus: pl.DataFrame, remaining_weeks, *,
                 recent_form: pl.DataFrame | None = None,
-                form_anchor_w: float | None = None) -> pl.DataFrame:
+                form_anchor_w: float | None = None,
+                center_shrink: float | None = None) -> pl.DataFrame:
     """Per player: rest-of-season production value = the borrowed ROS centre, DE-BIASED toward recent form
     (DECISION_READS.md §2/§4; Session 7). `consensus` carries (week, sleeper_player_id, position, center_ppr)
     for the whole projected pool; `remaining_weeks` are the weeks strictly after the cutoff. One row per
@@ -156,8 +158,11 @@ def _ros_values(consensus: pl.DataFrame, remaining_weeks, *,
 
     `form_anchor_w=None` reads the live registry dial `FORM_ANCHOR_W` at call time (so promotion / a gate
     flipping the module global takes effect); the tuner passes an explicit λ per swept candidate.
+    `center_shrink=None` likewise reads the live `CENTER_SHRINK` (ships at 1.0 = no shrink); a flat
+    multiplicative shrink of the borrowed centre toward the realised median, composing with the λ blend.
     """
     lam = FORM_ANCHOR_W if form_anchor_w is None else float(form_anchor_w)
+    shrink = CENTER_SHRINK if center_shrink is None else float(center_shrink)
     borrowed = (
         consensus.filter(pl.col("week").is_in(list(remaining_weeks)))
         .group_by("sleeper_player_id")
@@ -167,6 +172,14 @@ def _ros_values(consensus: pl.DataFrame, remaining_weeks, *,
             pl.len().alias("n_weeks"),
         )
     )
+    # Systematic centre shrink (the flat SHRINK lever S7 parked): center' = shrink·borrowed_centre, applied
+    # BEFORE the λ short-circuit so it takes effect at the shipped λ=0. shrink==1.0 is a STRICT no-op
+    # (byte-identical to the frozen spine — standing instr 2); .round(6) matches the blend's determinism guard
+    # (a shrunk value can land on a round1 x.x5 boundary where polars' float mul flakes at the ULP).
+    # Multiplicative ⇒ rank-preserving (discrimination + the ordinal reads are invariant). The blend branch
+    # below reads the (already-shrunk) ros_value, so the recent-form de-bias composes with the shrink.
+    if shrink != 1.0:
+        borrowed = borrowed.with_columns((pl.col("ros_value") * shrink).round(6).alias("ros_value"))
     if not lam or recent_form is None:
         return borrowed
     return (
