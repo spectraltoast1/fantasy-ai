@@ -1,6 +1,6 @@
 # Tuner proposal — `OPP_HALF_LIFE_WK` (HOLD)
 
-**as-of:** 2026-07-16  ·  **rank:** 5  ·  **module:** `player_signal`  ·  **scope:** nfl
+**as-of:** 2026-07-16  ·  **rank:** 6  ·  **module:** `player_signal`  ·  **scope:** nfl
 
 **baseline (frozen L3):** code_version `6dfcab270ee0` · constants_hash `a3d01b8e5f4d5131`
 
