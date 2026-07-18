@@ -19,6 +19,7 @@ made at the OLD vector — `FROZEN_CORPUS_HASH` records that baseline, and the f
 against IT, not the moving live hash. `CENTER_SHRINK`/`BEAR_Z` are post-corpus dials, deliberately OUT of the
 snapshot (they never fingerprinted the frozen rows; keeping them out preserves the frozen rows' reproducibility).
 """
+import contextlib
 import hashlib
 import importlib
 import json
@@ -86,6 +87,58 @@ def constants_hash() -> str:
 # frozen-corpus gates validate against THIS baseline, not the moving live hash; a future re-backfill under a
 # new engine appends a new-hash population beside the frozen one (append-only) — the annual pipeline's job.
 FROZEN_CORPUS_HASH = "a3d01b8e5f4d5131"
+
+# The live constants + confidence signal that PRODUCED the frozen corpus (the pre-8c engine). Session 8c
+# promoted the ROS band + centre + confidence, so the LIVE engine now differs; the frozen corpus's immutable
+# ledger + spine can only be validated at THIS epoch. `frozen_era()` temporarily restores it so a
+# frozen-corpus gate recomputes/rebuilds at the constants that made the frozen rows (not the shipped ones).
+FROZEN_CORPUS_DIALS = {
+    "compute_ros_player_band": {"BULL_Z": 1.44, "ANCHOR_W": 0.25, "BEAR_Z": 1.44},
+    "compute_production_vor": {"CENTER_SHRINK": 1.0},   # FORM_ANCHOR_W stayed 0.0 across the promotion
+}
+_FROZEN_BAND_CONF = {"signal": "ros_cv", "strength": "neg", "primitive": "abs_error", "label": "ros_cv"}
+
+
+@contextlib.contextmanager
+def frozen_era():
+    """Restore the pre-8c constants + band-confidence signal for the duration of the block, so a frozen-corpus
+    gate can validate the IMMUTABLE frozen ledger / spine at the epoch that produced it (post-promotion the
+    live engine is honest-and-different). Restores everything in a finally. Lazy-imports to keep this module
+    import-cheap and dodge a corpus→transforms cycle at load."""
+    saved_dials = {}
+    for modname, dials in FROZEN_CORPUS_DIALS.items():
+        mod = importlib.import_module(f"application.data.transforms.{modname}")
+        for k, v in dials.items():
+            saved_dials[(mod, k)] = getattr(mod, k)
+            setattr(mod, k, v)
+    # Revert the re-pinned SNAPSHOT entries too, so within the block constants_hash()==FROZEN_CORPUS_HASH and
+    # check_constants_drift() (snapshot vs the reverted live dials) is consistently green — a whole frozen epoch.
+    saved_snap = {k: SNAPSHOT[k] for k in ("ros_player_band.BULL_Z", "ros_player_band.ANCHOR_W")}
+    SNAPSHOT["ros_player_band.BULL_Z"] = FROZEN_CORPUS_DIALS["compute_ros_player_band"]["BULL_Z"]
+    SNAPSHOT["ros_player_band.ANCHOR_W"] = FROZEN_CORPUS_DIALS["compute_ros_player_band"]["ANCHOR_W"]
+    # The band's shipped confidence is now ros_sigma (predictions_map + scorecard_registry); the frozen ledger
+    # carries ros_cv. Revert both so a rebuild/rescore reproduces the frozen rows.
+    from application.data.corpus import predictions_map, scorecard_registry
+    fam = next(f for f in predictions_map.FAMILIES if f["read"] == "ros_player_band")
+    saved_conf = {k: fam[k] for k in ("confidence", "confidence_label", "confidence_json")}
+    fam.update(confidence="ros_cv", confidence_label="ros_cv", confidence_json=None)
+    key = ("ros_player_band", "interval")
+    saved_sig = dict(scorecard_registry.CONF_SIGNALS[key])
+    scorecard_registry.CONF_SIGNALS[key] = dict(_FROZEN_BAND_CONF)
+    # The scorer derives _CONF_LABEL from CONF_SIGNALS at IMPORT time, so its already-built copy must be
+    # reverted separately (the numeric confidence-honesty reads CONF_SIGNALS at runtime, but the label doesn't).
+    from application.data.corpus import compute_engine_scorecard as ces
+    saved_label = ces._CONF_LABEL.get(key)
+    ces._CONF_LABEL[key] = _FROZEN_BAND_CONF["label"]
+    try:
+        yield
+    finally:
+        for (mod, k), v in saved_dials.items():
+            setattr(mod, k, v)
+        SNAPSHOT.update(saved_snap)
+        fam.update(saved_conf)
+        scorecard_registry.CONF_SIGNALS[key] = saved_sig
+        ces._CONF_LABEL[key] = saved_label
 
 
 def _live_value(key: str):
