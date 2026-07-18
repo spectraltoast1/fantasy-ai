@@ -375,8 +375,9 @@ def fetch_league_config(league_id: str, year: int) -> None:
     # Only the playoff/postseason keys the sim needs; the full settings blob has dozens of
     # unrelated knobs (waiver_type, trade_deadline, …) — keep the persisted set intentional.
     # `divisions` is the division count — the bracket sim seeds division winners ahead of
-    # wildcards when it's ≥ 2 (the per-roster division assignment lives on the rosters endpoint;
-    # persisting that map onto the teams entity is a follow-up when a real division league lands).
+    # wildcards when it's ≥ 2 (the per-roster division assignment lives on the rosters endpoint
+    # and IS persisted onto the teams entity by fetch_teams via _division_by_roster; Sessions
+    # 3d/3e activated division seeding on all 25 real corpus division leagues).
     playoff_keys = ("playoff_teams", "playoff_week_start", "playoff_type",
                     "playoff_round_type", "playoff_seed_type", "num_teams", "divisions")
 

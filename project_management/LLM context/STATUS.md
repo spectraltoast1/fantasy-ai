@@ -1,6 +1,49 @@
 # STATUS
 
-**Last updated:** 2026-07-18 (**BACKEND — 8c SHIP THE HONEST ENGINE (4 commits): the FIRST shipped
+## Parking Lot (Session 9 triage — deferred to their own session, named not started)
+
+**The three big items:**
+- **Silent-reads confidence** — `production_vor` + the other no-native-confidence reads (player_signal/direction, bracket_odds wins/seed) carry null confidence, so law-2 (confidence-honesty) is unmeasurable for them. Giving them a signal is a real read-improvement — its own session.
+- **`is_mine` → multi-tenant** — kill the `MY_USERNAME` / `SLEEPER_LEAGUE_ID` hardcodes (`data_layer._active_league` keys off the pinned is_mine registry row) so "my league" means the current user. An onboarding/auth project.
+- **The live-season track** — `data_health`, `served=true` ledger writes, AI eval, the weekly Proposer (L5/L6).
+
+**Session-9-surfaced residuals:**
+- **The `*_ppr` naming wart** (`compute_projection_consensus` `center_ppr`/`band_ppr`/`p25_ppr`/… now hold LEAGUE points) → **PARKED to the any-league project**: a true rename can't happen without touching `queries.js` (the frontend reads those persisted columns) or re-deriving the frozen substrate — both forbidden this session (seam rule). Own session, coupled to the storage-schema/frontend change.
+- **`compute_player_signal` canonical basis** — switching its realized-points basis raw-PPR→canonical is a **spine-producer** change: it diverges from the frozen persisted spine for non-PPR leagues (proven; `check_spine` determinism rejects it), so it needs a coordinated **spine re-backfill** (the annual pipeline). Reverted this session; the two is_mine-only backtests kept canonical-aware. Same latent for the `true_rank`/`positional_depth` backtests' ppr-default `_actual_weekly`.
+- **The scorer's `frozen_era` wrap becomes epoch-conditional** once the annual re-backfill lands a live-engine (ros_sigma) scorecard population beside the frozen (ros_cv) one — `compute_engine_scorecard.main()`/`check_scorecard.main()` will then pick the epoch by population, not always-frozen.
+- **`SKEW_GAIN` "revisit post-de-bias"** (`_constants.py`/`tuner.py`) — a HELD dial entangled with the shipped centre shrink; a re-tune decision, own session.
+- **Market-VOR / superflex QB-pool latent** (`compute_production_vor`) — the QB-into-flex assumption to revisit for market VOR; own session.
+- **Two-way `.first()` audit — RESULT: NO LEAK.** Every nfl_stats stat-path `.first()` consumer checked: duplicate `(pid,week)` rows are only null-pid (dropped pre-group) or defensive-position players (DT/CB, non-skill) with identical components → `.first()` is deterministic in practice for both raw-ppr and `actual_points_expr` consumers. The S7 `.first()`→`.max()` hardening need not propagate; an optional defensive `.max()` sweep is deferred (value-identical, low priority).
+
+**Last updated:** 2026-07-18 (**BACKEND — SESSION 9 CLEANUP PASS (4 commits): the measurement-layer debt paid
+down — the leaky naive fixed + re-scored, raw-PPR→canonical on the is_mine backtests, stale comments retired;
+the corpus-producer / frontend items TRIAGED, not forced (see the Parking Lot section above).** (1) **Leaky
+Session-5 naive fixed + re-scored.** `compute_engine_scorecard._naive_forward_points` multiplied recent ppg by
+the player's #REALIZED forward weeks (hindsight — injuries/byes shrink it, flattering the naive); now the
+LEAGUE-WIDE SCHEDULED horizon (`max played week − as_of + 1`, matching `compute_resolutions`' inclusive ≥as_of
+truth window) — leak-safe. Re-scored UNDER `frozen_era` (the frozen band confidence is ros_cv, not the shipped
+ros_sigma) so ONLY `production_vor/point` `skill`+`mae_naive` move — every other read byte-identical (proven, 0
+non-production_vor moves); the corrected population is APPENDED beside the frozen one (additive + provenanced,
+std instr 8; `code_version`=C1 sha, reachable). production_vor skill SOFTENS pooled **🔴 −0.25 → 🔴 −0.10**
+(per-season −0.20/−0.21/−0.09/−0.03/−0.00/−0.20; 2023–24 now ~even) — the "loses every season" story was too
+harsh on the hindsight naive. `check_scorecard` + `trust_report` now select the LATEST (appended-last)
+population (`code_version[-1]`); `check_scorecard` gained an additive check + selection prove-bite. **conf_label
+bug fixed** — read from `reg.CONF_SIGNALS` at RUNTIME (not the import-time `_CONF_LABEL` cache) so a `python -m`
+re-score (where `__main__` ≠ the module `frozen_era` patches) stamps the frozen ros_cv label consistently.
+`TRUST_REPORT.md` regenerated + its hand-written Headline softened. (2) **Raw-PPR→canonical** via
+`actual_points_expr` (full nfl_stats coverage — NOT the stored `player_weekly_pts_canonical`, which covers only
+wks 1–15 / corpus-pool players and would drop is_mine wks 16–18) on `backtest_production_vor._actual_ros` +
+`backtest_ros_player_band._actual_weekly`; `actual_points_expr("ppr")==fantasy_points_ppr` so is_mine
+byte-identical (proven); corrects non-PPR corpus grades (half +0.99, std +1.98 pts/wk mean). **`compute_player_
+signal` REVERTED** — a spine producer (Parking Lot). (3) **Stale comments retired** (`sleeper.py` division
+follow-up done in S3d/3e; `compute_bracket_sim` "latent fixed here" → settled past-tense), comment-only.
+**Gates GREEN with teeth** — `check_scorecard` (extended) · `check_spine` · `check_predictions` ·
+`check_resolutions` · `check_band_honesty` · `check_center_shrink` · `check_debias` · `check_tuner`; twice-run
+re-score idempotent (0 appended); is_mine band 0.817 + the frozen ledger/spine untouched; seam held
+(`queries.js`/views untouched). **NEXT — the three big items above** (silent-reads confidence is the natural
+next read-improvement); the annual re-backfill (`compute_player_signal` canonical + the persisted new-population
+ledger) is the pipeline that realizes the parked producer changes. — Prior (8c ship the honest engine):
+**BACKEND — 8c SHIP THE HONEST ENGINE (4 commits): the FIRST shipped
 engine-improvement (all prior sessions were propose-only). Will's decision: honest-and-lower.** PROMOTED into
 `_constants.py` + the shipped reads: **`CENTER_SHRINK=0.8`** (the honest centre — the projection sat ~98th pct
 of realised, ~43% too high; 0.8 is the OOS-safe value, TRAIN-best was 0.7 but DEV/TEST centre-MAE bottom
