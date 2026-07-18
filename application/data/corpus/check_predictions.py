@@ -96,7 +96,7 @@ def _rebuild_league(lid, season, sk, cv) -> pl.DataFrame:
     """Rebuild one league's league-scoped claims under a given code_version (for the determinism check)."""
     iok = inputs_ok.derive_inputs_ok(lid, season)
     ctx = {"league_id": lid, "scoring_key": sk, "season": season, "code_version": cv,
-           "constants_hash": constants_snapshot.constants_hash(), "inputs_ok": iok}
+           "constants_hash": constants_snapshot.FROZEN_CORPUS_HASH, "inputs_ok": iok}
     frames = {src: backfill_predictions._LEAGUE_READERS[src](season, league_id=lid, as_of_week="all")
               for src in predictions_map.LEAGUE_SOURCES}
     return predictions_map.build_league_claims(frames, ctx)
@@ -104,7 +104,7 @@ def _rebuild_league(lid, season, sk, cv) -> pl.DataFrame:
 
 def _rebuild_band(sk, season, cv) -> pl.DataFrame:
     ctx = {"league_id": None, "scoring_key": sk, "season": season, "code_version": cv,
-           "constants_hash": constants_snapshot.constants_hash(), "inputs_ok": True}
+           "constants_hash": constants_snapshot.FROZEN_CORPUS_HASH, "inputs_ok": True}
     return predictions_map.build_band_claims(
         data_layer.read_ros_player_band(season, scoring_key=sk, as_of_week="all"), ctx)
 
@@ -195,8 +195,8 @@ def check(strata=("matched", "generalization", "mine"), sample: int = 3) -> bool
     _ok("served=false, prompt_version/model/created_at null universally",
         (~df["served"]).all() and df["prompt_version"].null_count() == df.height
         and df["model"].null_count() == df.height and df["created_at"].null_count() == df.height, results)
-    _ok("constants_hash == live snapshot", (df["constants_hash"] == constants_snapshot.constants_hash()).all(),
-        results)
+    _ok("constants_hash == FROZEN_CORPUS_HASH (the frozen baseline, not the promoted live snapshot)",
+        (df["constants_hash"] == constants_snapshot.FROZEN_CORPUS_HASH).all(), results)
     _ok("prediction_id unique", df["prediction_id"].n_unique() == df.height, results)
 
     # 3 — immutability (throwaway season; never touches the canonical store)
@@ -302,7 +302,10 @@ def main():
                     choices=["matched", "generalization", "mine"])
     ap.add_argument("--sample", type=int, default=3, help="leagues for the deep coverage/determinism checks")
     a = ap.parse_args()
-    sys.exit(0 if check(tuple(a.strata), a.sample) else 1)
+    # Session 8c: the live engine is promoted; validate the IMMUTABLE frozen corpus at the epoch that made it.
+    with constants_snapshot.frozen_era():
+        ok = check(tuple(a.strata), a.sample)
+    sys.exit(0 if ok else 1)
 
 
 if __name__ == "__main__":

@@ -58,7 +58,9 @@ FAMILIES: list[dict] = [
      "subject_id": ("sleeper_player_id",), "claim_type": "interval", "value": "ros_center",
      "lo": "ros_bear", "hi": "ros_bull", "sigma": "ros_sigma",
      "horizon": "ros", "resolves_at": "season_end",
-     "confidence": "ros_cv", "confidence_label": "ros_cv", "confidence_json": None},
+     # Session 8c: the shipped confidence signal is the raw-points spread ros_sigma (the proven-honest signal);
+     # the percentage ros_cv (proven INVERTED, S5) retires to the confidence_json audit column, not dropped.
+     "confidence": "ros_sigma", "confidence_label": "ros_sigma", "confidence_json": ["ros_cv"]},
 
     {"source": "player_signal", "read": "player_signal", "subject_type": "player",
      "subject_id": ("roster_id", "sleeper_player_id"), "claim_type": "point", "value": "expected_ppg",

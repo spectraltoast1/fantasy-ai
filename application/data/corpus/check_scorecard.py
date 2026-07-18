@@ -32,6 +32,7 @@ import polars as pl
 
 from application.data import data_layer
 from application.data.corpus import compute_engine_scorecard as ces
+from application.data.corpus import constants_snapshot
 from application.data.corpus import scorecard_registry as reg
 
 SPINED_SEASONS = ces.SPINED_SEASONS
@@ -225,7 +226,11 @@ def main():
     ap.add_argument("--season", type=int, default=None, help="one season (default: all spined)")
     a = ap.parse_args()
     seasons = (a.season,) if a.season else SPINED_SEASONS
-    sys.exit(0 if check(seasons) else 1)
+    # Session 8c: the band's live confidence signal is ros_sigma; validate the frozen scorecard (ros_cv) at
+    # the epoch that made it.
+    with constants_snapshot.frozen_era():
+        ok = check(seasons)
+    sys.exit(0 if ok else 1)
 
 
 if __name__ == "__main__":

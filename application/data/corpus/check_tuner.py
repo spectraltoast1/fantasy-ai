@@ -87,8 +87,9 @@ def check(seasons=None) -> bool:
     # 1 — registry is the source of truth --------------------------------------------------------------
     print("  1 — registry is the single source of truth (current == live global == frozen pin):")
     _ok("all 5 dials: registry.current == module global == constants_snapshot", _registry_is_truth(), results)
-    _ok("BULL_Z resolved by declaration to 1.44 (drift killed)",
-        _constants.REGISTRY["BULL_Z"].current == 1.44 and _live_global("BULL_Z") == 1.44, results)
+    _ok("BULL_Z drift killed (registry == live global == frozen snapshot pin — the promoted 0.524 post-8c)",
+        _constants.REGISTRY["BULL_Z"].current == _live_global("BULL_Z")
+        == snap.SNAPSHOT["ros_player_band.BULL_Z"], results)
     _ok("constants_snapshot drift gate green (live globals match the frozen fingerprint)",
         snap.check_constants_drift()["ok"], results)
 
@@ -145,13 +146,14 @@ def check(seasons=None) -> bool:
     ev_cols = ["verdict", "hold_reason", "baseline_constants_hash", "asof_date", "rank"]
     _ok("every proposal row carries its evidence (verdict + reason + baseline + asof + rank)",
         all(rows[c].null_count() == 0 for c in ev_cols), results)
-    # Session 8: the ros-band dials are UN-entangled + fit JOINTLY on the across-as-of-weeks corpus objective,
-    # on a full n=4 TRAIN window; the joint fit clears the guardrails → all three RECOMMEND, and the coupled
-    # guardrail is REAL (a bool, not the 6b None). All three share one joint holdout effect.
+    # Session 8c PROMOTED the ros-band dials (the 0.8-refit) — they now SHIP; the tuner re-fits them jointly
+    # on the corpus objective (un-entangled, n=4 TRAIN, real coupled guardrail) and HOLDs, since the shipped
+    # values are the tuned optimum (no clean further change clears the guardrails at the shipped constants).
     _ok("BULL_Z/BEAR_Z/ANCHOR_W fit jointly on a full TRAIN window (n=4, corpus objective)",
         all(by[d].n_train_seasons == len(tuner.TRAIN_SEASONS) for d in _ROS_BAND_DIALS), results)
-    _ok("the ros-band dials un-entangled + RECOMMEND (the S8 joint band re-tune clears the guardrails)",
-        all(by[d].verdict == "RECOMMEND" for d in _ROS_BAND_DIALS), results)
+    _ok("the ros-band dials are un-entangled + swept (SHIPPED post-8c; verdict carried, HOLD at the optimum)",
+        all(d not in tuner.ENTANGLED and by[d].verdict in ("RECOMMEND", "HOLD") for d in _ROS_BAND_DIALS),
+        results)
     _ok("the coupled guardrail is REAL for the joint fit (a bool, not the 6b None)",
         all(isinstance(by[d].g_coupled, bool) for d in _ROS_BAND_DIALS), results)
     # S7: the 6th dial (the de-bias) is swept on the split and ships at IDENTITY (0.0) — HELD, a proposal
@@ -160,11 +162,12 @@ def check(seasons=None) -> bool:
     _ok("FORM_ANCHOR_W (S7 de-bias) swept on the split, ships at 0.0, HELD (proposal only)",
         fa is not None and fa.current == 0.0 and fa.verdict == "HOLD"
         and fa.n_train_seasons == len(tuner.TRAIN_SEASONS), results)
-    # The systematic centre shrink: a second post-corpus production_vor dial, swept on the split, ships at
-    # IDENTITY (1.0). Its own identity + de-skew re-score are gated by check_center_shrink, not here.
+    # The systematic centre shrink: PROMOTED in 8c — ships at 0.8 (the OOS-safe value). The tuner re-fits it
+    # and HOLDs (0.7 is TRAIN-better but DEV-worse: a negative holdout effect vs the shipped 0.8, confirming
+    # 0.8 was the right OOS choice). Its invariance + honesty are gated by check_center_shrink, not here.
     cs = by.get("CENTER_SHRINK")
-    _ok("CENTER_SHRINK (systematic shrink) swept on the split, ships at 1.0, RECOMMEND (proposal only)",
-        cs is not None and cs.current == 1.0 and cs.verdict == "RECOMMEND"
+    _ok("CENTER_SHRINK swept on the split, SHIPPED at 0.8 (8c promotion), verdict carried",
+        cs is not None and cs.current == 0.8 and cs.verdict in ("RECOMMEND", "HOLD")
         and cs.n_train_seasons == len(tuner.TRAIN_SEASONS), results)
 
     # 6 — determinism ----------------------------------------------------------------------------------

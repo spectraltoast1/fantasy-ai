@@ -38,7 +38,7 @@ from application.data.corpus import check_tuner
 from application.data.corpus import compute_spine
 from application.data.corpus import constants_snapshot as snap
 from application.data.corpus import rescore_band_confidence as rc
-from application.data.corpus import rescore_band_coverage as rcov
+from application.data.corpus import rescore_center_shrink as rc_cs
 from application.data.corpus import scorecard_registry as reg
 from application.data.transforms import _constants
 from application.data.transforms import backtest_ros_player_band as bt
@@ -102,18 +102,18 @@ def _rowwise_band(df: pl.DataFrame, bull_z, bear_z, anchor_w):
 def check() -> bool:
     results: list = []
     lid, season, sk = _sample()
-    print(f"\n  gate over the Session-8 band honesty (identity · sweep math · win · confidence flip · shadow)")
+    print(f"\n  gate over the SHIPPED band honesty (two-sided · sweep math · coverage · ros_sigma confidence · shadow)")
     print(f"  sample: league {lid}  season {season}  scoring_key {sk}")
 
-    # 1 — the symmetric default is identity (and a skew MOVES it) -------------------------------------
-    print("  1 — symmetric default (BEAR_Z==BULL_Z==1.44) recomputes the frozen spine value-identical:")
-    bd_frozen = pl.read_parquet(data_layer._ros_player_band_path(season, sk))
-    bd_id = _quiet(lambda: band.compute(season, scoring_key=sk))
-    _ok("symmetric default == frozen spine (value-identical)", _frame_eq(bd_id, bd_frozen), results)
-    with _at_dials(bear_z=3.0):
-        bd_skew = _quiet(lambda: band.compute(season, scoring_key=sk))
-    _ok("a skewed BEAR_Z (3.0) MOVES the band (≠ frozen — the dial bites)",
-        not _frame_eq(bd_skew, bd_frozen), results)
+    # 1 — the SHIPPED band is two-sided (Session 8c promoted the asymmetric 0.8-refit) ------------------
+    print("  1 — the SHIPPED band is two-sided (BEAR_Z ≠ BULL_Z, both > 0 — not the S8-proposal identity):")
+    _ok("the band ships asymmetric two-sided (BEAR_Z ≠ BULL_Z, both > 0)",
+        _constants.BEAR_Z != _constants.BULL_Z and _constants.BEAR_Z > 0 and _constants.BULL_Z > 0, results,
+        f"BULL_Z={_constants.BULL_Z} BEAR_Z={_constants.BEAR_Z} ANCHOR_W={_constants.ANCHOR_W}")
+    bd_live = _quiet(lambda: band.compute(season, scoring_key=sk))
+    with _at_dials(bear_z=_constants.BEAR_Z + 1.0):
+        bd_moved = _quiet(lambda: band.compute(season, scoring_key=sk))
+    _ok("BEAR_Z bites (a different value moves the band)", not _frame_eq(bd_live, bd_moved), results)
 
     # 2 — the vectorised sweep math mirrors the shipped band -----------------------------------------
     print("  2 — the sweep's _apply_dials == the shipped _blended_band (symmetric AND skewed):")
@@ -138,38 +138,37 @@ def check() -> bool:
             setattr(data_layer, w, (lambda name: (lambda *a, **k: spy.append(name)))(w))
     try:
         conf = _quiet(lambda: rc.run(seasons=[2024, 2025]))
-        cov = _quiet(lambda: rcov.run(seasons=[2024, 2025]))
+        cov = _quiet(lambda: rc_cs.run(shrink=0.8))   # SHIPPED band on the 0.8-shrunk centre (correct coverage)
     finally:
         for w, fn in saved.items():
             setattr(data_layer, w, fn)
 
-    # 3 — the coverage win holds on unseen seasons + the league-wise holdout -------------------------
-    print("  3 — coverage recovers at the proposed dials (DEV + sealed TEST + generalization):")
-    bss = cov["by_season_stratum"]
+    # 3 — the SHIPPED band (on the 0.8-shrunk centre) covers ~0.80 two-sided on DEV / TEST / generalization
+    print("  3 — the SHIPPED band (0.8-shrunk centre) covers ~0.80 two-sided (DEV + sealed TEST + generalization):")
+    cover = cov["coverage"]   # {(season, stratum): (cov, below-bear, above-bull)} at the shrunk centre + fit
 
-    def _recovered(key):
-        r = bss.get(key)
-        if not r:
+    def _shipped_ok(key):
+        c = cover.get(key)
+        if not c:
             return False, "no data"
-        (c0, b0, _), (c1, b1, _) = r["current"], r["proposed"]
-        good = c0 < 0.65 and 0.75 <= c1 <= 0.92 and b1 < b0 - 0.2
-        return good, f"cov {c0:.3f}→{c1:.3f} below-bear {b0:.3f}→{b1:.3f}"
+        cc, b, a = c
+        good = 0.72 <= cc <= 0.92 and 0.0 < b < 0.25 and 0.0 <= a < 0.25   # ~0.80, both tails bounded
+        return good, f"cov {cc:.3f}  below-bear {b:.3f}  above-bull {a:.3f}"
     for key, label in (((2024, "matched"), "DEV 2024"), ((2025, "matched"), "TEST 2025 (sealed)"),
                        ((2025, "generalization"), "generalization 2025 (league holdout)")):
-        good, extra = _recovered(key)
-        _ok(f"{label} coverage recovers (proposed ~0.80, below-bear collapses)", good, results, extra)
+        good, extra = _shipped_ok(key)
+        _ok(f"{label}: shipped band cov ~0.80, two-sided", good, results, extra)
 
-    # 4 — BEAR_Z is a disciplined new dial ----------------------------------------------------------
-    print("  4 — BEAR_Z is a disciplined new dial (symmetric identity · no snapshot pin · gated here):")
-    _ok("BEAR_Z ships at symmetric identity (== BULL_Z == 1.44)",
-        _constants.BEAR_Z == _constants.BULL_Z == 1.44, results)
-    _ok("BEAR_Z has NO constants_snapshot pin (symmetric default keeps constants_hash reproducible)",
+    # 4 — BEAR_Z is a disciplined shipped dial ------------------------------------------------------
+    print("  4 — BEAR_Z is a disciplined shipped dial (asymmetric 2.5 · no snapshot pin · gated here):")
+    _ok("BEAR_Z SHIPPED at 2.5 (the two-sided down-side half-width, ≠ BULL_Z)", _constants.BEAR_Z == 2.5, results)
+    _ok("BEAR_Z has NO constants_snapshot pin (post-corpus dial — keeps constants_hash reproducible)",
         not any("BEAR_Z" in k for k in snap.SNAPSHOT), results)
     _ok("BEAR_Z has NO check_tuner._MODULES drift entry (this gate covers it — FORM_ANCHOR_W precedent)",
         "BEAR_Z" not in check_tuner._MODULES, results)
 
-    # 5 — the confidence re-score demonstrates the ros_cv → ros_sigma flip ---------------------------
-    print("  5 — the confidence re-score demonstrates the flip (ros_cv inverted → ros_sigma honest):")
+    # 5 — the SHIPPED confidence is ros_sigma; the re-score confirms it honest vs the retired ros_cv -----
+    print("  5 — the shipped ros_sigma confidence is honest (vs the retired-to-audit ros_cv, still inverted):")
     cv, sg = conf["pooled"][rc.CURRENT_SIGNAL], conf["pooled"][rc.PROPOSED_SIGNAL]
     _ok("ros_cv is INVERTED (Spearman > 0, not honest)",
         cv["spearman"] is not None and cv["spearman"] > 0 and not cv["honest"], results,
@@ -190,14 +189,15 @@ def check() -> bool:
     _ok("confidence + coverage re-scores wrote none of predictions/outcomes/resolutions/scorecard/proposals",
         not spy, results, "" if not spy else f"mutated: {spy}")
 
-    # 7 — propose-only: the live dials are unchanged and DIFFER from the proposal --------------------
-    print("  7 — propose-only (the shipped dials are the symmetric identity; the fit is a proposal):")
-    prop = cov["proposed"]
-    live = {"BULL_Z": _constants.BULL_Z, "BEAR_Z": _constants.BEAR_Z, "ANCHOR_W": _constants.ANCHOR_W}
-    _ok("the live dials are the symmetric identity (BEAR_Z==BULL_Z==1.44, ANCHOR_W==0.25) — nothing shipped",
-        live["BEAR_Z"] == live["BULL_Z"] == 1.44 and live["ANCHOR_W"] == 0.25, results)
-    _ok("the proposed combo DIFFERS from the live dials (a real proposal, human promotes)",
-        any(prop[n] != live[n] for n in prop), results)
+    # 7 — the promoted band + confidence are SHIPPED (Session 8c, not a proposal) --------------------
+    print("  7 — the band + confidence are SHIPPED (the honest-engine promotion):")
+    _ok("the shipped dials are the two-sided 0.8-refit (BULL_Z=0.524, BEAR_Z=2.5, ANCHOR_W=0.0)",
+        _constants.BULL_Z == 0.524 and _constants.BEAR_Z == 2.5 and _constants.ANCHOR_W == 0.0, results)
+    from application.data.corpus import predictions_map
+    fam = next(f for f in predictions_map.FAMILIES if f["read"] == "ros_player_band")
+    _ok("the shipped band confidence is ros_sigma (predictions_map + scorecard_registry; ros_cv → audit json)",
+        fam["confidence"] == "ros_sigma" and fam["confidence_json"] == ["ros_cv"]
+        and reg.CONF_SIGNALS[("ros_player_band", "interval")]["signal"] == "ros_sigma", results)
 
     # 8 — determinism -------------------------------------------------------------------------------
     print("  8 — determinism (the re-scores recompute value-identical run-to-run):")
@@ -207,9 +207,9 @@ def check() -> bool:
         c1["pooled"][rc.PROPOSED_SIGNAL]["spearman"] == c2["pooled"][rc.PROPOSED_SIGNAL]["spearman"]
         and c1["pooled"][rc.CURRENT_SIGNAL]["spearman"] == c2["pooled"][rc.CURRENT_SIGNAL]["spearman"], results)
     ingd = bt._corpus_ingredients(2024)
-    ga = bt._score_per_key(bt._apply_dials(ingd, prop["BULL_Z"], prop["BEAR_Z"], prop["ANCHOR_W"]))
-    gb = bt._score_per_key(bt._apply_dials(ingd, prop["BULL_Z"], prop["BEAR_Z"], prop["ANCHOR_W"]))
-    _ok("band coverage recompute value-identical", _frame_eq(ga, gb), results)
+    ga = bt._score_per_key(bt._apply_dials(ingd, _constants.BULL_Z, _constants.BEAR_Z, _constants.ANCHOR_W))
+    gb = bt._score_per_key(bt._apply_dials(ingd, _constants.BULL_Z, _constants.BEAR_Z, _constants.ANCHOR_W))
+    _ok("band coverage recompute value-identical (at the shipped dials)", _frame_eq(ga, gb), results)
 
     # --- PROVE-BITES ------------------------------------------------------------------------------
     print("  PROVE-BITES:")
@@ -225,10 +225,10 @@ def check() -> bool:
 
     ok = all(results) and bool(results)
     print()
-    print(f"  VERDICT: {'PASS' if ok else 'FAIL'} — the asymmetric band's symmetric default is identity, the "
-          f"sweep math mirrors the shipped band, the joint re-tune's coverage recovery holds on unseen "
-          f"seasons + the league holdout, the confidence re-score demonstrates the ros_cv→ros_sigma flip, "
-          f"both re-scores are shadows, and it is propose-only + deterministic. Human promotes.")
+    print(f"  VERDICT: {'PASS' if ok else 'FAIL'} — the SHIPPED band is two-sided (BEAR_Z 2.5 ≠ BULL_Z 0.524); "
+          f"the sweep math mirrors the shipped band; the shipped band covers ~0.80 two-sided on unseen "
+          f"seasons + the league holdout; the shipped ros_sigma confidence is honest (ros_cv retired to "
+          f"audit); the re-scores are shadows; and it is deterministic. Session 8c shipped it.")
     return ok
 
 

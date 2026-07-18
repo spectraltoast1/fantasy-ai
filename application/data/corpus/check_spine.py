@@ -43,6 +43,7 @@ import polars as pl
 
 from application.data import data_layer
 from application.data.corpus import compute_spine
+from application.data.corpus import constants_snapshot
 from application.data.transforms import (
     compute_bracket_sim,
     compute_player_signal,
@@ -291,7 +292,10 @@ def main():
     ap.add_argument("--sample-determinism", type=int, default=2,
                     help="how many leagues per stratum to recompute for the determinism proof (default 2)")
     a = ap.parse_args()
-    sys.exit(0 if check(tuple(a.strata), a.sample_determinism) else 1)
+    # Session 8c: the live engine is promoted; validate the IMMUTABLE frozen spine at the epoch that made it.
+    with constants_snapshot.frozen_era():
+        ok = check(tuple(a.strata), a.sample_determinism)
+    sys.exit(0 if ok else 1)
 
 
 if __name__ == "__main__":

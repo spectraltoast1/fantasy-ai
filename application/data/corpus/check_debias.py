@@ -31,6 +31,7 @@ import polars as pl
 
 from application.data import data_layer
 from application.data.corpus import compute_spine
+from application.data.corpus import constants_snapshot
 from application.data.transforms import compute_production_vor as pv
 from application.data.transforms import compute_ros_player_band as band
 from application.data.transforms.compute_production_vor import _ros_values
@@ -173,7 +174,10 @@ def check() -> bool:
 
 def main():
     argparse.ArgumentParser(description="Gate for the Session 7 de-bias.").parse_args()
-    sys.exit(0 if check() else 1)
+    # Session 8c: the live centre is shrunk (CENTER_SHRINK=0.8); validate the frozen λ=0 spine at its epoch.
+    with constants_snapshot.frozen_era():
+        ok = check()
+    sys.exit(0 if ok else 1)
 
 
 if __name__ == "__main__":
