@@ -275,32 +275,33 @@ def _materialize(season: int, *, reader=data_layer, league_id=None, scoring_key=
     return rows
 
 
-def _corpus_ingredients(season: int, *, reader=data_layer) -> pl.DataFrame:
-    """Materialize the dial-independent band ingredients pooled across the MATCHED cohort, ALL as-of weeks,
-    grouped by scoring_key — the across-as-of-weeks upgrade of the interim GRADE_WEEK grade (Session 8; the
-    band already computes every as-of week, so the objective grades them all, not just week 4). Loaded ONCE
-    per season; the joint sweep applies each dial combo as vectorized arithmetic. The scoring-scoped
-    canonical answer key is read through `reader` FIRST (season-guarded ⇒ a sealed season raises before the
-    unguarded anchor read), so the structural split-seal bites for the corpus objective too. DEDUP one row
-    per (scoring_key, sleeper_player_id, as_of_week): same-key leagues share the band AND the canonical
-    realised, so duplicate rows are pure roster-popularity weight. Raises ValueError if the season has no
-    matched leagues / gradeable rows."""
+def _corpus_ingredients(season: int, *, reader=data_layer, strata=("matched",)) -> pl.DataFrame:
+    """Materialize the dial-independent band ingredients pooled across a cohort (default the MATCHED cohort),
+    ALL as-of weeks, grouped by scoring_key — the across-as-of-weeks upgrade of the interim GRADE_WEEK grade
+    (Session 8; the band already computes every as-of week, so the objective grades them all, not just week
+    4). Loaded ONCE per season; the joint sweep applies each dial combo as vectorized arithmetic. The
+    scoring-scoped canonical answer key is read through `reader` FIRST (season-guarded ⇒ a sealed season
+    raises before the unguarded anchor read), so the structural split-seal bites for the corpus objective
+    too. DEDUP one row per (scoring_key, sleeper_player_id, as_of_week): same-key leagues share the band AND
+    the canonical realised, so duplicate rows are pure roster-popularity weight. `strata` selects the cohort
+    — the objective uses ("matched",); the Session-8 win re-score also grades ("generalization",), the
+    league-wise holdout. Raises ValueError if the season/strata has no leagues / gradeable rows."""
     manifest = data_layer.read_corpus_manifest()  # metadata (no season arg → not a sealed read)
-    matched = (
-        manifest.filter((pl.col("stratum") == "matched") & (pl.col("season") == season))
+    cohort = (
+        manifest.filter(pl.col("stratum").is_in(list(strata)) & (pl.col("season") == season))
         .select("league_id", "scoring_key").unique()
     )
-    if matched.height == 0:
-        raise ValueError(f"no matched leagues for season {season}")
+    if cohort.height == 0:
+        raise ValueError(f"no {'/'.join(strata)} leagues for season {season}")
     actual_by_key = {sk: _canonical_actual(season, sk, reader=reader)
-                     for sk in matched["scoring_key"].unique().to_list()}
+                     for sk in cohort["scoring_key"].unique().to_list()}
     anchor_inputs = _load_anchor_inputs(season)  # NFL-global, leave-one-out leak-free; season already cleared
     rows = []
-    for lid, sk in matched.iter_rows():
+    for lid, sk in cohort.iter_rows():
         rows.extend(_materialize(season, reader=reader, league_id=lid, scoring_key=sk,
                                  actual=actual_by_key[sk], anchor_inputs=anchor_inputs))
     if not rows:
-        raise ValueError(f"no gradeable corpus rows for season {season}")
+        raise ValueError(f"no gradeable corpus rows for season {season} ({'/'.join(strata)})")
     return (pl.DataFrame(rows, infer_schema_length=None)
             .unique(subset=["scoring_key", "sleeper_player_id", "as_of_week"], keep="first"))
 
