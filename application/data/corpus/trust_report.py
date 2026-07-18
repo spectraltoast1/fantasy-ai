@@ -135,10 +135,13 @@ def build_report(sc: pl.DataFrame) -> str:
     L.append("")
     L.append("## Headline")
     L.append("")
-    L.append("- **Projection optimism is real and stable.** `production_vor` **loses to "
-             "carry-recent-form-forward every season** (skill < 0) while ranking well — it prices the ORDER "
-             "right but the LEVEL high. The `ros_player_band` under-covers (~0.55 vs 0.80 target) with PIT "
-             "piled at the edges. Two independent reads, one story. *(A Tuner lead, not fixed here.)*")
+    L.append("- **Projection optimism is real but MODEST.** `production_vor` prices the ORDER well "
+             "(Spearman ~0.88) but runs the LEVEL somewhat high — it still trails a **leak-safe** "
+             "carry-recent-form-forward naive every season, but only by a small margin (pooled skill ~−0.10; "
+             "2023–24 essentially even), not the steep every-season loss first reported. That earlier number "
+             "leaned on a naive with a **hindsight** realized forward-week count; on the scheduled remaining "
+             "weeks a real forecast has (Session 9 fix), the gap collapses. The `ros_player_band` still "
+             "under-covers (~0.56 vs 0.80 target) with PIT piled at the edges. *(A Tuner lead, not fixed here.)*")
     L.append("- **The measurement reads hold out-of-sample** (§1 signal, §5 rank, §6 depth) — the "
              "pre-registered prediction stands.")
     L.append("- **Confidence-honesty (law 2) — the headline — is mixed.** Playoff odds and true-rank sort "
