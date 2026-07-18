@@ -2,7 +2,22 @@
 
 > Engineering context document for Claude Code. Describes the stack, folder structure, data layer design, and technical principles. Updated regularly as the project evolves.
 
-**Last reviewed:** 2026-07-18 (**Backend — L4 BAND HONESTY (Improvement-Loop Session 8): the ROS bull/bear
+**Last reviewed:** 2026-07-18 (**Backend — CENTER-SHRINK (read-improvement): the flat systematic
+centre-shrink lever S7 parked — tested and it works, all PROPOSED not shipped.** `CENTER_SHRINK` is the
+**8th dials-registry dial** — a multiplicative scalar on the borrowed ROS centre in the shared `_ros_values`
+(production_vor AND the band inherit it; composes with `FORM_ANCHOR_W`), applied before the λ=0 short-circuit
+so it takes effect at the shipped λ=0. Ships at **1.0 = byte-exact identity** (new dial like FORM_ANCHOR_W —
+no snapshot pin, gated by `check_center_shrink`); threaded into `backtest_production_vor.objective` (which
+recomputes the centre in-memory) so the centre-MAE sweep moves. Multiplicative ⇒ **rank-preserving**
+(discrimination + the ordinal reads provably invariant). RESULT: the centre was ~43% too high (S8: ~98th pct
+of realised) — tuner RECOMMENDs **CENTER_SHRINK 1.0→0.7** (interior; DEV centre-MAE 21.95→16.44, effect 5.5;
+OOS optimum softer ~0.8). HEADLINE (`rescore_center_shrink.py`, shadow): re-fitting the band at the shrunk
+centre turns S8's all-downside band (effective up:down **0.00**) into a genuine **two-sided range** (up:down
+**0.70**, coverage ~0.80, balanced tails on DEV/sealed-TEST/generalization) — an honest centre → a natural
+range, the competing hypothesis to S8's width-only fix. Gate `corpus/check_center_shrink.py` GREEN WITH
+TEETH; `check_tuner` extended; `check_debias` GREEN. Propose-only; frozen corpus + shipped dials + is_mine
+gate (0.817) untouched. NEXT: promote the pair (shrink + re-symmetrised band) vs S8's band — Will's call.
+— Prior (Session 8 band honesty): **Backend — L4 BAND HONESTY (Improvement-Loop Session 8): the ROS bull/bear
 band re-tuned for honest coverage — ASYMMETRIC tails + a raw-points confidence, all PROPOSED not shipped.**
 The band gains a DOWN-side half-width `BEAR_Z` (the **7th dials-registry dial**): `ros_bull = centre +
 BULL_Z·σ`, `ros_bear = centre − BEAR_Z·σ`, born at `BEAR_Z==BULL_Z==1.44` so the symmetric band recomputes

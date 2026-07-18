@@ -82,9 +82,11 @@ def _effective_widths(season: int, shrink: float, combo: tuple) -> tuple:
     (up_width, down_width, up/down ratio) on the shrunk centre."""
     ing = _shrunk_ingredients(season, shrink)
     g = bt._apply_dials(ing, *combo)
-    up = float((g["bull"] - g["center"]).mean())
-    down = float((g["center"] - g["bear"]).mean())
-    return (up, down, (up / down if down else float("nan")))
+    # round6: the pool-mean is a multi-threaded polars reduction whose accumulation order flakes at the ULP
+    # run-to-run; 6 dp collapses the flake so the reported widths are deterministic (far below display need).
+    up = round(float((g["bull"] - g["center"]).mean()), 6)
+    down = round(float((g["center"] - g["bear"]).mean()), 6)
+    return (up, down, round(up / down, 6) if down else float("nan"))
 
 
 def _discrimination(season: int, shrink: float) -> tuple:
