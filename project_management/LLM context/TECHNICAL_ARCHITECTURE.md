@@ -2,8 +2,18 @@
 
 > Engineering context document for Claude Code. Describes the stack, folder structure, data layer design, and technical principles. Updated regularly as the project evolves.
 
-**Last reviewed:** 2026-07-18 (**Backend — CENTER-SHRINK (read-improvement): the flat systematic
-centre-shrink lever S7 parked — tested and it works, all PROPOSED not shipped.** `CENTER_SHRINK` is the
+**Last reviewed:** 2026-07-18 (**Backend — 8c SHIPPED THE HONEST ENGINE (the first non-propose-only session):
+`CENTER_SHRINK=0.8` + the two-sided band re-fit at 0.8 + the `ros_sigma` confidence are PROMOTED into
+`_constants.py` + the shipped reads.** The equivalence spine is proven (`prove_shrink_invariance.py`): a
+uniform positive centre scale cancels in VOR's ratio and preserves ranks, and the bracket sim reads
+`projection_consensus` directly — so **VOR / true-rank / playoff-odds are invariant** (only projected points
+~0.8× + the band move; the advice is unchanged). Provenance: promoting the snapshot-pinned `BULL_Z`/`ANCHOR_W`
+moved the live `constants_hash`; `constants_snapshot` re-pinned (drift green) + records `FROZEN_CORPUS_HASH`,
+and a `frozen_era()` context lets the frozen-corpus gates validate the immutable ledger at the epoch that made
+it (the append-only ledger is never overwritten). `CENTER_SHRINK`/`BEAR_Z` stay out of the snapshot
+(post-corpus dials). The deterministic is_mine substrate is recomputed; the shared scoring-scoped band was
+restored to the frozen baseline (the display re-derive + `ros_synthesis` refresh are an AI-track follow-on).
+All 8 corpus gates green. — Prior (center-shrink, propose-only): `CENTER_SHRINK` is the
 **8th dials-registry dial** — a multiplicative scalar on the borrowed ROS centre in the shared `_ros_values`
 (production_vor AND the band inherit it; composes with `FORM_ANCHOR_W`), applied before the λ=0 short-circuit
 so it takes effect at the shipped λ=0. Ships at **1.0 = byte-exact identity** (new dial like FORM_ANCHOR_W —

@@ -1,7 +1,30 @@
 # STATUS
 
-**Last updated:** 2026-07-18 (**BACKEND — CENTER-SHRINK (read-improvement, 3 commits): the flat systematic
-centre-shrink lever S7 parked — tested, and it works. PROPOSED not shipped.** `CENTER_SHRINK` is the **8th
+**Last updated:** 2026-07-18 (**BACKEND — 8c SHIP THE HONEST ENGINE (4 commits): the FIRST shipped
+engine-improvement (all prior sessions were propose-only). Will's decision: honest-and-lower.** PROMOTED into
+`_constants.py` + the shipped reads: **`CENTER_SHRINK=0.8`** (the honest centre — the projection sat ~98th pct
+of realised, ~43% too high; 0.8 is the OOS-safe value, TRAIN-best was 0.7 but DEV/TEST centre-MAE bottom
+nearer 0.8), the **two-sided band re-fit at 0.8** (`BULL_Z 1.44→0.524, BEAR_Z 1.44→2.5, ANCHOR_W 0.25→0.0`;
+NOT S8's all-downside `BULL_Z=0`), and the band **confidence `ros_cv → ros_sigma`** (ros_cv proven inverted,
+retired to the `confidence_json` audit; `predictions_map` + `scorecard_registry`). `FORM_ANCHOR_W` stays 0.
+**THE EQUIVALENCE SPINE (proven, `prove_shrink_invariance.py`):** a uniform positive centre scale cancels in
+VOR's ratio `(ros−waiver)/(top−waiver)` and preserves ranks, and the bracket sim reads projection_consensus
+directly (never `_ros_values`) — so **VOR / true-rank / playoff-odds are INVARIANT** (is_mine standings
+EXACTLY identical; VOR value-identical to ≤1 round3 ULP, 4/635 boundary cases, no reorder; odds byte-identical)
+and **only projected points (~0.8×) + the band shape move**. The start/sit, waiver, and odds advice is
+unchanged. **THE EPOCH SPLIT:** promoting snapshot-pinned dials moved the live `constants_hash`
+(1.44/0.25 → `a3d01b8e…` → `01355fd3…`); `constants_snapshot` re-pinned (drift green) + records
+`FROZEN_CORPUS_HASH` (the immutable 2.9M-row baseline). `frozen_era()` restores the pre-8c engine (dials +
+SNAPSHOT + the ros_cv confidence) so the frozen-corpus gates (`check_predictions/spine/scorecard/debias`)
+validate the immutable ledger at the epoch that MADE it — the append-only ledger is never overwritten. The
+propose-only gates (`check_center_shrink/band_honesty/tuner`) reframed from "ships at identity" to the
+invariance proof + shipped values + shadow-honesty. **Recomputed the deterministic is_mine league-scoped
+substrate**, then RESTORED the shared scoring-scoped corpus substrate to the frozen baseline (the ROS band is
+scoring-scoped — shared with the corpus); the **display-substrate re-derive + `ros_synthesis` refresh are the
+AI-track follow-on** (the front-end reads the old band until then — low-stakes, pre-season). **All 8 corpus
+gates GREEN post-promotion.** PARKED (Session 9 / annual pipeline): the `compute_resolutions` symmetric-PIT-vs-
+asymmetric-band latent; the persisted new-population ledger (annual pipeline); the consensus-alongside
+display. — Prior (center-shrink, propose-only): `CENTER_SHRINK` is the **8th
 dials-registry dial** (`_constants.py`), a multiplicative scalar on the borrowed ROS centre applied in the
 shared `_ros_values` (production_vor AND the band inherit it, composing with `FORM_ANCHOR_W`): `center' =
 CENTER_SHRINK·centre`, **before** the λ=0 short-circuit so it takes effect at the shipped λ=0. Ships at
