@@ -33,16 +33,26 @@ import polars as pl
 from application.data import data_layer
 from application.data.transforms._analytics import mean, pearson
 from application.data.transforms.compute_production_vor import (
+    FORM_ANCHOR_W,
     SKILL_POSITIONS,
     _pool_lines,
     _pool_of,
+    _realized_weekly_pts,
+    _recent_form,
+    _resolve_scoring,
     _roster_as_of,
     _ros_values,
     _vor,
 )
+# The scoring-scoped canonical answer key (player_weekly_pts_canonical) — reused, not re-derived (std instr 5).
+from application.data.transforms.backtest_ros_player_band import _canonical_actual
 
 # Minimum per-pool correlation between projected ros_value and actual ROS production.
 CORR_MIN = 0.60
+# The FORM_ANCHOR_W fit grades the de-biased ROS centre over the early-season decision window (as-of weeks
+# 1..GRADE_WEEK) — where recent-form evidence exists and the ledger's production_vor predictions live (the
+# roster freeze is weeks 1–4). Bounded + comparable to the band's freeze-week convention.
+GRADE_WEEK = 4
 
 
 def _actual_ros(season: int) -> pl.DataFrame:
@@ -105,6 +115,56 @@ def _test_points(season: int, *, league_id=None, scoring_key=None) -> pl.DataFra
                 "actual_ros": act_map.get(r["sleeper_player_id"], 0.0),
             })
     return pl.DataFrame(rows)
+
+
+def objective(season: int, consts: dict, *, reader=data_layer) -> float:
+    """The tuner's scalar fit objective for FORM_ANCHOR_W (the S7 de-bias λ), at the value in `consts`, on
+    `reader`'s allowed partition — LOWER is better. Scoring-scoped: for each scoring_key in the season's
+    MATCHED cohort it builds the DE-BIASED ROS centre (the shipped `_ros_values` blend at λ) over the
+    projected skill pool at as-of weeks 1..GRADE_WEEK, and scores MAE against the realised ROS under that
+    key's CANONICAL answer key (`_canonical_actual` — NOT raw fantasy_points_ppr, the 6b basis: PPR
+    over-credits receptions for non-PPR keys by up to ~7 pts/wk). Returns the mean per-key MAE.
+
+    Reuses the shipped blend + recent-form helpers (std instr 5); recent-form is the SAME scoring-scoped
+    series the transform consumes, so the fit measures exactly what would ship. λ=0 recovers the
+    borrowed-centre MAE — the baseline the de-bias must beat. Graded over players with realised season
+    signal (present in the answer key), so the never-played deep bench doesn't dilute the fit."""
+    lam = consts.get("FORM_ANCHOR_W", FORM_ANCHOR_W)
+    manifest = data_layer.read_corpus_manifest()  # metadata (no season arg → not a sealed read)
+    keys = (manifest.filter((pl.col("stratum") == "matched") & (pl.col("season") == season))
+            ["scoring_key"].unique().to_list())
+    if not keys:
+        raise ValueError(f"no matched leagues for season {season}")
+    maes = []
+    for sk in keys:
+        # Read through `reader` FIRST (season-guarded ⇒ a sealed season raises before any downstream work).
+        consensus = (
+            reader.read_projection_consensus(season, scoring_key=sk)
+            .select("week", "sleeper_player_id", "position", "center_ppr")
+            .filter(pl.col("position").is_in(SKILL_POSITIONS))
+        )
+        truth = _canonical_actual(season, sk, reader=reader)   # (pid, week) → realised canonical pts
+        played = {pid for (pid, _wk) in truth}                 # players with any realised week this season
+        realized = _realized_weekly_pts(season, _resolve_scoring(season, sk, reader=reader), reader=reader)
+        max_proj_week = int(consensus["week"].max())
+        errs = []
+        for n in range(1, min(GRADE_WEEK, max_proj_week - 1) + 1):
+            remaining = list(range(n + 1, max_proj_week + 1))
+            if not remaining:
+                continue
+            recent_form = _recent_form(realized, n) if realized.height else None
+            ros = _ros_values(consensus, remaining, recent_form=recent_form, form_anchor_w=lam)
+            for r in ros.iter_rows(named=True):
+                pid = r["sleeper_player_id"]
+                if pid not in played:
+                    continue
+                actual_ros = sum(truth.get((pid, wk), 0.0) for wk in remaining)
+                errs.append(abs(r["ros_value"] - actual_ros))
+        if errs:
+            maes.append(sum(errs) / len(errs))
+    if not maes:
+        raise ValueError(f"no gradeable ROS-centre rows for season {season}")
+    return sum(maes) / len(maes)
 
 
 def run(season: int, *, league_id=None, scoring_key=None) -> bool:

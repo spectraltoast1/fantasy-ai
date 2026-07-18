@@ -45,7 +45,11 @@ import polars as pl
 
 from application.data import data_layer
 from application.data.transforms._analytics import round1
-from application.data.transforms.compute_production_vor import _ros_values
+# The shared ROS-centre aggregator + the S7 de-bias recent-form helpers — imported (not re-derived) so the
+# band's ros_center stays identical to production_vor's ros_value and inherits the SAME de-bias (design law 3).
+from application.data.transforms.compute_production_vor import (
+    _ros_values, _realized_weekly_pts, _resolve_scoring, _recent_form,
+)
 # BULL_Z (bull/bear half-width in σ units) and ANCHOR_W (max preseason-anchor weight) are swept dials,
 # backtest-tuned JOINTLY to (1.44, 0.25) (freeze-week coverage 0.817). Homed in the L4 dials registry and
 # re-exported here so their canonical path (ros_player_band.BULL_Z) and every `from …import BULL_Z`
@@ -193,16 +197,20 @@ def _load_anchor_inputs(season: int) -> tuple[dict, dict, dict]:
 
 def _band_as_of(consensus: pl.DataFrame, n: int, max_proj_week: int, season: int, *,
                 bull_z: float, anchor_w: float, total_weeks: int,
-                adp_map: dict, curve_lookup: dict, curve_max_rank: dict) -> list:
+                adp_map: dict, curve_lookup: dict, curve_max_rank: dict,
+                realized_pts: pl.DataFrame | None = None) -> list:
     """ROS player-band rows for one as-of cutoff N over the WHOLE projected pool: the borrowed centre
-    (Σ remaining weekly centres, via the shared _ros_values), the accumulated band std, and the bull/bear
-    range blended toward the preseason ADP anchor (weight decaying with the remaining horizon). Roster-
-    free — no roster_id, no situation carry-through (those are the league view's job)."""
+    (Σ remaining weekly centres, via the shared _ros_values, de-biased toward recent form through week N),
+    the accumulated band std, and the bull/bear range blended toward the preseason ADP anchor (weight
+    decaying with the remaining horizon). Roster-free — no roster_id, no situation carry-through (those are
+    the league view's job). `realized_pts` feeds the S7 de-bias recent-form anchor (None → λ=0 identity)."""
     remaining = range(n + 1, max_proj_week + 1)
     if not remaining:
         return []
 
-    ros = _ros_values(consensus, remaining)   # per-player raw centre + n_weeks + position, whole pool
+    recent_form = _recent_form(realized_pts, n) if realized_pts is not None else None
+    # per-player DE-BIASED centre + n_weeks + position, whole pool (the SAME blend production_vor inherits)
+    ros = _ros_values(consensus, remaining, recent_form=recent_form)
     sigma_map = {
         r["sleeper_player_id"]: r["ros_sigma"]
         for r in _ros_sigma(consensus, remaining).iter_rows(named=True)
@@ -252,6 +260,10 @@ def compute(season: int, scoring_key: str | None = None) -> pl.DataFrame:
     # the range here does not move the served synthesis. Removing the join_season read also drops the
     # band's last roster-path dependency (it no longer touches the roster substrate at all).
     adp_map, curve_lookup, curve_max_rank = _load_anchor_inputs(season)
+    # De-bias recent-form anchor (S7): realized weekly points on the centre's scoring basis — the SAME
+    # scoring-scoped series production_vor uses, so the de-biased ros_center matches it. Consumed only when
+    # FORM_ANCHOR_W>0 (the shipped 0.0 short-circuits to the borrowed centre — value-identical).
+    realized_pts = _realized_weekly_pts(season, _resolve_scoring(season, scoring_key))
 
     all_rows = []
     for n in range(1, max_proj_week + 1):
@@ -259,6 +271,7 @@ def compute(season: int, scoring_key: str | None = None) -> pl.DataFrame:
             consensus, n, max_proj_week, season, bull_z=BULL_Z, anchor_w=ANCHOR_W,
             total_weeks=max_proj_week, adp_map=adp_map,
             curve_lookup=curve_lookup, curve_max_rank=curve_max_rank,
+            realized_pts=realized_pts,
         ))
 
     df = _mark_calibrated_pool(

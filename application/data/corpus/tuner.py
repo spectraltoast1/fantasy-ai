@@ -63,6 +63,7 @@ EFFECT_FLOOR = {
     "backtest_player_signal": 0.05,          # rest-of-season MAE, in PPG points
     "backtest_projection_consensus": 0.010,  # |coverage-0.50| + tail-imbalance, dimensionless
     "backtest_ros_player_band": 0.010,       # |coverage-target| + tail-imbalance, dimensionless
+    "backtest_production_vor": 0.5,          # de-biased ROS-centre MAE, in season-total fantasy points (S7)
 }
 # The fit window's input integrity must clear this fraction of trustworthy claims (guardrail c).
 INPUTS_OK_MIN = 0.98
