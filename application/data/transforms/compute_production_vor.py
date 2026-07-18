@@ -101,7 +101,11 @@ def _realized_weekly_pts(season: int, scoring, *, reader=data_layer) -> pl.DataF
         )
         .drop_nulls("sleeper_player_id")
         .group_by("sleeper_player_id", "week")
-        .agg(pl.col("pts").first())
+        # `.max()` (not `.first()`): a two-way player can have >1 nfl_stats row per (pid, week) with different
+        # scored points, and `.first()` is order-dependent under polars' multi-threaded group_by — a promoted
+        # λ>0 must recompute value-identical, so reduce dups deterministically (== the single value when
+        # there are no dups). Recent-form only feeds the blend at λ>0; the shipped λ=0 is unaffected.
+        .agg(pl.col("pts").max())
     )
 
 
@@ -170,7 +174,11 @@ def _ros_values(consensus: pl.DataFrame, remaining_weeks, *,
                       on="sleeper_player_id", how="left")
         .with_columns(
             pl.when(pl.col("recent_ppg").is_not_null())
-            .then((1.0 - lam) * pl.col("ros_value") + lam * pl.col("recent_ppg") * pl.col("n_weeks"))
+            # .round(6): the blend can land EXACTLY on a downstream round1 boundary (x.x5), where polars'
+            # vectorized float arithmetic flakes at the ULP (…44999999 vs …45000001) and round1 flips run-to-
+            # run. Rounding to 6 dp collapses the ULP flake so round1 is deterministic (a promoted λ must
+            # recompute value-identical). 6 dp is far below the round1 the reads apply, so it moves no number.
+            .then(((1.0 - lam) * pl.col("ros_value") + lam * pl.col("recent_ppg") * pl.col("n_weeks")).round(6))
             .otherwise(pl.col("ros_value"))
             .alias("ros_value")
         )

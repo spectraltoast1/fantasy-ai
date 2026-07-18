@@ -141,6 +141,12 @@ def check(seasons=None) -> bool:
     _ok("BULL_Z/ANCHOR_W now fit on a full TRAIN window (n=4, corpus objective) — was n=0 is_mine",
         by["BULL_Z"].n_train_seasons == len(tuner.TRAIN_SEASONS)
         and by["ANCHOR_W"].n_train_seasons == len(tuner.TRAIN_SEASONS), results)
+    # S7: the 6th dial (the de-bias) is swept on the split and ships at IDENTITY (0.0) — HELD, a proposal
+    # only (its own λ=0 identity + shadow re-score are gated by check_debias, not here).
+    fa = by.get("FORM_ANCHOR_W")
+    _ok("FORM_ANCHOR_W (S7 de-bias) swept on the split, ships at 0.0, HELD (proposal only)",
+        fa is not None and fa.current == 0.0 and fa.verdict == "HOLD"
+        and fa.n_train_seasons == len(tuner.TRAIN_SEASONS), results)
 
     # 6 — determinism ----------------------------------------------------------------------------------
     print("  6 — determinism (rebuild value-identical; the pinned as-of + rounded metrics):")

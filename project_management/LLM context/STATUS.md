@@ -1,6 +1,48 @@
 # STATUS
 
-**Last updated:** 2026-07-17 (**BACKEND — L4 TUNER 6b: the ROS-band objective is now CORPUS-WIDE, so
+**Last updated:** 2026-07-18 (**BACKEND — L4 THE DE-BIAS (Session 7, 3 commits): the second anchor was
+BUILT + TUNED and found NOT to fix the optimism — the lever is band WIDTH (Session 8).** `FORM_ANCHOR_W` is
+the **6th dials-registry dial** (`_constants.py`, `current=0.0` → ships at **IDENTITY**; no frozen-snapshot
+pin / no `check_tuner._MODULES` drift entry — it did not exist when the 2.9M predictions were made, so it is
+NOT in `constants_hash`; `check_debias` gates it instead). The de-bias is a **decision-layer convex blend in
+the shared ROS-centre aggregator** `compute_production_vor._ros_values`: `ros_value = (1−λ)·borrowed_centre +
+λ·(recent_ppg × n_weeks)`, `recent_ppg = mean(pts|wk≤N)` (the scorer's `recent_ppg_forward` proxy, reused
+via `recent_ppg_expr` — std instr 5), on the centre's own scoring basis (`nfl_stats` via `actual_points_expr`
+== canonical for ppr/half/std). **Both `production_vor` AND the band inherit it** (the band's `ros_center` ==
+production_vor's `ros_value`), so ONE blend de-biases both — a convex blend of two existing series, not a
+projection model (design law 3). **λ=0 recomputes the frozen spine value-identical** (both reads); λ>0 moves
+the number (consumer-uses-it, std instr 7). **Tuned through the Session-6 harness on the split**
+(`backtest_production_vor.objective` = scoring-scoped **MAE(debiased centre, realized ROS CANONICAL)**, never
+raw PPR): λ*=**0.1**, DEV 2024 MAE 21.946→21.743 (effect **0.20 < the 0.5 floor**) → **HELD**; all 3 coupled
+gates pass. **THE RE-SCORE IS A NULL** (`rescore_debias.py` — SHADOW, no frozen-corpus mutation): de-biasing
+the centre does **NOT** recover band coverage at the frozen `BULL_Z=1.44`/`ANCHOR_W=0.25` — coverage sits
+~0.57 (2023-25, ≈ the cited ~0.55), FLAT then DECLINING as λ rises; the **~0.32–0.47 below-bear low-miss tail
+is unmoved**. **This does NOT confirm the Session-6 entanglement thesis.** MECHANISM (std instr 6): the miss
+is hugely asymmetric (~0.43 below-bear vs ~0.00 above-bull) — a band-**WIDTH** problem, not centre height;
+recent form can't predict the *later* busts, so the bear tail is unmoved. The **honest, leak-safe** de-bias
+barely helps centre-MAE — the scorer's "production_vor loses to carry-recent-form every season" relied on the
+naive's **hindsight** realized-forward-week count (`n_fwd`) a shipped projection can't use; λ=1 (pure form) is
+far worse (MAE ~35–40), so the shallow interior optimum near λ≈0.1 is real (std instr 1). **Delta-tracking:**
+`data_layer.write/read_center_gap` (append-only, provenanced to the frozen L3 baseline) persists the seasonal
+predicted-vs-realized centre gap per `(season, scoring_key)` — **+23 to +43 pts/season, always positive** (the
+systematic optimism magnitude); the substrate for a future SEASONAL auto-update via a **SYSTEMATIC-shrink**
+de-bias (NOT recent form — recent form is itself optimistic). `corpus/check_debias.py` **GREEN WITH TEETH**
+(λ=0 identity + λ>0 bites · decision-layer convex-blend algebra · both reads consume it · the re-score writes
+NOTHING to predictions/outcomes/resolutions/scorecard · delta-tracking idempotent · determinism — a two-way
+player's duplicate `nfl_stats` rows made recent-form non-deterministic under `.first()`, fixed to `.max()`).
+`check_tuner` **GREEN** (the 6th dial swept, ships at 0.0, HELD; `debias_lead` now carries the S7 outcome).
+**Auto-tune, human promotes — `FORM_ANCHOR_W` ships at 0.0, λ* is a proposal, nothing merged, no band dial
+touched; seam held (`queries.js`/views/reads/ledger/scorer untouched).** **Raw-PPR-vs-canonical lead
+resolved:** the S7 objective + re-score grade on canonical; the shipped is_mine `run()` grades
+(`backtest_production_vor._actual_ros`, `backtest_ros_player_band._actual_weekly`, `compute_player_signal`)
+still read raw `fantasy_points_ppr` — a fixed-PPR basis (they only see ppr today, so no live number moves),
+switching to canonical is a follow-on. **NEXT — Session 8 (band honesty):** re-tune `BULL_Z`/`ANCHOR_W` for
+real coverage on the corpus objective — extend the `BULL_Z` grid upward (6b's OOS fit was right-censored at
+1.96), sweep `BULL_Z × ANCHOR_W` jointly (6b's were marginal 1-D fits), make the coupled-regression guardrail
+real (came back null in 6b), expect `SKEW_GAIN`→0, swap the band's confidence off `ros_cv` onto the
+raw-points spread, un-freeze the objective from `GRADE_WEEK=4` to grade across as-of weeks. **The de-bias
+proved the WIDTH is the lever, not the centre.** **Session 5b (the HTML Trust Report dashboard) still a named
+fast-follow.** — Prior (2026-07-17): **BACKEND — L4 TUNER 6b: the ROS-band objective is now CORPUS-WIDE, so
 BULL_Z/ANCHOR_W are testable out-of-sample (still HELD).** Session 6 left the band objective is_mine-scoped
 → no is_mine league pre-2024 → the tuner HELD `BULL_Z`/`ANCHOR_W` on "no OOS train window." 6b rewires
 `backtest_ros_player_band.objective` to pool rostered-freeze players across the 221 **matched** leagues
