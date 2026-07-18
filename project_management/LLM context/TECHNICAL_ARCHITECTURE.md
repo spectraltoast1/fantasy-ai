@@ -2,7 +2,26 @@
 
 > Engineering context document for Claude Code. Describes the stack, folder structure, data layer design, and technical principles. Updated regularly as the project evolves.
 
-**Last reviewed:** 2026-07-18 (**Backend — L4 THE DE-BIAS (Improvement-Loop Session 7): a decision-layer
+**Last reviewed:** 2026-07-18 (**Backend — L4 BAND HONESTY (Improvement-Loop Session 8): the ROS bull/bear
+band re-tuned for honest coverage — ASYMMETRIC tails + a raw-points confidence, all PROPOSED not shipped.**
+The band gains a DOWN-side half-width `BEAR_Z` (the **7th dials-registry dial**): `ros_bull = centre +
+BULL_Z·σ`, `ros_bear = centre − BEAR_Z·σ`, born at `BEAR_Z==BULL_Z==1.44` so the symmetric band recomputes
+value-identical to the frozen spine (a new dial with NO snapshot pin / NO `check_tuner._MODULES` entry —
+`check_band_honesty` gates it, the `FORM_ANCHOR_W` precedent). `backtest_ros_player_band.objective` retired
+the interim `GRADE_WEEK=4` → grades ACROSS the season's as-of weeks, materialising the dial-independent band
+ingredients once per season (`_corpus_ingredients`) then applying each dial combo as vectorised arithmetic
+(`_apply_dials`, proven == the shipped `_blended_band`). The ros-band dials are UN-ENTANGLED (S7's null: the
+band under-covers on its own) and re-fit JOINTLY (`tuner.evaluate_joint`, extended grids) with a REAL
+coupled-regression guardrail; the fit RECOMMENDs **BULL_Z 1.44→0.0, BEAR_Z 1.44→3.5, ANCHOR_W 0.25→0.0**
+(the projection centre is optimistic so `bull=centre` is the honest ceiling; the bear must be wide to reach
+the busts; the ADP anchor is counter-productive once the bear is wide). THE WIN (shadow re-score): coverage
+**DEV 0.565→0.861, sealed TEST 0.522→0.860, generalization holdout 0.423→0.834**, below-bear collapsing —
+holds on unseen seasons + the league holdout. CONFIDENCE (shadow): the band's `ros_cv` is INVERTED (frozen
+`conf_monotonicity` +0.49..+0.69) → `ros_sigma` flips it HONEST (pooled Spearman +0.58→−0.45). PROPOSE-ONLY
+(user-facing behaviour = human-promoted): the dials stay at symmetric identity, the scorer registry / ledger
+mapping / band read / frozen corpus / is_mine gate (0.817) are untouched; seam held. Gate:
+`corpus/check_band_honesty.py` GREEN WITH TEETH; `check_tuner`/`check_debias` GREEN. NEXT — Session 9
+(cleanup) + silent-reads confidence. — Prior (Session 7 de-bias): **Backend — L4 THE DE-BIAS: a decision-layer
 SECOND ANCHOR toward recent form, tuned through the harness — HELD, and the lever is band width (S8).** The
 de-bias is a **convex blend in the ONE shared ROS-centre aggregator** `compute_production_vor._ros_values`:
 `ros_value = (1−λ)·borrowed_centre + λ·(recent_ppg × n_weeks)`, `λ = FORM_ANCHOR_W` (the **6th dials-registry

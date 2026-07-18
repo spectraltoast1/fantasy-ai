@@ -1,6 +1,44 @@
 # STATUS
 
-**Last updated:** 2026-07-18 (**BACKEND — L4 THE DE-BIAS (Session 7, 3 commits): the second anchor was
+**Last updated:** 2026-07-18 (**BACKEND — L4 BAND HONESTY (Session 8, 3 commits): the ROS bull/bear band
+re-tuned for honest coverage — ASYMMETRIC tails + a raw-points confidence signal, PROPOSED not shipped.**
+`BEAR_Z` is the **7th dials-registry dial** (`_constants.py`) — the DOWN-side half-width (`bear = centre −
+BEAR_Z·σ`; `bull = centre + BULL_Z·σ`), born at **1.44 == BULL_Z** so the historically-symmetric band
+recomputes **value-identical** to the frozen spine (proven). Like `FORM_ANCHOR_W` it is a new dial with NO
+`constants_snapshot` pin / NO `check_tuner._MODULES` drift entry (the symmetric default keeps
+`constants_hash` reproducible); **`check_band_honesty` gates it**. **The objective retired the interim
+`GRADE_WEEK=4`** → `backtest_ros_player_band.objective` now grades ACROSS the season's as-of weeks; it
+materialises the dial-independent band ingredients ONCE per season (`_corpus_ingredients`) then applies each
+dial combo as VECTORISED arithmetic (`_apply_dials`, proven == the shipped `_blended_band`) so the joint
+sweep is tractable. `GRADE_WEEK` kept (S7 `center_gap`/`rescore_debias`/`check_debias` import it). **The
+ros-band dials are UN-ENTANGLED** (S7's null: the band under-covers on its OWN) and re-fit **JOINTLY**
+(`tuner.evaluate_joint`, cartesian sweep on extended grids: BULL_Z down to 0.0 + up past 1.96, BEAR_Z to
+5.0) on the corpus objective, certified DEV, sealed TEST + generalization; **the coupled-regression guardrail
+is now REAL** (a no-regression check on the DEV corpus; 6b returned None). **The joint fit RECOMMENDs BULL_Z
+1.44→0.0, BEAR_Z 1.44→3.5, ANCHOR_W 0.25→0.0** (holdout Δ 0.576). MECHANISM (std instr 6): the projection
+centre is OPTIMISTIC (reality exceeds it only ~5–8% → BULL_Z→0.0, the SEMANTIC floor — `bull=centre` is the
+honest ceiling, no negative up-width); the bear must be WIDE to reach the busts (BEAR_Z→3.5, INTERIOR — 4.0
+near-tied, 4.5 worse, NOT censored); once the bear is properly wide the preseason ADP anchor is
+counter-productive (it pulls the bear back up → ANCHOR_W→0.0). **THE WIN re-score** (`rescore_band_coverage.py`,
+SHADOW): coverage **DEV 2024 0.565→0.861, TEST 2025 (sealed) 0.522→0.860, generalization 2025 (league
+holdout) 0.423→0.834**; the below-bear tail collapses (~0.43–0.57 → 0.06–0.12) — the recovery holds on UNSEEN
+seasons + the league-wise holdout, not just the fit window. **CONFIDENCE swap** (`rescore_band_confidence.py`,
+SHADOW): the band's `ros_cv` (% dispersion) is INVERTED — the frozen scorecard's `conf_monotonicity` is
+**+0.49..+0.69** (its narrowest-% "most confident" stars miss MOST in raw points); the raw-points `ros_sigma`
+flips it HONEST (pooled Spearman **+0.58→−0.45**, honest every season), the re-score reproducing the frozen
+scorecard exactly (method check). **PROPOSE-ONLY** (Will's autonomy-contract rule: changing what "confident"
+means is user-facing → proposed, human-promoted, like the dial values): the scorer registry / ledger mapping
+/ band read are UNTOUCHED; the dials stay at their symmetric identity in `_constants.py`; the frozen corpus +
+the is_mine gate (freeze-week coverage **0.817**) are untouched; seam held (`queries.js`/views untouched).
+Proposals written to `proposals/` (BULL_Z, BEAR_Z, ANCHOR_W now RECOMMEND + the confidence-swap doc).
+`corpus/check_band_honesty.py` **GREEN WITH TEETH** (symmetric-default identity · `_apply_dials`==`_blended_band`
+· coverage recovery on DEV/sealed-TEST/generalization · BEAR_Z disciplined · the ros_cv→ros_sigma flip
+demonstrated · both re-scores shadow · propose-only · determinism); `check_tuner` GREEN (check 5 rewritten:
+weekly-band HELD-entangled, ros-band un-entangled + joint RECOMMEND); `check_debias` GREEN. **NEXT — Session 9
+(cleanup pass):** the leaky-naive re-score, the raw-PPR→canonical *shipped*-grade switch, the `*_ppr` rename,
+stale-comment retirement; and **silent-reads confidence** (`production_vor` + the other no-confidence reads)
+as the next read-improvement. Session 5b (the HTML Trust Report dashboard) still a named fast-follow.
+— Prior (Session 7 de-bias): **BACKEND — L4 THE DE-BIAS (Session 7, 3 commits): the second anchor was
 BUILT + TUNED and found NOT to fix the optimism — the lever is band WIDTH (Session 8).** `FORM_ANCHOR_W` is
 the **6th dials-registry dial** (`_constants.py`, `current=0.0` → ships at **IDENTITY**; no frozen-snapshot
 pin / no `check_tuner._MODULES` drift entry — it did not exist when the 2.9M predictions were made, so it is
@@ -36,13 +74,9 @@ touched; seam held (`queries.js`/views/reads/ledger/scorer untouched).** **Raw-P
 resolved:** the S7 objective + re-score grade on canonical; the shipped is_mine `run()` grades
 (`backtest_production_vor._actual_ros`, `backtest_ros_player_band._actual_weekly`, `compute_player_signal`)
 still read raw `fantasy_points_ppr` — a fixed-PPR basis (they only see ppr today, so no live number moves),
-switching to canonical is a follow-on. **NEXT — Session 8 (band honesty):** re-tune `BULL_Z`/`ANCHOR_W` for
-real coverage on the corpus objective — extend the `BULL_Z` grid upward (6b's OOS fit was right-censored at
-1.96), sweep `BULL_Z × ANCHOR_W` jointly (6b's were marginal 1-D fits), make the coupled-regression guardrail
-real (came back null in 6b), expect `SKEW_GAIN`→0, swap the band's confidence off `ros_cv` onto the
-raw-points spread, un-freeze the objective from `GRADE_WEEK=4` to grade across as-of weeks. **The de-bias
-proved the WIDTH is the lever, not the centre.** **Session 5b (the HTML Trust Report dashboard) still a named
-fast-follow.** — Prior (2026-07-17): **BACKEND — L4 TUNER 6b: the ROS-band objective is now CORPUS-WIDE, so
+switching to canonical is a follow-on. **(Session 8 EXECUTED — the band was re-tuned; see the header block
+above. The width WAS the lever: BEAR_Z→3.5 / BULL_Z→0.0 recovered coverage to ~0.86; SKEW_GAIN stayed HELD —
+the ROS band's asymmetry is its own BEAR_Z, not the weekly-band Cornish-Fisher term.)** — Prior (2026-07-17): **BACKEND — L4 TUNER 6b: the ROS-band objective is now CORPUS-WIDE, so
 BULL_Z/ANCHOR_W are testable out-of-sample (still HELD).** Session 6 left the band objective is_mine-scoped
 → no is_mine league pre-2024 → the tuner HELD `BULL_Z`/`ANCHOR_W` on "no OOS train window." 6b rewires
 `backtest_ros_player_band.objective` to pool rostered-freeze players across the 221 **matched** leagues

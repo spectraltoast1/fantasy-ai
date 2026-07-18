@@ -59,7 +59,8 @@ import polars as pl
 from application.data import data_layer
 from application.data.transforms._analytics import mean
 from application.data.transforms.compute_ros_player_band import (
-    ANCHOR_W, BULL_Z, SKILL_POSITIONS, _blended_band, _load_anchor_inputs, _preseason_anchor, _ros_sigma,
+    ANCHOR_W, BEAR_Z, BULL_Z, SKILL_POSITIONS, _blended_band, _load_anchor_inputs, _preseason_anchor,
+    _ros_sigma,
 )
 
 # Target bull/bear coverage — the fraction of players whose actual ROS should land in the band.
@@ -76,10 +77,11 @@ COVERAGE_TOL = 0.05
 # objective had none pre-2024). The dials still HOLD — entangled with the optimistic center; this is
 # testability, not promotion (the band re-tune is Session 8, post-de-bias).
 #
-# GRADE_WEEK is the single as-of cutoff the corpus objective grades at — INTERIM (Session 6b): week 4 is the
-# is_mine roster-freeze analog (present in every matched production_vor) and keeps ANCHOR_W meaningfully
-# exercised (at max ~14 the anchor weight is ~3× weaker). The across-as-of-weeks objective is deferred to
-# Session 8's band re-tune; week 4 is a comparable-to-0.817 baseline, not a settled answer.
+# GRADE_WEEK — the single week-4 as-of cutoff the 6b INTERIM corpus objective graded at. Session 8 RETIRED
+# it from `objective` (which now grades ACROSS the season's as-of weeks via `_corpus_ingredients`); it is
+# KEPT here only because the S7 shadow substrate still pins to it — `backfill_center_gap` /
+# `rescore_debias` / `check_debias` import GRADE_WEEK for the seasonal centre-gap grade. Do not re-add it to
+# the band objective.
 GRADE_WEEK = 4
 
 
@@ -96,8 +98,9 @@ def _actual_weekly(season: int, *, reader=data_layer) -> dict:
     return {(r["sleeper_player_id"], r["week"]): float(r["actual"]) for r in df.iter_rows(named=True)}
 
 
-def _test_points(season: int, bull_z: float, anchor_w: float, *, reader=data_layer,
-                 league_id=None, scoring_key=None, cutoffs=None, actual=None, anchor_inputs=None):
+def _test_points(season: int, bull_z: float, anchor_w: float, *, bear_z: float | None = None,
+                 reader=data_layer, league_id=None, scoring_key=None, cutoffs=None, actual=None,
+                 anchor_inputs=None):
     """One row per (as_of_week N, player): the shipped bull/bear band + the actual ROS over the same
     remaining weeks. Rebuilds the band through the transform's own `_preseason_anchor` / `_blended_band`
     (and `_load_anchor_inputs`), so what's validated is exactly what serves the read — no re-derivation.
@@ -123,6 +126,7 @@ def _test_points(season: int, bull_z: float, anchor_w: float, *, reader=data_lay
         actual = _actual_weekly(season, reader=reader)
     adp_map, curve_lookup, curve_max_rank = anchor_inputs if anchor_inputs is not None \
         else _load_anchor_inputs(season)
+    bz = bull_z if bear_z is None else bear_z   # bear_z defaults to bull_z → historically-symmetric band
 
     weeks = sorted(vor["as_of_week"].unique().to_list())
     freeze = max(weeks)
@@ -148,7 +152,8 @@ def _test_points(season: int, bull_z: float, anchor_w: float, *, reader=data_lay
             remaining_frac = r["n_weeks"] / max_proj_week if max_proj_week else 0.0
             anchor = _preseason_anchor(adp_map.get(pid), curve_lookup, curve_max_rank, remaining_frac)
             band = _blended_band(
-                r["ros_value"], sigma_map.get(pid, 0.0), anchor, anchor_w * remaining_frac, bull_z=bull_z
+                r["ros_value"], sigma_map.get(pid, 0.0), anchor, anchor_w * remaining_frac,
+                bull_z=bull_z, bear_z=bz
             )
             act = sum(actual.get((pid, wk), 0.0) for wk in remaining)
             rows.append({
@@ -230,63 +235,151 @@ def _canonical_actual(season: int, scoring_key: str, *, reader=data_layer) -> di
     return {(r["subject_id"], r["week"]): float(r["value"]) for r in out.iter_rows(named=True)}
 
 
-def _corpus_test_points(season: int, bull_z: float, anchor_w: float, *, reader=data_layer,
-                        cutoff: int = GRADE_WEEK) -> pl.DataFrame:
-    """Pool the freeze-cutoff band-coverage rows across the MATCHED cohort (Session 6b), grouped by
-    scoring_key. Iterates the manifest's matched leagues for the season, grading each at `cutoff` through
-    the SAME shipped `_test_points` math (per-league production_vor roster + the scoring-scoped canonical
-    answer key). The scoring-scoped inputs (canonical realised) and the NFL-global `anchor_inputs` are
-    loaded once per (season[,key]), not per league. DEDUP to one row per (scoring_key, sleeper_player_id):
-    same-key leagues share the band AND the canonical realised points, so duplicate rows are pure
-    roster-popularity weight — not wanted here. Raises ValueError if the season has no matched leagues."""
+def _materialize(season: int, *, reader=data_layer, league_id=None, scoring_key=None,
+                 actual=None, anchor_inputs=None) -> list:
+    """The DIAL-INDEPENDENT band ingredients per (as_of_week, player) for one league — everything the band
+    needs EXCEPT the swept dials (bull_z/bear_z/anchor_w): the borrowed centre (ros_value), the accumulated
+    sigma, the horizon fraction, the preseason anchor floor/ceiling (None if the player has no anchor), and
+    the realised ROS over the remaining weeks. Mirrors `_test_points` up to — but not including — the
+    dial-dependent `_blended_band`; a joint sweep materializes this ONCE per season then applies each dial
+    combo as vectorized arithmetic (`_apply_dials`). Reuses the shipped `_ros_sigma`/`_preseason_anchor`
+    (standing instr 5). `scoring_key` is stamped on every row."""
+    vor = reader.read_production_vor(season, league_id=league_id, as_of_week="all").select(
+        "as_of_week", "sleeper_player_id", "position", "ros_value", "n_weeks")
+    consensus = reader.read_projection_consensus(season, scoring_key=scoring_key).select(
+        "week", "sleeper_player_id", "band_ppr")
+    if actual is None:
+        actual = _canonical_actual(season, scoring_key, reader=reader)
+    adp_map, curve_lookup, curve_max_rank = anchor_inputs if anchor_inputs is not None \
+        else _load_anchor_inputs(season)
+    max_proj_week = int(consensus["week"].max())
+    rows = []
+    for n in sorted(vor["as_of_week"].unique().to_list()):
+        remaining = list(range(n + 1, max_proj_week + 1))
+        if not remaining:
+            continue
+        sigma_map = {r["sleeper_player_id"]: r["ros_sigma"]
+                     for r in _ros_sigma(consensus, remaining).iter_rows(named=True)}
+        for r in vor.filter(pl.col("as_of_week") == n).iter_rows(named=True):
+            pid = r["sleeper_player_id"]
+            remaining_frac = r["n_weeks"] / max_proj_week if max_proj_week else 0.0
+            anchor = _preseason_anchor(adp_map.get(pid), curve_lookup, curve_max_rank, remaining_frac)
+            rows.append({
+                "scoring_key": scoring_key, "as_of_week": n, "sleeper_player_id": pid,
+                "position": r["position"], "center": float(r["ros_value"]),
+                "sigma": float(sigma_map.get(pid, 0.0)), "remaining_frac": float(remaining_frac),
+                "anchor_floor": float(anchor["anchor_floor"]) if anchor else None,
+                "anchor_ceiling": float(anchor["anchor_ceiling"]) if anchor else None,
+                "actual": float(sum(actual.get((pid, wk), 0.0) for wk in remaining)),
+            })
+    return rows
+
+
+def _corpus_ingredients(season: int, *, reader=data_layer, strata=("matched",)) -> pl.DataFrame:
+    """Materialize the dial-independent band ingredients pooled across a cohort (default the MATCHED cohort),
+    ALL as-of weeks, grouped by scoring_key — the across-as-of-weeks upgrade of the interim GRADE_WEEK grade
+    (Session 8; the band already computes every as-of week, so the objective grades them all, not just week
+    4). Loaded ONCE per season; the joint sweep applies each dial combo as vectorized arithmetic. The
+    scoring-scoped canonical answer key is read through `reader` FIRST (season-guarded ⇒ a sealed season
+    raises before the unguarded anchor read), so the structural split-seal bites for the corpus objective
+    too. DEDUP one row per (scoring_key, sleeper_player_id, as_of_week): same-key leagues share the band AND
+    the canonical realised, so duplicate rows are pure roster-popularity weight. `strata` selects the cohort
+    — the objective uses ("matched",); the Session-8 win re-score also grades ("generalization",), the
+    league-wise holdout. Raises ValueError if the season/strata has no leagues / gradeable rows."""
     manifest = data_layer.read_corpus_manifest()  # metadata (no season arg → not a sealed read)
-    matched = (
-        manifest.filter((pl.col("stratum") == "matched") & (pl.col("season") == season))
+    cohort = (
+        manifest.filter(pl.col("stratum").is_in(list(strata)) & (pl.col("season") == season))
         .select("league_id", "scoring_key").unique()
     )
-    if matched.height == 0:
-        raise ValueError(f"no matched leagues for season {season}")
-    # Answer key per scoring_key — read through `reader` FIRST (season-guarded ⇒ a sealed season raises
-    # before any unguarded anchor read below), so the structural seal bites for the corpus objective too.
+    if cohort.height == 0:
+        raise ValueError(f"no {'/'.join(strata)} leagues for season {season}")
     actual_by_key = {sk: _canonical_actual(season, sk, reader=reader)
-                     for sk in matched["scoring_key"].unique().to_list()}
+                     for sk in cohort["scoring_key"].unique().to_list()}
     anchor_inputs = _load_anchor_inputs(season)  # NFL-global, leave-one-out leak-free; season already cleared
     rows = []
-    for lid, sk in matched.iter_rows():
-        r, _ = _test_points(season, bull_z, anchor_w, reader=reader, league_id=lid, scoring_key=sk,
-                            cutoffs=[cutoff], actual=actual_by_key[sk], anchor_inputs=anchor_inputs)
-        for row in r:
-            row["scoring_key"] = sk
-        rows.extend(r)
+    for lid, sk in cohort.iter_rows():
+        rows.extend(_materialize(season, reader=reader, league_id=lid, scoring_key=sk,
+                                 actual=actual_by_key[sk], anchor_inputs=anchor_inputs))
     if not rows:
-        raise ValueError(f"no gradeable corpus rows for season {season} at week {cutoff}")
-    return pl.DataFrame(rows).unique(subset=["scoring_key", "sleeper_player_id"], keep="first")
+        raise ValueError(f"no gradeable corpus rows for season {season} ({'/'.join(strata)})")
+    return (pl.DataFrame(rows, infer_schema_length=None)
+            .unique(subset=["scoring_key", "sleeper_player_id", "as_of_week"], keep="first"))
 
 
-def objective(season: int, consts: dict, *, reader=data_layer) -> float:
-    """The tuner's scalar fit objective for BULL_Z / ANCHOR_W, at the values in `consts`, on `reader`'s
-    allowed partition — LOWER is better. CORPUS-scoped (Session 6b): pools rostered-freeze players across
-    the matched cohort at GRADE_WEEK, computes |coverage−TARGET| + |below-bear − above-bull| PER scoring_key
-    (each regime's band should hit 0.80), and returns the mean across keys. Reuses the shipped
-    `_test_points`/`_coverage` (standing instr 5). Because matched leagues exist every season, this yields a
-    real TRAIN 2020–23 window where the old is_mine objective had none — but the dials still HOLD (entangled
-    with the optimistic center); this is testability, not promotion."""
-    z = consts.get("BULL_Z", BULL_Z)
+def _apply_dials(df: pl.DataFrame, bull_z: float, bear_z: float, anchor_w: float) -> pl.DataFrame:
+    """Vectorized bull/bear from the materialized ingredients at the given dials — the polars mirror of the
+    shipped `_blended_band` (proven value-equal in check_band_honesty, standing instr 2). w =
+    anchor_w·remaining_frac; with an anchor and w>0 the un-floored projection extreme blends toward the
+    anchor extreme, else the pure-projection extreme is used; each floored at 0. bull uses bull_z, bear
+    uses bear_z (Session 8's down-side half-width)."""
+    w = anchor_w * pl.col("remaining_frac")
+    proj_bull = pl.col("center") + bull_z * pl.col("sigma")
+    proj_bear = pl.col("center") - bear_z * pl.col("sigma")
+    has_anchor = pl.col("anchor_ceiling").is_not_null() & (w > 0.0)
+    bull = pl.when(has_anchor).then((1.0 - w) * proj_bull + w * pl.col("anchor_ceiling")).otherwise(proj_bull)
+    bear = pl.when(has_anchor).then((1.0 - w) * proj_bear + w * pl.col("anchor_floor")).otherwise(proj_bear)
+    return df.with_columns(
+        pl.max_horizontal(pl.lit(0.0), bull).alias("bull"),
+        pl.max_horizontal(pl.lit(0.0), bear).alias("bear"),
+    )
+
+
+def _score_per_key(graded: pl.DataFrame) -> pl.DataFrame:
+    """Per scoring_key: coverage / below-bear / above-bull, pooled across ALL as-of weeks. Vectorized (one
+    group_by) so a large joint sweep is tractable — the across-season analog of the per-group `_coverage`."""
+    return graded.group_by("scoring_key").agg(
+        (((pl.col("actual") >= pl.col("bear")) & (pl.col("actual") <= pl.col("bull"))).mean()).alias("cov"),
+        ((pl.col("actual") < pl.col("bear")).mean()).alias("below"),
+        ((pl.col("actual") > pl.col("bull")).mean()).alias("above"),
+    )
+
+
+def objective(season: int, consts: dict, *, reader=data_layer, ingredients=None) -> float:
+    """The tuner's scalar fit objective for BULL_Z / BEAR_Z / ANCHOR_W, at the values in `consts`, on
+    `reader`'s allowed partition — LOWER is better. CORPUS-scoped, ACROSS the season's as-of weeks (Session
+    8 retired the interim single GRADE_WEEK): pools the matched cohort per scoring_key and returns the mean
+    of |coverage−TARGET| + |below-bear − above-bull| (each regime's band should hit 0.80 with balanced
+    tails). Pass `ingredients` (from `_corpus_ingredients`) to reuse a once-per-season materialization
+    across a joint sweep; else it materializes here. Reuses the shipped band math via `_apply_dials`
+    (standing instr 5). Matched leagues exist every season → a real TRAIN 2020–23 window."""
+    bull_z = consts.get("BULL_Z", BULL_Z)
+    bear_z = consts.get("BEAR_Z", BEAR_Z)
     w = consts.get("ANCHOR_W", ANCHOR_W)
-    df = _corpus_test_points(season, z, w, reader=reader)
-    scores = []
-    for (_sk,), g in df.group_by("scoring_key"):
-        cov, below, above = _coverage(g)
-        scores.append(abs(cov - TARGET_COVERAGE) + abs(below - above))
-    return sum(scores) / len(scores)
+    df = ingredients if ingredients is not None else _corpus_ingredients(season, reader=reader)
+    per_key = _score_per_key(_apply_dials(df, bull_z, bear_z, w))
+    obj = (pl.col("cov") - TARGET_COVERAGE).abs() + (pl.col("below") - pl.col("above")).abs()
+    return float(per_key.select(obj.mean()).item())
 
 
-def run(season: int, bull_z: float = BULL_Z, anchor_w: float = ANCHOR_W) -> bool:
-    rows, freeze = _test_points(season, bull_z, anchor_w)
+def _is_calibrated(df: pl.DataFrame, consts: dict) -> bool:
+    """The band's own read-gate PASS criterion on the corpus, matching the shipped `run()` standard: mean
+    |coverage − TARGET| across scoring keys within COVERAGE_TOL."""
+    per_key = _score_per_key(_apply_dials(
+        df, consts.get("BULL_Z", BULL_Z), consts.get("BEAR_Z", BEAR_Z), consts.get("ANCHOR_W", ANCHOR_W)))
+    return bool(per_key.select((pl.col("cov") - TARGET_COVERAGE).abs().mean()).item() <= COVERAGE_TOL)
+
+
+def coupled_ok(season: int, proposed: dict, current: dict, *, reader=data_layer, ingredients=None) -> bool:
+    """The band's OWN read-gate coupled guardrail, made REAL on the held-out corpus (Session 8) — a
+    NO-REGRESSION check (6b returned None because the shipped is_mine `run()` has no DEV spine). Band width
+    is decoupled from the centre reads by construction (production_vor / true_rank / bracket_odds consume the
+    centre, not the band bounds), so the band's OWN calibration is the only gate that could move; a
+    regression is current-PASSES → proposed-FAILS. Returns False ONLY in that case. The current
+    under-covering band already FAILS the calibration bar on the holdout corpus, so a proposed combo that
+    (much) better-covers is not a regression — the honest, evaluable answer 6b left as None."""
+    df = ingredients if ingredients is not None else _corpus_ingredients(season, reader=reader)
+    if _is_calibrated(df, proposed):
+        return True
+    return not _is_calibrated(df, current)   # no regression unless we broke a currently-passing gate
+
+
+def run(season: int, bull_z: float = BULL_Z, anchor_w: float = ANCHOR_W, bear_z: float = BEAR_Z) -> bool:
+    rows, freeze = _test_points(season, bull_z, anchor_w, bear_z=bear_z)
     tp = pl.DataFrame(rows)
     fz = tp.filter(pl.col("as_of_week") == freeze)
     print(f"=== ROS Player Band backtest: season={season}  test points={tp.height} "
-          f"(player × as-of week; freeze week={freeze}, n={fz.height})  BULL_Z={bull_z}  ANCHOR_W={anchor_w} ===")
+          f"(player × as-of week; freeze week={freeze}, n={fz.height})  "
+          f"BULL_Z={bull_z}  BEAR_Z={bear_z}  ANCHOR_W={anchor_w} ===")
 
     # 1. Calibration — freeze-week coverage near TARGET, tails reported (symmetric band, no ROS skew term).
     cov, below, above = _coverage(fz)
@@ -300,7 +393,7 @@ def run(season: int, bull_z: float = BULL_Z, anchor_w: float = ANCHOR_W) -> bool
 
     # Anchor effect (evidence): the §2 preseason anchor's mark on the freeze-week band vs the
     # pre-anchor pure-projection band at the SAME bull_z (isolates what the anchor changed, not the width).
-    pre_rows, _ = _test_points(season, bull_z, 0.0)
+    pre_rows, _ = _test_points(season, bull_z, 0.0, bear_z=bear_z)
     pre = pl.DataFrame(pre_rows).filter(pl.col("as_of_week") == freeze)
     pcov, pbelow, pabove = _coverage(pre)
     print()
