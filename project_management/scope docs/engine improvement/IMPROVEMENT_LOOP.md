@@ -1,7 +1,13 @@
 # The Improvement Loop — Architecture Spec
 
-**Created:** 2026-07-12 · **Revised:** 2026-07-12 (corpus-first sequencing)
-**Status:** proposed (design only, nothing built)
+**Created:** 2026-07-12 · **Revised:** 2026-07-18 (corpus-first sequencing)
+**Status:** BUILT through **L4** (L0 keying · L1 health-flag · L2 ledger · L3 scorer · L4 tuner) — the loop
+runs end-to-end on the frozen corpus and emits reviewed proposals. Latest iteration: **Session 8 — band
+honesty** (the ROS bull/bear band re-tuned for honest coverage via a new `BEAR_Z` down-side half-width + a
+raw-points confidence signal, both PROPOSED via shadow re-scores; see `SESSION_8_BAND_HONESTY.md` +
+`proposals/2026-07-16-{BULL_Z,BEAR_Z,ANCHOR_W}.md` + `proposals/2026-07-16-band_confidence_ros_sigma.md`).
+NEXT: Session 9 (cleanup) then silent-reads confidence, then the live/AI track (L5 AI-eval + the live
+`data_health` / `served=true` writes remain design-only).
 **Premise:** [`LLM context/712_BACKEND_AUDIT.md`](../LLM%20context/712_BACKEND_AUDIT.md)
 **Feeds it:** [`LEAGUE_CORPUS.md`](./LEAGUE_CORPUS.md) (offline) · [`PILOT_2026.md`](./PILOT_2026.md) (live)
 

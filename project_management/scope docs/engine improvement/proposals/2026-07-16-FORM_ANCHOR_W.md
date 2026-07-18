@@ -1,6 +1,6 @@
 # Tuner proposal — `FORM_ANCHOR_W` (HOLD)
 
-**as-of:** 2026-07-16  ·  **rank:** 7  ·  **module:** `production_vor`  ·  **scope:** scoring
+**as-of:** 2026-07-16  ·  **rank:** 8  ·  **module:** `production_vor`  ·  **scope:** scoring
 
 **baseline (frozen L3):** code_version `6dfcab270ee0` · constants_hash `a3d01b8e5f4d5131`
 
