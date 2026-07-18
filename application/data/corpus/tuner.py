@@ -32,6 +32,7 @@ import contextlib
 import hashlib
 import importlib
 import io
+import itertools
 import json
 import os
 from dataclasses import dataclass
@@ -51,12 +52,18 @@ TEST_SEASONS = (2025,)
 # five scoring/nfl/player-level objectives this session.
 FIT_STRATA = frozenset({"matched"})
 
-# The band dials the L3 scorer showed are entangled with the not-yet-fixed optimistic center: their fit
-# objective sits downstream of the projection center, so a change now would compensate for a bias Session
-# 7 removes. HELD this session with a named reason — however good the sweep looks (decision 6).
-ENTANGLED = frozenset({"BAND_Z", "SKEW_GAIN", "BULL_Z", "ANCHOR_W"})
+# The dials the L3 scorer suspected were entangled with the optimistic center. Session 7's de-bias re-score
+# was a NULL — de-biasing the center does NOT recover band coverage; the ROS band under-covers on its OWN
+# (a WIDTH problem, not center height). So Session 8 UN-HOLDS the ROS-band dials (BULL_Z / BEAR_Z / ANCHOR_W,
+# module `ros_player_band`) and re-fits them JOINTLY on the corpus objective. The two WEEKLY-band dials
+# (BAND_Z / SKEW_GAIN, module `projection_consensus`) are a DIFFERENT read, out of scope this session — they
+# stay HELD with the named reason until their own re-fit.
+ENTANGLED = frozenset({"BAND_Z", "SKEW_GAIN"})
 ENTANGLE_REASON = ("entangled with the optimistic center (L3); a change now compensates for a bias "
                    "Session 7 removes — revisit post-de-bias")
+# The ros_player_band dials, re-fit JOINTLY (they're coupled) on the across-as-of-weeks corpus objective
+# (Session 8). One materialization per season, then a cartesian sweep applied as vectorized arithmetic.
+JOINT_BAND_DIALS = ("BULL_Z", "BEAR_Z", "ANCHOR_W")
 
 # Minimum holdout improvement, in each objective's own units, to count as signal not noise (guardrail d).
 EFFECT_FLOOR = {
@@ -445,6 +452,106 @@ def evaluate(tunable, mani, asof, baseline, io_frac):
                     n_train_seasons=n_train, n_dev_seasons=ndev, **base)
 
 
+def evaluate_joint(mani, asof, baseline, io_frac):
+    """Session 8: fit the three ros_player_band dials (BULL_Z / BEAR_Z / ANCHOR_W) JOINTLY — they're coupled,
+    and 6b's 1-D fits were marginal + right-censored. Materializes the dial-independent band ingredients ONCE
+    per season (`backtest_ros_player_band._corpus_ingredients`) then sweeps the cartesian product of the
+    grids as vectorized arithmetic on TRAIN, certifies the joint optimum vs the current combo on DEV 2024,
+    and returns ONE Proposal per dial — each carrying its coordinate of the joint optimum plus the SHARED
+    joint TRAIN/DEV metrics + guardrails. Un-entangled this session (S7's null: the band under-covers on its
+    own). Still a proposal — human promotes."""
+    bt = importlib.import_module("application.data.transforms.backtest_ros_player_band")
+    names = JOINT_BAND_DIALS
+    tuns = [_constants.REGISTRY[n] for n in names]
+    cur = {n: _constants.REGISTRY[n].current for n in names}
+    floor = EFFECT_FLOOR["backtest_ros_player_band"]
+    g_inputs = (io_frac is not None and io_frac >= INPUTS_OK_MIN)
+
+    # TRAIN: materialize once per computable season, sweep the cartesian product as arithmetic.
+    fit_reader = _reader(TRAIN_SEASONS, mani, "fit")
+    train_ing = {}
+    for s in TRAIN_SEASONS:
+        try:
+            train_ing[s] = bt._corpus_ingredients(s, reader=fit_reader)
+        except (FileNotFoundError, ValueError):
+            pass
+    n_train = len(train_ing)
+
+    def joint_train(combo):
+        vals = [bt.objective(s, combo, reader=fit_reader, ingredients=ing) for s, ing in train_ing.items()]
+        return (sum(vals) / len(vals)) if vals else None
+
+    combos = [dict(zip(names, vals)) for vals in itertools.product(*(t.grid for t in tuns))]
+    scored = [(c, joint_train(c)) for c in combos]
+    computable = [(c, m) for c, m in scored if m is not None]
+    best = min(computable, key=lambda cm: cm[1])[0] if computable else None
+    train_cur = joint_train(cur)
+
+    base_common = dict(effect_floor=floor, inputs_ok_frac=io_frac, g_inputs=g_inputs, asof_date=asof,
+                       baseline_code_version=baseline["code_version"],
+                       baseline_constants_hash=baseline["constants_hash"])
+
+    def _base(n):
+        t = _constants.REGISTRY[n]
+        return dict(kind="dial", constant=n, module=t.module, scope=t.scope, current=cur[n],
+                    holdout_axis="season (DEV 2024) — joint BULL_Z×BEAR_Z×ANCHOR_W", **base_common)
+
+    if best is None:  # no OOS TRAIN window — mirror evaluate()'s no-fit path, per dial
+        reason = "no OOS TRAIN window — the corpus objective was not computable on any TRAIN season (2020–2023)"
+        return [Proposal(proposed="n/a (no OOS fit)", train_metric=None, dev_metric_current=None,
+                         dev_metric_proposed=None, effect_size=None, g_holdout=None, g_coupled=None,
+                         g_effect=None, sibling_deltas={}, verdict="HOLD", hold_reason=reason,
+                         n_train_seasons=n_train, n_dev_seasons=0, **_base(n)) for n in names]
+
+    # DEV certify: materialize the holdout once, score the current combo and the joint optimum.
+    dev_reader = _reader(DEV_SEASONS, mani, "certify")
+    try:
+        dev_ing = bt._corpus_ingredients(DEV_SEASONS[0], reader=dev_reader)
+        ndev = 1
+    except (FileNotFoundError, ValueError):
+        dev_ing, ndev = None, 0
+    dev_cur = bt.objective(DEV_SEASONS[0], cur, reader=dev_reader, ingredients=dev_ing) if dev_ing is not None else None
+    dev_best = bt.objective(DEV_SEASONS[0], best, reader=dev_reader, ingredients=dev_ing) if dev_ing is not None else None
+
+    joint_changed = any(best[n] != cur[n] for n in names)
+    effect = (dev_cur - dev_best) if (joint_changed and dev_cur is not None and dev_best is not None) else 0.0
+    g_holdout = bool(joint_changed and dev_cur is not None and dev_best is not None and effect > 0)
+    g_effect = bool(joint_changed and effect > floor)
+    # Coupled guardrail — REAL this session (6b returned None): the band's own read-gate NO-REGRESSION check
+    # on the DEV corpus (current-PASSES → proposed-FAILS is the only regression). Band width is decoupled
+    # from the centre reads by construction, so the own calibration is the only gate that could move.
+    coupled = bt.coupled_ok(DEV_SEASONS[0], best, cur, reader=dev_reader, ingredients=dev_ing) if dev_ing is not None else None
+    combo_str = ", ".join(f"{n}={best[n]}" for n in names)
+    sib = {"backtest_ros_player_band": {"pass": coupled,
+           "note": f"own read-gate NO-REGRESSION on the DEV corpus at {combo_str} (the under-covering "
+                   f"current band already fails calibration, so a better-covering proposal cannot regress "
+                   f"it); real pass/fail — the is_mine run() has no DEV spine (None in 6b). Centre reads are "
+                   f"decoupled by construction."}}
+    g_coupled = coupled
+
+    props = []
+    for n in names:
+        dchanged = best[n] != cur[n]
+        verdict, kind = decide_verdict(entangled=(n in ENTANGLED), changed=dchanged, g_holdout=g_holdout,
+                                       g_effect=g_effect, g_inputs=g_inputs, g_coupled=g_coupled)
+        if kind == "no-change":
+            reason = (f"the Session-8 joint BULL_Z×BEAR_Z×ANCHOR_W optimum keeps {n} at {cur[n]}; no change "
+                      f"to propose (the other band dials carry the widening).")
+        elif kind == "recommend":
+            reason = (f"Session 8 joint band re-tune ({n} {cur[n]}→{best[n]}; corpus objective across the "
+                      f"season's as-of weeks, BULL_Z×BEAR_Z×ANCHOR_W swept together). UN-ENTANGLED — S7's "
+                      f"null showed the band under-covers on its own (a WIDTH problem, not center height). "
+                      f"See the coverage re-score for the ~0.55→~0.80 recovery + tail balance. PROPOSAL — "
+                      f"human promotes.")
+        else:
+            reason = kind  # "guardrail(s) not met: …"
+        props.append(Proposal(proposed=best[n], train_metric=train_cur, dev_metric_current=dev_cur,
+                              dev_metric_proposed=dev_best, effect_size=effect, g_holdout=g_holdout,
+                              g_coupled=g_coupled, g_effect=g_effect, sibling_deltas=sib, verdict=verdict,
+                              hold_reason=reason, n_train_seasons=n_train, n_dev_seasons=ndev, **_base(n)))
+    return props
+
+
 def debias_lead(asof, baseline):
     """The rank-1 LEAD — now carrying the Session 7 OUTCOME. The de-bias was built + tuned through this
     harness (FORM_ANCHOR_W, HELD) and the re-score found it does NOT recover coverage: the lever is the
@@ -517,15 +624,19 @@ def _write_markdown(proposals, asof):
 
 
 def build_proposals(asof=None):
-    """The disciplined first run: sweep every dial on the split, HOLD the entangled band, and rank the
-    de-bias lead #1. Returns (ordered_proposals, rows_frame) — pure (no writes), so the gate can recompute
-    and compare value-identical."""
+    """The disciplined run: fit each dial on the split and rank the de-bias lead #1. The ros_player_band
+    dials (BULL_Z / BEAR_Z / ANCHOR_W) are fit JOINTLY (Session 8, `evaluate_joint`); the rest are swept
+    one-at-a-time (`evaluate`); the weekly-band dials (BAND_Z / SKEW_GAIN) stay HELD as entangled. Returns
+    (ordered_proposals, rows_frame) — pure (no writes), so the gate can recompute and compare
+    value-identical."""
     mani = manifest()
     baseline = baseline_provenance()
     asof = asof or baseline["config_version"].lstrip("v")
     io_frac = inputs_ok_frac_train(mani)
-    dials = [evaluate(t, mani, asof, baseline, io_frac) for t in _constants.tunables()]
-    allp = [debias_lead(asof, baseline)] + dials
+    singles = [evaluate(t, mani, asof, baseline, io_frac)
+               for t in _constants.tunables() if t.name not in JOINT_BAND_DIALS]
+    joint = evaluate_joint(mani, asof, baseline, io_frac)
+    allp = [debias_lead(asof, baseline)] + singles + joint
     order = {"LEAD": 0, "RECOMMEND": 1, "HOLD": 2}
     ordered = sorted(allp, key=lambda p: order[p.verdict])  # stable: keeps declaration order within a group
     for i, p in enumerate(ordered, 1):

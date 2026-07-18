@@ -19,9 +19,10 @@ compute_ros_league_view.py; joined on sleeper_player_id the two reconstitute the
     frame-for-frame (the L0 no-regression invariant).
   - ros_sigma  = √(Σ band_ppr² over the same remaining weeks) — the §3 shrunk weekly residual std
     combined across weeks under weekly independence (the compute_bracket_sim assumption).
-  - ros_bull / ros_bear = ros_center ± BULL_Z·ros_sigma, floored at 0, blended toward the preseason
-    ADP anchor (weight decaying with the horizon). BULL_Z / ANCHOR_W are backtest-tuned jointly — see
-    backtest_ros_player_band.py.
+  - ros_bull = ros_center + BULL_Z·ros_sigma; ros_bear = ros_center − BEAR_Z·ros_sigma, floored at 0,
+    blended toward the preseason ADP anchor (weight decaying with the horizon). BULL_Z / BEAR_Z / ANCHOR_W
+    are backtest-tuned jointly; BEAR_Z (Session 8) defaults to BULL_Z so the symmetric band is unchanged
+    until a joint re-tune skews it low — see backtest_ros_player_band.py.
   - ros_cv = ros_sigma / ros_center — relative dispersion, a fragility proxy.
 
 Preseason anchor, time decay, and the pure band helpers are unchanged from the pre-split module (the §2
@@ -50,12 +51,14 @@ from application.data.transforms._analytics import round1
 from application.data.transforms.compute_production_vor import (
     _ros_values, _realized_weekly_pts, _resolve_scoring, _recent_form,
 )
-# BULL_Z (bull/bear half-width in σ units) and ANCHOR_W (max preseason-anchor weight) are swept dials,
-# backtest-tuned JOINTLY to (1.44, 0.25) (freeze-week coverage 0.817). Homed in the L4 dials registry and
-# re-exported here so their canonical path (ros_player_band.BULL_Z) and every `from …import BULL_Z`
-# resolve. The registry declares BULL_Z=1.44 — resolving the recorded 1.645-vs-1.44 STATUS drift by
-# declaration, not a re-tune. See _constants.py for the grids.
-from application.data.transforms._constants import ANCHOR_W, BULL_Z  # noqa: F401  (re-exported dials)
+# BULL_Z / BEAR_Z (bull-side / bear-side half-widths in σ units) and ANCHOR_W (max preseason-anchor weight)
+# are swept dials, homed in the L4 dials registry and re-exported here so their canonical path
+# (ros_player_band.BULL_Z) and every `from …import BULL_Z` resolve. BULL_Z / ANCHOR_W were tuned JOINTLY to
+# (1.44, 0.25) (freeze-week coverage 0.817); the registry declares BULL_Z=1.44 — resolving the recorded
+# 1.645-vs-1.44 STATUS drift by declaration. BEAR_Z (Session 8) is the down-side half-width, born at 1.44 ==
+# BULL_Z so the historically-symmetric band recomputes value-identical; a joint re-tune skews it low
+# (bear reaches the busts) — a PROPOSAL until Will promotes. See _constants.py for the grids.
+from application.data.transforms._constants import ANCHOR_W, BEAR_Z, BULL_Z  # noqa: F401  (re-exported dials)
 
 SKILL_POSITIONS = ["QB", "RB", "WR", "TE"]
 
@@ -113,12 +116,15 @@ def _ros_sigma(consensus: pl.DataFrame, remaining_weeks) -> pl.DataFrame:
     )
 
 
-def _outcome_band(ros_center: float, ros_sigma: float, *, bull_z: float) -> dict:
-    """bull/bear rest-of-season range around the borrowed centre: centre ± bull_z·sigma, floored at 0
-    (a season's realised production can't be negative). ros_cv = sigma/centre (relative dispersion /
-    fragility), None where the centre is non-positive (degenerate deep-bench spot)."""
+def _outcome_band(ros_center: float, ros_sigma: float, *, bull_z: float, bear_z: float) -> dict:
+    """bull/bear rest-of-season range around the borrowed centre: bull = centre + bull_z·sigma, bear =
+    centre − bear_z·sigma, each floored at 0 (a season's realised production can't be negative). Two
+    directional half-widths (Session 8): bear_z == bull_z reproduces the historical symmetric band; a
+    larger bear_z skews the range low so the bear reaches the busts without ballooning the bull. ros_cv =
+    sigma/centre (relative dispersion / fragility), None where the centre is non-positive (degenerate
+    deep-bench spot)."""
     bull = max(0.0, ros_center + bull_z * ros_sigma)
-    bear = max(0.0, ros_center - bull_z * ros_sigma)
+    bear = max(0.0, ros_center - bear_z * ros_sigma)
     cv = ros_sigma / ros_center if ros_center > 0 else None
     return {"ros_bull": bull, "ros_bear": bear, "ros_cv": cv}
 
@@ -154,17 +160,18 @@ def _preseason_anchor(adp_row: dict | None, curve_lookup: dict, curve_max_rank: 
 
 
 def _blended_band(ros_center: float, ros_sigma: float, anchor: dict | None, w: float,
-                  *, bull_z: float) -> dict:
+                  *, bull_z: float, bear_z: float) -> dict:
     """bull/bear blended toward the preseason anchor: `(1-w)·projection_extreme + w·anchor_extreme`,
     floored at 0. `w` is the horizon-decaying anchor weight (0 → the pure-projection `_outcome_band`,
     the documented fallback for an undrafted / uncovered player). The projection extremes are taken
     *un-floored* so a negative projection bear can still be lifted by a positive preseason floor before
-    the final 0-floor. ros_cv stays the projection's sigma/centre (fragility of the borrowed read)."""
-    base = _outcome_band(ros_center, ros_sigma, bull_z=bull_z)
+    the final 0-floor. The bear extreme uses `bear_z` (Session 8's down-side half-width). ros_cv stays the
+    projection's sigma/centre (fragility of the borrowed read)."""
+    base = _outcome_band(ros_center, ros_sigma, bull_z=bull_z, bear_z=bear_z)
     if anchor is None or w <= 0.0:
         return {**base, "anchor_applied": False}
     proj_bull = ros_center + bull_z * ros_sigma
-    proj_bear = ros_center - bull_z * ros_sigma
+    proj_bear = ros_center - bear_z * ros_sigma
     bull = max(0.0, (1.0 - w) * proj_bull + w * anchor["anchor_ceiling"])
     bear = max(0.0, (1.0 - w) * proj_bear + w * anchor["anchor_floor"])
     return {"ros_bull": bull, "ros_bear": bear, "ros_cv": base["ros_cv"], "anchor_applied": True}
@@ -196,7 +203,7 @@ def _load_anchor_inputs(season: int) -> tuple[dict, dict, dict]:
 
 
 def _band_as_of(consensus: pl.DataFrame, n: int, max_proj_week: int, season: int, *,
-                bull_z: float, anchor_w: float, total_weeks: int,
+                bull_z: float, bear_z: float, anchor_w: float, total_weeks: int,
                 adp_map: dict, curve_lookup: dict, curve_max_rank: dict,
                 realized_pts: pl.DataFrame | None = None) -> list:
     """ROS player-band rows for one as-of cutoff N over the WHOLE projected pool: the borrowed centre
@@ -226,7 +233,7 @@ def _band_as_of(consensus: pl.DataFrame, n: int, max_proj_week: int, season: int
         remaining_frac = r["n_weeks"] / total_weeks if total_weeks else 0.0
         anchor = _preseason_anchor(adp_map.get(pid), curve_lookup, curve_max_rank, remaining_frac)
         w = anchor_w * remaining_frac
-        band = _blended_band(center, sigma, anchor, w, bull_z=bull_z)
+        band = _blended_band(center, sigma, anchor, w, bull_z=bull_z, bear_z=bear_z)
         rows.append({
             "season": season,
             "as_of_week": n,
@@ -268,7 +275,7 @@ def compute(season: int, scoring_key: str | None = None) -> pl.DataFrame:
     all_rows = []
     for n in range(1, max_proj_week + 1):
         all_rows.extend(_band_as_of(
-            consensus, n, max_proj_week, season, bull_z=BULL_Z, anchor_w=ANCHOR_W,
+            consensus, n, max_proj_week, season, bull_z=BULL_Z, bear_z=BEAR_Z, anchor_w=ANCHOR_W,
             total_weeks=max_proj_week, adp_map=adp_map,
             curve_lookup=curve_lookup, curve_max_rank=curve_max_rank,
             realized_pts=realized_pts,
@@ -280,7 +287,8 @@ def compute(season: int, scoring_key: str | None = None) -> pl.DataFrame:
     last_asof = int(df["as_of_week"].max())   # deepest as-of week that still has remaining projected weeks
     latest = df.filter(pl.col("as_of_week") == last_asof)
     print(f"=== ROS Player Band: season={season}  as_of_week 1..{last_asof}  "
-          f"(ROS horizon → week {max_proj_week}; BULL_Z={BULL_Z}; ANCHOR_W={ANCHOR_W}; rows={df.height}) ===")
+          f"(ROS horizon → week {max_proj_week}; BULL_Z={BULL_Z}; BEAR_Z={BEAR_Z}; ANCHOR_W={ANCHOR_W}; "
+          f"rows={df.height}) ===")
     print(f"  as-of week {last_asof} widest ranges (top bull ceilings):")
     print(latest.head(6).select(
         "sleeper_player_id", "position", "ros_bear", "ros_center", "ros_bull", "ros_sigma",

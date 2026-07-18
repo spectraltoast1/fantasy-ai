@@ -17,9 +17,11 @@ passes, and a gate that can't fail is not a gate — every check has a prove-bit
      gate name does not resolve.
   4. GUARDRAILS BITE — the pure verdict HOLDs a train-only win, a coupled regression, and a sub-floor
      effect, and RECOMMENDs only a clean un-entangled pass; entanglement overrides even a clean pass.
-  5. FIRST RUN DISCIPLINED — de-bias is the rank-1 LEAD; all four band dials are HELD with the entanglement
-     reason; OPP_HALF_LIFE_WK is swept on the holdout (a train+dev metric); nothing is RECOMMENDED that is
-     entangled. Every proposal row carries its evidence + a RECOMMEND/HOLD/LEAD verdict.
+  5. RUN DISCIPLINED — de-bias is the rank-1 LEAD; the WEEKLY-band dials (BAND_Z, SKEW_GAIN) stay HELD with
+     the entanglement reason (nothing entangled is RECOMMENDED); the ROS-band dials (BULL_Z, BEAR_Z,
+     ANCHOR_W) are UN-entangled and re-fit JOINTLY on the corpus objective (Session 8) → they RECOMMEND, with
+     a REAL (bool, not None) coupled guardrail; OPP_HALF_LIFE_WK is swept on the holdout. Every proposal row
+     carries its evidence + a RECOMMEND/HOLD/LEAD verdict.
   6. DETERMINISM — rebuilding the proposals is value-identical (the pinned as-of + rounded metrics). Bite:
      a perturbed metric ≠; a row permutation ==.
 
@@ -40,7 +42,11 @@ _MODULES = {
     "BULL_Z": "compute_ros_player_band", "ANCHOR_W": "compute_ros_player_band",
     "OPP_HALF_LIFE_WK": "compute_player_signal",
 }
-_BAND_DIALS = {"BAND_Z", "SKEW_GAIN", "BULL_Z", "ANCHOR_W"}
+# Session 8 split the band dials by read: the WEEKLY-band dials (projection_consensus) stay HELD as
+# entangled with the optimistic centre; the ROS-band dials (ros_player_band) are un-entangled and re-fit
+# JOINTLY (S7's null: the ROS band under-covers on its own — a width problem, not centre height).
+_WEEKLY_BAND_DIALS = {"BAND_Z", "SKEW_GAIN"}
+_ROS_BAND_DIALS = ("BULL_Z", "BEAR_Z", "ANCHOR_W")
 
 
 def _ok(label, cond, results, extra=""):
@@ -118,29 +124,36 @@ def check(seasons=None) -> bool:
     _ok("entanglement OVERRIDES even a clean pass (band dials HELD however good the sweep)",
         dv(**{**clean, "entangled": True})[0] == "HOLD", results)
 
-    # 5 — the first run is disciplined -----------------------------------------------------------------
-    print("  5 — the first run is disciplined (de-bias top lead · band HELD · §1 swept · evidence carried):")
+    # 5 — the run is disciplined ------------------------------------------------------------------------
+    print("  5 — the run is disciplined (de-bias lead · weekly-band HELD · ros-band joint RECOMMEND · evidence):")
     ordered, rows = tuner.build_proposals()
     by = {p.constant: p for p in ordered}
     _ok("de-bias-the-center is the rank-1 LEAD",
         ordered[0].constant == "center_debias" and ordered[0].verdict == "LEAD", results)
-    band_held = all(by[d].verdict == "HOLD" and tuner.ENTANGLE_REASON in by[d].hold_reason for d in _BAND_DIALS)
-    _ok("all four band dials HELD with the entanglement reason", band_held, results)
+    # The WEEKLY-band dials (projection_consensus) stay entangled/HELD; the entangled set is EXACTLY them.
+    weekly_held = all(by[d].verdict == "HOLD" and tuner.ENTANGLE_REASON in by[d].hold_reason
+                      for d in _WEEKLY_BAND_DIALS)
+    _ok("the weekly-band dials (BAND_Z, SKEW_GAIN) HELD with the entanglement reason", weekly_held, results)
+    _ok("nothing entangled is RECOMMENDED (ENTANGLED == exactly the weekly-band dials)",
+        tuner.ENTANGLED == frozenset(_WEEKLY_BAND_DIALS)
+        and not any(by[d].verdict == "RECOMMEND" for d in _WEEKLY_BAND_DIALS), results)
+    _ok("SKEW_GAIN confirms the entanglement (OOS fit moves toward 0 — 1.5→1.0)",
+        by["SKEW_GAIN"].proposed == 1.0 and "CONFIRMED" in by["SKEW_GAIN"].hold_reason, results)
     opp = by["OPP_HALF_LIFE_WK"]
     _ok("OPP_HALF_LIFE_WK swept on the holdout (a TRAIN + DEV metric exists)",
         opp.n_train_seasons == len(tuner.TRAIN_SEASONS) and opp.dev_metric_current is not None, results)
-    _ok("nothing entangled is RECOMMENDED (no band dial recommended)",
-        not any(by[d].verdict == "RECOMMEND" for d in _BAND_DIALS), results)
     ev_cols = ["verdict", "hold_reason", "baseline_constants_hash", "asof_date", "rank"]
     _ok("every proposal row carries its evidence (verdict + reason + baseline + asof + rank)",
         all(rows[c].null_count() == 0 for c in ev_cols), results)
-    _ok("SKEW_GAIN confirms the entanglement (OOS fit moves toward 0 — 1.5→1.0)",
-        by["SKEW_GAIN"].proposed == 1.0 and "CONFIRMED" in by["SKEW_GAIN"].hold_reason, results)
-    # 6b: the band dials now fit on a REAL OOS window (the corpus objective), where the is_mine objective
-    # had none — testability, not promotion (still HELD, still not recommended).
-    _ok("BULL_Z/ANCHOR_W now fit on a full TRAIN window (n=4, corpus objective) — was n=0 is_mine",
-        by["BULL_Z"].n_train_seasons == len(tuner.TRAIN_SEASONS)
-        and by["ANCHOR_W"].n_train_seasons == len(tuner.TRAIN_SEASONS), results)
+    # Session 8: the ros-band dials are UN-entangled + fit JOINTLY on the across-as-of-weeks corpus objective,
+    # on a full n=4 TRAIN window; the joint fit clears the guardrails → all three RECOMMEND, and the coupled
+    # guardrail is REAL (a bool, not the 6b None). All three share one joint holdout effect.
+    _ok("BULL_Z/BEAR_Z/ANCHOR_W fit jointly on a full TRAIN window (n=4, corpus objective)",
+        all(by[d].n_train_seasons == len(tuner.TRAIN_SEASONS) for d in _ROS_BAND_DIALS), results)
+    _ok("the ros-band dials un-entangled + RECOMMEND (the S8 joint band re-tune clears the guardrails)",
+        all(by[d].verdict == "RECOMMEND" for d in _ROS_BAND_DIALS), results)
+    _ok("the coupled guardrail is REAL for the joint fit (a bool, not the 6b None)",
+        all(isinstance(by[d].g_coupled, bool) for d in _ROS_BAND_DIALS), results)
     # S7: the 6th dial (the de-bias) is swept on the split and ships at IDENTITY (0.0) — HELD, a proposal
     # only (its own λ=0 identity + shadow re-score are gated by check_debias, not here).
     fa = by.get("FORM_ANCHOR_W")
@@ -200,8 +213,9 @@ def check(seasons=None) -> bool:
     print()
     print(f"  VERDICT: {'PASS' if ok else 'FAIL'} — the L4 tuner's registry is the source of truth, the "
           f"split is structural (peeking raises), one driver re-fits any dial, the four guardrails bite, "
-          f"the first run is disciplined (de-bias top lead, band HELD), and the proposals are deterministic. "
-          f"Auto-tune, human promotes — no transform edited, nothing merged.")
+          f"the run is disciplined (de-bias top lead; weekly-band HELD; ros-band un-entangled + joint "
+          f"RECOMMEND, S8), and the proposals are deterministic. Auto-tune, human promotes — no transform "
+          f"edited, nothing merged.")
     return ok
 
 
