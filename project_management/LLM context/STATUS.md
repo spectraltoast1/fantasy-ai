@@ -1,5 +1,38 @@
 # STATUS
 
+## STORE MIGRATION TRACK — Session 1 SHIPPED (2026-07-24): Fly ↔ Supabase foundation live
+
+> This section is the **store-migration track** (DuckDB-WASM → server store + API), driven by
+> `scope docs/future work/MULTI_LEAGUE_STORE_MIGRATION.md` and the `SESSION_1_HOSTING_AND_DB_SETUP.md`
+> runbook. It is a **separate line of work** from the engine-improvement track (Sessions 1–9) that
+> makes up the rest of this file.
+
+**What shipped (foundation only — no app features, no auth, no multi-league):** a minimal FastAPI app at
+`application/api/` whose only job is to prove the **Fly.io → Supabase Postgres** path.
+- `main.py`: `GET /health` (DB-free liveness) + `GET /health/db` (opens a Supabase connection, `SELECT 1`).
+- `db.py`: reads `DATABASE_URL` from a **gitignored `application/api/.env`** locally (python-dotenv) or a
+  **Fly secret** in prod; psycopg 3. Secret never hardcoded / never committed.
+- `requirements.txt`: **API-only deps** (fastapi/uvicorn/psycopg/dotenv), independent of the heavy
+  `application/requirements.txt`, so the deploy image is tiny (**52 MB**).
+- `Dockerfile` + `.dockerignore` + `fly.toml`: build context **scoped to `application/api/`** (never ships
+  the pipeline or secrets); python:3.13-slim; region **iad**; internal_port 8080; `/health` check.
+
+**Live:** app **`fantasy-ai-api`** (personal org), 2× shared-cpu-1x/256mb machines in `iad` (auto-stop when
+idle). **https://fantasy-ai-api.fly.dev/** — `/health` → `{"status":"ok"}` (200); **`/health/db` →
+`{"db":"ok","result":1}` (200) — proves Fly reaches Supabase.** `DATABASE_URL` is set as a Fly secret
+(session-pooler string, port 5432). Verified end-to-end locally and on Fly.
+
+**Decision recorded:** the store is **Supabase Postgres**, superseding the migration doc's original
+"server-side SQLite" for Stage A (the newer Session-1 runbook is authoritative). **No frontend/pipeline
+change** — the frontend still runs the old DuckDB-WASM way; nothing user-visible changed this session.
+(`.claude/launch.json` gained a local-only `api` dev config; `.claude/` is gitignored so it does not ship.)
+
+**NEXT — Session 2:** define the Postgres tables mirroring the 13 derived datasets for the current slice
+(indexes on `as_of_week`/`week`/`roster_id`/`sleeper_player_id`) and build the **parquet → Postgres loader**
+(the new publish seam that replaces the hand-symlink step). See `MULTI_LEAGUE_STORE_MIGRATION.md` A1/A2.
+
+---
+
 ## Parking Lot (Session 9 triage — deferred to their own session, named not started)
 
 **The three big items:**
