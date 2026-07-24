@@ -1,35 +1,40 @@
 # STATUS
 
-## STORE MIGRATION TRACK — Session 1 SHIPPED (2026-07-24): Fly ↔ Supabase foundation live
+## STORE MIGRATION TRACK — Session 2 SHIPPED (2026-07-24): Postgres schema + parquet→PG loader
 
 > This section is the **store-migration track** (DuckDB-WASM → server store + API), driven by
-> `scope docs/future work/MULTI_LEAGUE_STORE_MIGRATION.md` and the `SESSION_1_HOSTING_AND_DB_SETUP.md`
-> runbook. It is a **separate line of work** from the engine-improvement track (Sessions 1–9) that
-> makes up the rest of this file.
+> `scope docs/future work/MULTI_LEAGUE_STORE_MIGRATION.md` and the `SESSION_N_*.md` runbooks. It is a
+> **separate line of work** from the engine-improvement track (Sessions 1–9) that makes up the rest of
+> this file.
 
-**What shipped (foundation only — no app features, no auth, no multi-league):** a minimal FastAPI app at
-`application/api/` whose only job is to prove the **Fly.io → Supabase Postgres** path.
-- `main.py`: `GET /health` (DB-free liveness) + `GET /health/db` (opens a Supabase connection, `SELECT 1`).
-- `db.py`: reads `DATABASE_URL` from a **gitignored `application/api/.env`** locally (python-dotenv) or a
-  **Fly secret** in prod; psycopg 3. Secret never hardcoded / never committed.
-- `requirements.txt`: **API-only deps** (fastapi/uvicorn/psycopg/dotenv), independent of the heavy
-  `application/requirements.txt`, so the deploy image is tiny (**52 MB**).
-- `Dockerfile` + `.dockerignore` + `fly.toml`: build context **scoped to `application/api/`** (never ships
-  the pipeline or secrets); python:3.13-slim; region **iad**; internal_port 8080; `/health` check.
+**Session 2 — what shipped (schema + loader; still no app/frontend/pipeline change, one league/one slice):**
+- **Durable secret:** `DATABASE_URL` now lives in `application/config.py` (the gitignored secret home that
+  `worktree-setup.sh` already symlinks → survives every future worktree, no script change). `api/db.py`
+  resolves env-var first (Fly, unchanged) then falls back to `config.py`, via a shared `database_url()` the
+  loader reuses. Replaces Session 1's `.env`, which died with its worktree.
+- **Schema:** `application/data/serve/schema.sql` — **13 Postgres tables** mirroring the frontend's published
+  parquet (`db.js`), generated from the parquet schemas. `league_id` on every table; `season` ensured on
+  every table (added where the parquet lacks it — teams/lineup_slots/league_settings/player_signal/schedule);
+  indexes on the real filter cols (`as_of_week`/`week`/`roster_id`/`sleeper_player_id`/`position`/…) +
+  `(league_id, season)`. `ros_synthesis.headlines`→**JSONB**; `disagreement_ppr` (all-null)→explicit DOUBLE
+  PRECISION; `season.fetched_at`→TIMESTAMP.
+- **Loader:** `application/data/serve/build_db.py` (own `serve/.venv`: polars+psycopg[binary]) reads the exact
+  `frontend/public/data/*.parquet` and applies schema.sql (DROP+CREATE) then COPYs each table — **idempotent**,
+  the new publish seam replacing hand-symlinks. `--emit` regenerates schema.sql + `MANIFEST.md`; `--load`;
+  `--verify`.
+- **Loaded + verified against Supabase:** all **13 row counts match** source parquet (season 594, market_vor
+  5643, projection_consensus 6100, player_signal 650, production_vor 635, …); single `league_id` per table;
+  `ros_synthesis`=2026, rest 2025; numeric aggregate sums match parquet exactly. The DB now returns real rows;
+  the app still runs the old DuckDB-WASM way (that switch is Session 5).
 
-**Live:** app **`fantasy-ai-api`** (personal org), 2× shared-cpu-1x/256mb machines in `iad` (auto-stop when
-idle). **https://fantasy-ai-api.fly.dev/** — `/health` → `{"status":"ok"}` (200); **`/health/db` →
-`{"db":"ok","result":1}` (200) — proves Fly reaches Supabase.** `DATABASE_URL` is set as a Fly secret
-(session-pooler string, port 5432). Verified end-to-end locally and on Fly.
+**NEXT — Session 3:** port the first read endpoints (**Players + Teams**) from the browser DuckDB SQL in
+`queries.js` to FastAPI/Postgres endpoints backed by these tables (`MULTI_LEAGUE_STORE_MIGRATION.md` A3).
 
-**Decision recorded:** the store is **Supabase Postgres**, superseding the migration doc's original
-"server-side SQLite" for Stage A (the newer Session-1 runbook is authoritative). **No frontend/pipeline
-change** — the frontend still runs the old DuckDB-WASM way; nothing user-visible changed this session.
-(`.claude/launch.json` gained a local-only `api` dev config; `.claude/` is gitignored so it does not ship.)
-
-**NEXT — Session 2:** define the Postgres tables mirroring the 13 derived datasets for the current slice
-(indexes on `as_of_week`/`week`/`roster_id`/`sleeper_player_id`) and build the **parquet → Postgres loader**
-(the new publish seam that replaces the hand-symlink step). See `MULTI_LEAGUE_STORE_MIGRATION.md` A1/A2.
+**Prior — Session 1 SHIPPED (2026-07-24): Fly ↔ Supabase foundation.** Minimal FastAPI skeleton at
+`application/api/` (`/health` liveness + `/health/db` `SELECT 1`), deployed to Fly app **`fantasy-ai-api`**
+(region `iad`), live at **https://fantasy-ai-api.fly.dev/** with `DATABASE_URL` as a Fly secret — proved the
+Fly→Supabase path. Recorded the **Supabase Postgres** store decision (supersedes the migration doc's original
+SQLite for Stage A). Scoped Dockerfile → 52 MB image; no frontend/pipeline change.
 
 ---
 

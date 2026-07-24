@@ -1,0 +1,8 @@
+# Dependencies for the parquet -> Postgres loader (build_db.py).
+# Kept separate from the (heavy) data-pipeline requirements and installed into a
+# dedicated venv (application/data/serve/.venv), because the loader is the only
+# thing that needs BOTH polars (read parquet) and psycopg (write Postgres) in one
+# process. psycopg pin matches application/api/requirements.txt.
+polars==1.40.1
+psycopg[binary]==3.2.10
+python-dotenv==1.1.1
