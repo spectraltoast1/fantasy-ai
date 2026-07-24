@@ -1,0 +1,26 @@
+# Fly.io config for the fantasy-ai API skeleton (store-migration Session 1).
+# Deploy from this directory: `fly deploy` (build context = application/api/).
+app = "fantasy-ai-api"
+primary_region = "iad"
+
+[build]
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Scale to zero when idle (cheap); start on request.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  # Liveness probe — DB-free so it doesn't flap if Supabase pauses.
+  [[http_service.checks]]
+    method = "GET"
+    path = "/health"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

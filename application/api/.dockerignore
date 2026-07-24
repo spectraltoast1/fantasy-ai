@@ -1,0 +1,9 @@
+# Build context is application/api/. Keep the image clean and never ship secrets.
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+Dockerfile
+.dockerignore
+fly.toml

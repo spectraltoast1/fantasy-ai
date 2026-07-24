@@ -1,0 +1,7 @@
+# API-only dependencies. Deliberately minimal and independent of the data
+# pipeline's application/requirements.txt (no polars/nflreadpy/anthropic) so the
+# deployed image stays small. Pinned for reproducible builds.
+fastapi==0.118.0
+uvicorn[standard]==0.37.0
+psycopg[binary]==3.2.10
+python-dotenv==1.1.1
