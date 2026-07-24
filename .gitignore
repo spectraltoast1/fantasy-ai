@@ -203,6 +203,7 @@ logs/
 start-dashboard.command
 **/branding/
 **/engine improvement/
+**/future work/_archive/
 
 
 # Front-end: deps + symlinked live data; source is tracked
