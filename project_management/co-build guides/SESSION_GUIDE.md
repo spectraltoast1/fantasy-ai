@@ -112,8 +112,12 @@ The next task starts a fresh session and a fresh worktree.
 - **`.gitignore` + symlinks.** Trailing-slash patterns (`node_modules/`) match
   directories but not symlinks, so the setup script adds the linked paths to
   `.git/info/exclude` (local-only) to keep `git status` clean.
-- **Python env.** `application/venv` is missing polars; the system `python3` has it.
-  Run fetchers/transforms with `python3`.
+- **Python env.** `application/venv` carries the full pipeline deps (from
+  `application/requirements.txt`, incl. polars) — run fetchers/transforms with it
+  (`application/venv/bin/python -m application.<pkg>.<module>` from the repo root). If it
+  ever goes stale, rebuild: `rm -rf application/venv && python3 -m venv application/venv &&
+  application/venv/bin/pip install -r application/requirements.txt`. (The system `python3`
+  also has polars, so `python3 -m application.…` works too.)
 
 ## Common issues
 
