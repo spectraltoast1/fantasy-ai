@@ -18,8 +18,10 @@ COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # Recreate the package skeleton: application/ (empty namespace) + application/api/ (code).
+# NOTE: MY_USERNAME and LEAGUE_ID must be set as env/secrets on Fly — the image ships only
+# the api package (no config.py), so settings.py falls back to nothing there.
 RUN mkdir -p /app/application/api && touch /app/application/__init__.py
-COPY __init__.py db.py main.py /app/application/api/
+COPY __init__.py db.py settings.py calcs.py reads.py routes.py main.py /app/application/api/
 
 # Fly injects PORT; default 8080 matches fly.toml internal_port.
 EXPOSE 8080
