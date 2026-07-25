@@ -54,6 +54,11 @@ link application/data/snapshots
 link application/data/cache
 link application/frontend/node_modules
 link application/frontend/public/data
+# Python virtualenvs live in main and are shared by symlink so sessions don't rebuild
+# them every worktree: application/venv = the data-side env (pipeline + the serve loader),
+# application/api/.venv = the API's own env. Rebuild in main if stale (see SESSION_GUIDE).
+link application/venv
+link application/api/.venv
 
 # .gitignore patterns use trailing slashes (e.g. node_modules/), which match
 # directories but NOT symlinks — so a symlinked dir shows as untracked noise.
@@ -63,7 +68,8 @@ for p in \
   application/data/snapshots \
   application/data/cache \
   application/frontend/node_modules \
-  application/frontend/public/data
+  application/frontend/public/data \
+  application/venv
 do
   grep -qxF "$p" "$EXCLUDE" 2>/dev/null || echo "$p" >> "$EXCLUDE"
 done

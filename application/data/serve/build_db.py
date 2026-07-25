@@ -5,13 +5,13 @@ Reads the exact parquet the frontend serves today
 so the database is a byte-faithful copy of what's on screen. This permanently replaces
 the hand-symlink "publish" step.
 
-Two modes (run from the repo root with the serve venv):
+Two modes (run from the repo root with the data venv, application/venv):
 
-    application/data/serve/.venv/bin/python -m application.data.serve.build_db --emit
+    application/venv/bin/python -m application.data.serve.build_db --emit
         Inspect the 13 parquet schemas and (re)generate the reviewable artifacts:
         schema.sql (DDL) and MANIFEST.md.
 
-    application/data/serve/.venv/bin/python -m application.data.serve.build_db --load
+    application/venv/bin/python -m application.data.serve.build_db --load
         Apply schema.sql (DROP + CREATE, so re-runs never duplicate) and COPY every
         dataset in. Idempotent.
 

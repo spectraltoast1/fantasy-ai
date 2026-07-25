@@ -4,6 +4,10 @@
 !.env.example
 __pycache__/
 *.pyc
+# The API's venv now lives durably in main and is symlinked into worktrees, so it can
+# appear in the build context — never send it to the builder (deps come from the image).
+.venv
+venv/
 Dockerfile
 .dockerignore
 fly.toml
