@@ -5,9 +5,15 @@ charset-normalizer==3.4.7
 feedparser==6.0.12
 idna==3.13
 nflreadpy==0.1.5
-polars
+polars==1.43.0
 pyarrow==20.0.0
 requests==2.33.1
 schedule==1.2.2
 sgmllib3k==1.0.0
 urllib3==2.6.3
+
+# Serving layer: the parquet->Postgres loader (application/data/serve/build_db.py) runs
+# under this same env, so it needs a Postgres driver + dotenv. Pins match
+# application/api/requirements.txt.
+psycopg[binary]==3.2.10
+python-dotenv==1.1.1
