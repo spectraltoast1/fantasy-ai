@@ -263,13 +263,57 @@ later.
   Data-API exposure, while the app's direct owner-role connection (the session-pooler `DATABASE_URL`)
   bypasses RLS and is unaffected. `DATABASE_URL` resolves env-var (Fly secret) first, then a
   `config.py` fallback, so the secret survives worktrees.
-- **Progress:** Session 1 (FastAPI `/health` skeleton on Fly + Supabase Postgres connected) and
-  Session 2 (13-table schema + loader + RLS) are **done**. Session 3 (port Players + Teams read
-  endpoints) is next; the frontend swap is Session 5; parity/go-live is Session 6.
+- **Progress:** Sessions 1–4 are **done**: Session 1 (FastAPI `/health` skeleton on Fly + Supabase
+  Postgres connected), Session 2 (13-table schema + loader + RLS), Session 3 (the Players + Teams read
+  reads ported to FastAPI/Postgres — `application/api/reads.py` + `calcs.py` + `routes.py`, seven
+  endpoints: `/api/weeks`, `/api/league-meta`, `/api/players`, `/api/players/{id}`, `/api/standings`,
+  `/api/teams/{rosterId}`, `/api/managers/{rosterId}`; the team-detail `thisWeek` bar was deferred to
+  Session 4), Session 4 (League + Matchups endpoints **plus** the deferred team-detail `thisWeek`
+  projection/win-prob chain — the shared optimal-lineup → μ/σ → win-prob engine lives in the new
+  `application/api/projections.py`, reused by `/api/matchups`, `/api/matchups/{id}`, and `thisWeek`;
+  `/api/league` + `/api/positional-talent` round it out). The frontend swap is Session 5; parity/go-live
+  is Session 6.
 - **Until Session 5 the frontend still runs the old DuckDB-WASM way**, with the server in parallel —
   nothing a user sees changes during Stage A (that's the point: identical app, new plumbing).
   Multi-league/season (Stage B) comes after: "switch league" becomes an API param /
   `WHERE league_id=… AND season=…` over one keyed store.
+
+### Store schema reference (13 tables — Session 2)
+
+The serving store is 13 Postgres tables, one per published parquet dataset (the 13 `registerParquet`
+datasets in `frontend/src/db.js`). The DDL is **machine-generated** — `application/data/serve/build_db.py --emit`
+reads each parquet's schema and writes `schema.sql` + `MANIFEST.md`; **do not hand-edit `schema.sql`**,
+re-run `--emit`. `build_db.py --load` applies it (DROP+CREATE) and COPYs the exact `public/data/*.parquet`
+the app serves today, so the DB is a byte-faithful copy of the current app. `--verify` asserts row counts.
+
+Conventions on every table:
+- **`league_id TEXT`** — the active league, stamped on every row. A no-op filter today (one league); the
+  column the Stage-B "switch league" filter keys on. Every read endpoint already filters `WHERE league_id = …`.
+- **`season`** — the source year: **2025 for all tables except `ros_synthesis` (2026** — the AI news world).
+  Native in the parquet where present; added as a constant where absent (teams / lineup_slots /
+  league_settings / player_signal / schedule). *Type note:* `season`/`week` are `INTEGER` in the
+  natively-typed tables and `BIGINT` where added — harmless (Postgres cross-casts) but worth knowing before
+  Stage-B cross-table joins.
+- **Indexes:** each table's real filter columns (from `queries.js`) + a composite `(league_id, season)`.
+- **`projection_consensus` `*_ppr` wart:** `center_ppr` / `p25_ppr` / `p50_ppr` / `p75_ppr` / `band_ppr` /
+  `disagreement_ppr` hold **league** points, not PPR. The rename is parked to Stage B (coupled to the
+  `queries.js` rewrite). A `*_ppr` column name here does **not** imply PPR scoring.
+
+| Table | Grain / key | Rows (2025) | What it holds | Indexed on |
+|---|---|---:|---|---|
+| `season` | player × week | 594 | The weekly nfl-stats ↔ Sleeper join (173 cols): per-player box score + the Sleeper roster join (`roster_id`, `matchup_id`, `sleeper_points`, `is_starter`, `roster_total_points`, `matchup_result`). Source of player identity (latest-week), records, all-play. | week, roster_id, sleeper_player_id, position |
+| `teams` | roster_id | 10 | `roster_id` → `team_name`, `owner_name`, `owner_id`. | roster_id |
+| `lineup_slots` | league-level (1/slot) | 5 | `slot`, `count`, `eligible` — the starting skill-slot config; drives optimal lineup + the QB/SF label. | (league_id, season) |
+| `league_settings` | section × key | 49 | `section` / `key` / `value` config (e.g. scoring `rec`). | (section, key) |
+| `player_signal` | player × as_of_week | 650 | Per-player spike/opportunity read: `recent_ppg`, `expected_ppg`, `eff_ratio`, `luck`, `direction`, `security`, `reliability`, … | sleeper_player_id, as_of_week |
+| `production_vor` | player × as_of_week | 635 | Production VOR: `vor`, `ros_value`, `waiver_line`, `pool`, `pool_top`. The Players table's default sort + the value series. | as_of_week, sleeper_player_id, roster_id |
+| `market_vor` | player × snapshot_date | 5 643 | Market VOR (cross-time 2026 market × 2025 roster): `market_value`, `market_vor`, `production_vor`, `trade_gap`, `is_cross_time`. | snapshot_date, sleeper_player_id, roster_id, position |
+| `ros_synthesis` | player × week (**2026**) | 16 | AI ROS grades — `bull/bear/situation_grade` (+ notes), `headlines` (**JSONB**), `confidence`. Sparse; season 2026. | sleeper_player_id, week |
+| `bracket_odds` | roster_id × as_of_week | 40 | `playoff_odds`, `proj_wins`, `proj_points`, `avg_seed`, `magic_wins`, `remaining_games`. Standings playoff % + trendline. | as_of_week, roster_id |
+| `positional_depth` | roster_id × position × as_of_week | 160 | `starter_value`, `surplus_value`, `marginal_vor`, `spectrum_pos`, `shape`. Team-detail depth rank. | as_of_week, roster_id, position |
+| `manager_dossiers` | roster_id (1/team) | 10 | AI `headline` + tendencies (`waiver_faab`, `trade_tendency`, `positional_lean`, …) + depth counts. | roster_id |
+| `projection_consensus` | player × week (1–18) | 6 100 | Forward projection band: `center_ppr`, `p25/p50/p75_ppr`, `band_ppr`, `skew_ppr`, `resid_*`. **Not** tall over as_of_week. (Feeds Session-4's `thisWeek` chain; `*_ppr` = league points.) | week, sleeper_player_id |
+| `schedule` | week × roster_id | 180 | `week` → `matchup_id` pairings only (points dropped upstream so future results never reach the client). | week, matchup_id, roster_id |
 
 ---
 
