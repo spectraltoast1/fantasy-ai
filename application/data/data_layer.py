@@ -1827,3 +1827,35 @@ def _active_league_any(season: int) -> tuple[str, str]:
         raise ValueError(f"No is_mine league at or before season {season} in leagues.parquet.")
     r = prior.row(0, named=True)
     return str(r["league_id"]), str(r["scoring_key"])
+
+
+# --- Demo manifest (Stage-B B0): the recorded demo slate ---
+# The authoritative demo set the multi-league phase serves: one row per demo (league_id, season) slice
+# carrying its root-keyed lineage_id (the earliest league in the redraft chain — globally unique, never
+# collides), a pinned viewer_roster_id ("you" for that slice), and the panel-gating policy (which analytic
+# panels are honest for the slice — market/ros are "right now" reads only the live is_mine 2025 slice has).
+# Built by corpus/build_demo_manifest.py from demo_slate.csv; read by the B3 loader + /api/leagues catalog.
+# Kept separate from leagues.parquet (whose write_leagues enforces a fixed 7-col schema). Overwrite whole.
+
+_DEMO_MANIFEST_COLS = ["lineage_id", "league_id", "season", "name", "scoring_key", "num_teams",
+                       "is_mine", "previous_league_id", "viewer_roster_id",
+                       "panels_market", "panels_ros", "panels_manager"]
+
+
+def _demo_manifest_path() -> Path:
+    return _SNAPSHOT_DIR / "demo_manifest.parquet"
+
+
+def write_demo_manifest(df: pl.DataFrame) -> None:
+    """Write the demo slate (one row per demo (league_id, season)); overwrite. Enforces the column order."""
+    path = _demo_manifest_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.select(_DEMO_MANIFEST_COLS).write_parquet(path)
+
+
+def read_demo_manifest() -> pl.DataFrame:
+    return pl.read_parquet(_demo_manifest_path())
+
+
+def demo_manifest_exists() -> bool:
+    return _demo_manifest_path().exists()
