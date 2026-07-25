@@ -1,45 +1,84 @@
 # STATUS
 
-## STORE MIGRATION TRACK — Session 3 SHIPPED (2026-07-24): Players + Teams read endpoints
+## STORE MIGRATION TRACK — Session 4 SHIPPED (2026-07-25): League + Matchups endpoints + team-detail thisWeek
 
 > This section is the **store-migration track** (DuckDB-WASM → server store + API), driven by
 > `scope docs/future work/MULTI_LEAGUE_STORE_MIGRATION.md` and the `SESSION_N_*.md` runbooks. It is a
 > **separate line of work** from the engine-improvement track (Sessions 1–9) that makes up the rest of
 > this file.
 
-**Session 3 — what shipped (7 read endpoints; still no frontend change — the swap is Session 5):**
-- **First feature endpoints under `/api`** in `application/api/` (routers, not just health): `GET /api/weeks`,
-  `/api/league-meta`, `/api/players`, `/api/players/{sleeperId}`, `/api/standings`, `/api/teams/{rosterId}`,
-  `/api/managers/{rosterId}`. Each returns the **exact shape** of its `queries.js` loader (the Session-5
-  contract). Week-scoped ones take `?as_of_week=N`, default latest.
-- **New modules mirror the `queries.js` seam:** `reads.py` (one fn per panel, SQL + assembly), `calcs.py`
-  (Python mirror of `posture.js` + the JS helpers — `series_read`, `derive_posture`, `round1`/`js_round` as JS
-  `Math.round` not banker's rounding, `SHAPE_LABEL`, `TRADE_GAP_T`), `settings.py` (`my_username()`/`league_id()`
-  env→`config.py` seam, same precedence as `database_url()`), `routes.py` (`APIRouter(/api)`). `db.py` gained
-  `connect()`/`fetch_all()` (dict-row psycopg, parameterized — no string-built SQL).
-- **DuckDB→Postgres dialect port:** `arg_max(col, week)` → latest **non-null** per column via
-  `(array_agg(col ORDER BY week DESC) FILTER (WHERE col IS NOT NULL))[1]` (DISTINCT ON mishandles a null team
-  in the newest week); `QUALIFY` → `DISTINCT ON`; `any_value` → `max`; `ORDER BY vor DESC NULLS LAST` +
-  `sleeper_player_id` tiebreak. Every query league-scoped (Stage-B seam, no-op today).
-- **Deferred (decision):** team-detail **`thisWeek`** returns `null` — its projection/win-prob chain is
-  Session 4's core; Session 4 must fill it before the Session-5 swap. `MY_USERNAME` semantics unchanged; the
-  `projection_consensus *_ppr` wart left alone (Stage B).
-- **Verified byte-parity vs the app's own DuckDB path:** a duckdb-replay oracle ran the *verbatim* `queries.js`
-  SQL against the parquet and diffed every field of all 7 endpoints — players (wk 4/2), weeks, league-meta
-  (incl. latest), 9 player cards ×2 wks, standings (10 teams incl. rank, wk 4/2/latest), team detail (10 teams
-  ×2 wks incl. depth rank + roster split + deferred thisWeek), managers (10 rosters), + unknown/missing edges.
-  Endpoints verified locally against the live Supabase DB; **not deployed to Fly this session** (deploy lands
-  with the Session-5 frontend swap — will need `MY_USERNAME`/`LEAGUE_ID` Fly secrets + the Dockerfile COPY,
-  already updated).
+**Session 4 — what shipped (League + Matchups reads + the deferred `thisWeek` chain ported to
+FastAPI/Postgres; still no frontend change — that's Session 5):**
+- **The shared projection/win-prob engine (`application/api/projections.py`), built ONCE** and called by
+  three surfaces: `expand_slots` (most-constrained slot first), `optimal_lineup` (greedy, strict `>` so
+  first-seen wins ties), `team_projections` (roster-as-of-N × `projection_consensus WHERE week=N+1` → **μ =
+  round1(Σ starter `center_ppr`), σ = √(Σ starter `band_ppr`²) raw**), `matchup_win_probs` (`normal_cdf`
+  via `math.erf` — within the app's A&S `erf` tolerance and the win % rounds to an integer, so identical),
+  `target_week_for`, `records_by_roster`, `team_matchup_summary`, `matchup_player_view`. **μ is round1'd at
+  the team level BEFORE the win-prob math consumes it** (the app does this; it shifts the integer %). The
+  roster read reuses `reads._latest` + `ORDER BY sleeper_player_id`, so the optimal-lineup pick matches team
+  detail. `reads` ⇄ `projections` import each other at top level (no import-time cross-access → no cycle).
+- **Endpoints:** `GET /api/league?as_of_week=N` (wraps the ported `load_standings(N)` + one
+  `league_settings` read → `{standings, me, playoffCut, nTeams}`); `GET /api/positional-talent`
+  (`sum(greatest(market_vor,0))` per roster×position at the latest snapshot, ranked → `{byPos,
+  isCrossTime}`, not week-scoped); `GET /api/matchups?as_of_week=N` (the week-N+1 slate: each game's two
+  teams w/ record, projected μ, win %; my game/team sorted first); `GET
+  /api/matchups/{matchupId}?as_of_week=N` (one game's Score Range = Σ starter quantiles, per-starter gauges,
+  starters+bench). Each returns its `queries.js` loader's exact shape.
+- **The deferred bar is real:** `reads.load_team_detail`'s `thisWeek` stub (`None` + `TODO(Session 4)`) is
+  gone — it now returns `team_matchup_summary` (opponent + both projected totals + win %; `null` when no
+  next game). The whole team-detail shape is otherwise unchanged.
+- **Null-safe guardrail established (audit finding 2):** `projections._num(x, default)` reproduces the
+  browser's `Number(null)===0` coercion on the nullable projection columns (`center/band/p25/p50/p75_ppr`)
+  — no bare `float()`. A rostered player with no projection row contributes `pts=0/band=0` and won't start;
+  the Score Range falls back `p25 ?? pts`. (The null *policy* — `0` vs render "—" — is still Session 5's.)
+- **`check_projections.py`:** DB-free unit check of the pure functions (slot ordering, greedy fill + FLEX
+  leftover + first-seen tie-break, a hand-computed 76/24 win prob, `_num`) — green.
+- **Verification (endpoint-level, as_of_week 3 & 4): GREEN, zero mismatches.** A running FastAPI server
+  was diffed field-by-field (numeric tolerance 1e-9, incl. keys/nulls/ordering) against the browser
+  DuckDB-WASM ground truth (the real `queries.js` loaders run in-page) across all surfaces —
+  `/api/matchups`, `/api/matchups/{id}` (full starters+bench, Score Range, σ, win %), `/api/league`
+  (standings + playoffCut/nTeams), `/api/positional-talent`, and `/api/teams/{id}` (full team detail incl.
+  the new `thisWeek`, confirming no Session-3 regression). Win-% pairs sum to 100; Score Range = Σ starter
+  quantiles. Endpoints local-only (not deployed to Fly this session).
+- **Seam held:** `MY_USERNAME`/`isMe` semantics and the `projection_consensus *_ppr` naming untouched;
+  `queries.js`/`db.js`/views untouched. Endpoints local-only (not deployed to Fly this session).
 
-**NEXT — Session 4:** port the **League + Matchups** endpoints **and** build the deferred team-detail
-`thisWeek` projection/win-prob chain (`teamMatchupSummary` → `optimalLineup`, `projection_consensus`, μ/σ +
-`normalCdf`), before the Session-5 frontend swap. (`MULTI_LEAGUE_STORE_MIGRATION.md` A3→A4.)
+**NEXT — Session 5:** the frontend becomes an API client — flip the `queries.js` loaders to `fetch()` the
+endpoints, delete `db.js`/DuckDB-WASM, and **decide the null policy** (show `0` vs render "—") in `reads.py`
+when the reads first render. Every read the frontend needs now exists server-side. Deploy (set Fly secrets
+`LEAGUE_ID`+`MY_USERNAME` alongside `DATABASE_URL`; confirm the deployed `/api/*` return real rows — the
+live app still serves the Session-1 skeleton) rides with the Session-5/6 cutover.
+(`MULTI_LEAGUE_STORE_MIGRATION.md` A4→A5.)
 
-**Prior — Session 2 SHIPPED (2026-07-24): Postgres schema (13 tables) + parquet→PG loader.** Durable
-`DATABASE_URL` in `config.py` (env-first, config fallback); `schema.sql` + `build_db.py` (`--emit/--load/--verify`,
-idempotent) load the exact `frontend/public/data/*.parquet` into Supabase; all 13 row counts + numeric sums
-match; RLS enabled/no policies. The DB returns real rows; the app still runs the old DuckDB-WASM way.
+**Prior — Session 3 SHIPPED (2026-07-25): Players + Teams read endpoints (still no frontend change —
+that's Session 5):**
+- **Endpoints:** seven read endpoints in `application/api/` (`reads.py` + `calcs.py` + `routes.py`), each
+  returning its `queries.js` loader's exact shape: `/api/weeks`, `/api/league-meta`, `/api/players`,
+  `/api/players/{sleeperId}`, `/api/standings`, `/api/teams/{rosterId}`, `/api/managers/{rosterId}`.
+  Week-scoped ones take `?as_of_week=N` (default latest).
+- **DuckDB→Postgres port:** `arg_max(col,week)` → `(array_agg(col ORDER BY week DESC) FILTER (WHERE col IS
+  NOT NULL))[1]` (`_latest` — latest non-null per column); `QUALIFY row_number()` → `DISTINCT ON`;
+  `any_value` → `max`; Players sort gets explicit `NULLS LAST`. Inline JS calcs (all-play true record,
+  posture, `seriesRead`, trade lean, standings sort/rank, positional-depth rank + `SHAPE_LABEL`, JS half-up
+  rounding) ported to `calcs.py`. Every query filters `WHERE league_id = settings.league_id()` (no-op today;
+  the Stage-B seam).
+- **Deferred (per plan):** the team-detail `thisWeek` projection/win-prob bar → **Session 4** (now shipped,
+  above). `MY_USERNAME` semantics preserved; `projection_consensus *_ppr` naming left untouched.
+- **Verification (PM audit, 2026-07-25):** endpoint shapes checked field-by-field against `queries.js`;
+  ported calcs verified logic-equivalent; the current 2025 data confirmed to have **no nulls** in the
+  crash-risk columns, so the endpoints reproduce today's app's numbers. Two **latent** items land at the
+  Session-5/6 deploy (full report: `scope docs/future work/SESSION_1_3_AUDIT.md`): (1) bare `float()` on
+  nullable numeric cols would 500 where the browser coerced null→0 — Session 4 established the `_num`
+  guardrail for its new reads; the null *policy* for the Session-3 reads is Session 5's; (2) deployed
+  endpoints need `LEAGUE_ID` + `MY_USERNAME` set as Fly secrets or they return empty.
+
+**Prior — Session 2 SHIPPED (2026-07-24): Postgres schema + parquet→PG loader.** 13 Postgres tables
+(`application/data/serve/schema.sql`) generated from the published parquet, `league_id`+`season` on every
+table, indexed on the real filter cols; idempotent loader `build_db.py` (`--emit`/`--load`/`--verify`) COPYs
+the exact `frontend/public/data/*.parquet` — all 13 row counts match, single `league_id` per table
+(`ros_synthesis`=2026, rest 2025). Durable `DATABASE_URL` in `config.py` (env-var first, `config.py`
+fallback) survives worktrees.
 
 **Prior — Session 1 SHIPPED (2026-07-24): Fly ↔ Supabase foundation.** Minimal FastAPI skeleton at
 `application/api/` (`/health` liveness + `/health/db` `SELECT 1`), deployed to Fly app **`fantasy-ai-api`**

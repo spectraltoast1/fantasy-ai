@@ -663,6 +663,72 @@ def load_manager_dossier(roster_id) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# League tab — the standings-backed race view + positional talent (market VOR).
+# ---------------------------------------------------------------------------
+
+def load_league(as_of_week=None) -> dict:
+    """The League surface: full standings + the "me" row + the real playoff cut / team count.
+
+    Light — wraps the already-ported ``load_standings(N)`` and one ``league_settings`` read.
+    Mirrors loadLeague (l.370).
+    """
+    standings = load_standings(as_of_week)
+    cfg_rows = db.fetch_all(
+        "SELECT key, value FROM league_settings "
+        "WHERE league_id = %(lid)s AND section = 'league' AND key IN ('playoff_teams', 'num_teams')",
+        _params(),
+    )
+    cfg = {r["key"]: (None if r["value"] is None else float(r["value"])) for r in cfg_rows}
+    return {
+        "standings": standings,
+        "me": next((s for s in standings if s["isMe"]), None),
+        "playoffCut": calcs.js_round(cfg["playoff_teams"]) if cfg.get("playoff_teams") is not None else None,
+        "nTeams": calcs.js_round(cfg["num_teams"]) if cfg.get("num_teams") is not None else len(standings),
+    }
+
+
+def load_positional_talent() -> dict:
+    """Positional Talent: teams ranked per position by the Market VOR they hold (sum of positive
+    ``market_vor`` at the latest snapshot). Not week-scoped. Mirrors loadPositionalTalent (l.396)."""
+    me = settings.my_username()
+    rows = db.fetch_all(
+        "WITH latest AS ("
+        "  SELECT roster_id, position,"
+        "         sum(greatest(market_vor, 0)) AS pos_vor,"
+        "         bool_or(is_cross_time)        AS is_cross_time"
+        "  FROM market_vor"
+        "  WHERE league_id = %(lid)s"
+        "    AND snapshot_date = (SELECT max(snapshot_date) FROM market_vor WHERE league_id = %(lid)s)"
+        "    AND position IN ('QB','RB','WR','TE')"
+        "  GROUP BY roster_id, position"
+        ") "
+        "SELECT l.roster_id, l.position, l.pos_vor, l.is_cross_time, t.team_name, t.owner_name "
+        "FROM latest l "
+        "LEFT JOIN teams t ON t.roster_id = l.roster_id AND t.league_id = %(lid)s",
+        _params(),
+    )
+    by_pos: dict[str, list] = {p: [] for p in POS}
+    cross_time = False
+    for r in rows:
+        if r["is_cross_time"]:
+            cross_time = True
+        rid = int(r["roster_id"])
+        by_pos.setdefault(r["position"], []).append({
+            "rosterId": rid,
+            "name": r["team_name"] or r["owner_name"] or f"Team {rid}",
+            "isMe": r["owner_name"] == me,
+            "vor": float(r["pos_vor"]),
+        })
+    for pos in POS:
+        # Sort by VOR desc; roster_id breaks ties deterministically (cosmetic — the app ties
+        # arbitrarily; see Session-3 audit finding 6).
+        by_pos[pos].sort(key=lambda x: (-x["vor"], x["rosterId"]))
+        for i, x in enumerate(by_pos[pos]):
+            x["rank"] = i + 1
+    return {"byPos": by_pos, "isCrossTime": cross_time}
+
+
+# ---------------------------------------------------------------------------
 # Matchups tab — the week-N+1 slate + one game's full breakdown. The projection
 # math lives in projections.py (shared with team-detail's thisWeek bar).
 # ---------------------------------------------------------------------------
