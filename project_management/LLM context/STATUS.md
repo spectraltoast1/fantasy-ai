@@ -1,11 +1,50 @@
 # STATUS
 
-## STORE MIGRATION TRACK — Session 5 SHIPPED (2026-07-25): frontend becomes an API client
+## STORE MIGRATION TRACK — Session 6 SHIPPED (2026-07-25): STAGE A COMPLETE — the app is LIVE
 
 > This section is the **store-migration track** (DuckDB-WASM → server store + API), driven by
 > `scope docs/future work/MULTI_LEAGUE_STORE_MIGRATION.md` and the `SESSION_N_*.md` runbooks. It is a
 > **separate line of work** from the engine-improvement track (Sessions 1–9) that makes up the rest of
 > this file.
+
+**Session 6 — what shipped (STAGE A COMPLETE — the app is a real website): parity sign-off + go-live.**
+The server-backed stack (Sessions 1–5) is now **deployed and live** at **https://fantasy-ai-api.fly.dev/** —
+the app runs off the API from the internet, no longer a local-only build. Single league, no auth.
+(`MULTI_LEAGUE_STORE_MIGRATION.md` A4 → live.)
+- **Same-origin hosting (Option A, chosen with Will):** ONE Fly app (`fantasy-ai-api`) serves both the built
+  React SPA at `/` and the `/api` endpoints — **no CORS**. The dev Vite proxy stays dev-only.
+- **Multi-stage Docker build, context moved up to `application/`:** stage 1 (`node:20`) runs `npm ci` +
+  `vite build`; stage 2 (`python:3.13`) installs the api deps, **COPYs the api package as a directory**, and
+  bakes the built `dist/` in at `/app/static`. `main.py` drops the skeleton `/` route and mounts
+  `StaticFiles(dist, html=True)` at `/` **last** (guarded on `is_dir()` so local `dev:full` — no build — still
+  runs). The deploy files (`Dockerfile`/`.dockerignore`/`fly.toml`) moved from `api/` to `application/`.
+- **Latent deploy bug fixed (was the top risk):** the old enumerated `COPY` omitted `projections.py` (added
+  S4, imported by `reads.py`) — the image built green then crashed on startup. Copying the api **directory**
+  kills the whole class of drift.
+- **`.dockerignore` for the larger context** excludes the heavy runtime — notably **`frontend/public/data`**
+  (the parquet symlinks `vite build` would otherwise sweep into `dist`), plus `data/`, venvs, `config.py`,
+  `.env*`. Result: the image stayed **52 MB** (build context only 255 kB).
+- **Secrets set + deploy:** `LEAGUE_ID` + `MY_USERNAME` added as Fly secrets alongside `DATABASE_URL` (without
+  them the endpoints filter `WHERE league_id = NULL` → empty, not error). Deployed via `fly deploy` (CLI;
+  GitHub auto-deploy stays off). Supabase already held the data (Session 2 loaded it) — **no loader run**.
+- **Live parity sign-off — GREEN** (verified in-browser against the deployed URL): the SPA loads (not the
+  skeleton JSON); `/health/db` 200; every tab (Players / Matchups / Teams / League) renders real data at
+  `as_of_week` latest **and** an earlier week (Week 4 → Week 2 re-scopes every surface, record 3-1→2-0,
+  playoff 87%→35%); a matchup's win % **sums to 100** across all games; the Matchups score-range + starter
+  gauges render; the network tab shows only `/api/*` **200 JSON** (no `.parquet`, no DuckDB worker); console
+  clean. Screenshotted.
+
+**NEXT — Stage B (multi-league):** put multiple league-seasons on the new store and let the app switch between
+them — the `viewer_roster_id` refactor (kill the `MY_USERNAME`/`SLEEPER_LEAGUE_ID` hardcodes), league/season
+selectors + a `GET /api/leagues` catalog, and parameterize every read on `league_id`+`season` (the
+`WHERE league_id = …` seam is already in place). (`MULTI_LEAGUE_STORE_MIGRATION.md` Stage B.) **Parked (Stage-A
+leftovers, non-blocking):** the **custom domain** (free `.fly.dev` URL kept); the **null policy** — adopt
+`projections._num` across the older reads once multi-league/historical data introduces nulls (zero nulls
+today); **CORS** — only if hosting is ever split (same-origin now, so none); always-warm
+`min_machines_running=1` if the scale-to-zero cold-start (a few seconds on first hit) becomes annoying. The
+Session-5 **deprecation inventory** (unused parquet artifacts / the pipeline that builds them) is still
+un-actioned — several are backend-still-needed traps (the loader COPYs the same parquet), so review that
+report before any cleanup.
 
 **Session 5 — what shipped (the first *visible* milestone — the app now runs off the API, not in-browser
 DuckDB; it looks identical to before):**
@@ -36,14 +75,10 @@ DuckDB; it looks identical to before):**
   multi-league/historical data introduces nulls), not part of the swap. No Stage-B work: `MY_USERNAME`
   semantics unchanged server-side; no league/season selectors.
 
-**NEXT — Session 6:** parity sign-off + **go-live**. Deploy the app; set `LEAGUE_ID` + `MY_USERNAME` as Fly
-secrets alongside `DATABASE_URL`; decide the **frontend hosting + cross-origin/CORS** story (the dev Vite
-proxy is dev-only — the deployed static frontend calls the API cross-origin). Confirm the deployed `/api/*`
-return real rows (the live Fly app still serves the Session-1 skeleton). Then Stage B (multi-league).
-(`MULTI_LEAGUE_STORE_MIGRATION.md` A4 → go-live.) *A user-greenlit **deprecation inventory** (parquet
-artifacts / the pipeline that builds them / other now-unused bits) was compiled this session as a separate
-report — several items are backend-still-needed traps (the loader COPYs the same parquet), so nothing was
-removed; see that report before any broader cleanup.*
+**Session 6 (shipped 2026-07-25 — STAGE A COMPLETE, see the top of this section):** parity sign-off +
+go-live — chose same-origin hosting (no CORS), deployed the real API + built SPA as one Fly app, set the last
+secrets (`LEAGUE_ID`/`MY_USERNAME`), and signed off parity against the live URL. *(The user-greenlit
+**deprecation inventory** compiled this session is carried forward in the Session-6 parked items above.)*
 
 **Prior — Session 4 SHIPPED (2026-07-25): League + Matchups endpoints + team-detail thisWeek
 (League + Matchups reads + the deferred `thisWeek` chain ported to FastAPI/Postgres):**

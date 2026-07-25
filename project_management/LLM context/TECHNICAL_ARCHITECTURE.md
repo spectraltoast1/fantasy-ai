@@ -242,12 +242,12 @@ separate decisions doc.
 
 ---
 
-### Store migration — target architecture (in progress)
+### Store migration — target architecture (Stage A COMPLETE — the app is live)
 
-The frontend's data store is being moved off in-browser DuckDB-WASM to a real server. This is
-**Stage A** of `scope docs/future work/MULTI_LEAGUE_STORE_MIGRATION.md` (single-league parity
-first; multi-league is Stage B). Auth is deferred, but the platform was chosen so it's a bolt-on
-later.
+The frontend's data store has been moved off in-browser DuckDB-WASM to a real server. **Stage A** of
+`scope docs/future work/MULTI_LEAGUE_STORE_MIGRATION.md` (single-league parity) is **complete and
+deployed** — the app is live at `https://fantasy-ai-api.fly.dev/`; multi-league is Stage B. Auth is
+deferred, but the platform was chosen so it's a bolt-on later.
 
 - **Target store:** a **FastAPI** read-API (`application/api/`, deployed on **Fly.io** — app
   `fantasy-ai-api`, region `iad`) over **Supabase-hosted Postgres**. Postgres was chosen over the
@@ -263,20 +263,22 @@ later.
   Data-API exposure, while the app's direct owner-role connection (the session-pooler `DATABASE_URL`)
   bypasses RLS and is unaffected. `DATABASE_URL` resolves env-var (Fly secret) first, then a
   `config.py` fallback, so the secret survives worktrees.
-- **Progress:** Sessions 1–4 are **done**: Session 1 (FastAPI `/health` skeleton on Fly + Supabase
-  Postgres connected), Session 2 (13-table schema + loader + RLS), Session 3 (the Players + Teams read
-  reads ported to FastAPI/Postgres — `application/api/reads.py` + `calcs.py` + `routes.py`, seven
-  endpoints: `/api/weeks`, `/api/league-meta`, `/api/players`, `/api/players/{id}`, `/api/standings`,
-  `/api/teams/{rosterId}`, `/api/managers/{rosterId}`; the team-detail `thisWeek` bar was deferred to
-  Session 4), Session 4 (League + Matchups endpoints **plus** the deferred team-detail `thisWeek`
-  projection/win-prob chain — the shared optimal-lineup → μ/σ → win-prob engine lives in the new
-  `application/api/projections.py`, reused by `/api/matchups`, `/api/matchups/{id}`, and `thisWeek`;
-  `/api/league` + `/api/positional-talent` round it out). The frontend swap is Session 5; parity/go-live
-  is Session 6.
-- **Until Session 5 the frontend still runs the old DuckDB-WASM way**, with the server in parallel —
-  nothing a user sees changes during Stage A (that's the point: identical app, new plumbing).
-  Multi-league/season (Stage B) comes after: "switch league" becomes an API param /
-  `WHERE league_id=… AND season=…` over one keyed store.
+- **Progress — Stage A is COMPLETE (Session 6, 2026-07-25):** Sessions 1–4 built the store + ported
+  every read (Session 1 FastAPI `/health` skeleton on Fly + Supabase; Session 2 13-table schema + loader
+  + RLS; Session 3 Players + Teams reads → `application/api/reads.py`/`calcs.py`/`routes.py`; Session 4
+  League + Matchups **plus** the deferred team-detail `thisWeek`, on the shared
+  `application/api/projections.py` optimal-lineup → μ/σ → win-prob engine). Session 5 made `queries.js` a
+  thin API client and deleted DuckDB-WASM. **Session 6 deployed it** — the app is live (next bullet).
+- **Deployed as ONE same-origin app (Session 6 hosting decision):** a **multi-stage Docker image** (build
+  context `application/`) has `node` build the SPA and `python` serve it — FastAPI mounts the built
+  `dist/` via `StaticFiles(html=True)` at `/` (**last**, so the explicit `/api` + `/health` routes win)
+  and serves `/api` on the same origin, so the frontend's relative `fetch('/api/…')` needs **no CORS**.
+  The dev Vite proxy (`/api` → uvicorn) is the dev-only equivalent. Deploy = `fly deploy` from
+  `application/` (where `Dockerfile`/`.dockerignore`/`fly.toml` now live); `LEAGUE_ID` + `MY_USERNAME` +
+  `DATABASE_URL` are Fly secrets. Splitting the SPA onto a CDN later (CORS + an absolute API base) stays
+  possible but unneeded at this scale.
+- **Multi-league/season (Stage B) is next:** "switch league" becomes an API param /
+  `WHERE league_id=… AND season=…` over one keyed store (the filter seam is already in every read).
 
 ### Store schema reference (13 tables — Session 2)
 
