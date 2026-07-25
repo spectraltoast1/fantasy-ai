@@ -44,8 +44,10 @@ _SCHEMA_SQL = _HERE / "schema.sql"
 _MANIFEST = _HERE / "MANIFEST.md"
 
 # table name -> (published parquet filename, real source season year).
-# Authoritative list = the 13 registerParquet datasets in frontend/src/db.js.
-# (A 14th file, manager_features_2025.parquet, exists but is NOT registered -> excluded.)
+# Authoritative list = these 13 datasets (historically the registerParquet set in
+# frontend/src/db.js, removed in the Session-5 API-client swap; now this list + MANIFEST.md
+# are the source of truth). (A 14th file, manager_features_2025.parquet, exists but is a
+# backend AI-pipeline intermediate — NOT served, so excluded here.)
 DATASETS: list[tuple[str, str, int]] = [
     ("season", "season_2025.parquet", 2025),
     ("teams", "teams_2025.parquet", 2025),
