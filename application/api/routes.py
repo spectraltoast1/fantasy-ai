@@ -1,0 +1,34 @@
+"""The ``/api`` read endpoints (store-migration Session 3).
+
+Thin HTTP layer over ``reads.py`` — each route returns its ``queries.js`` loader's shape
+verbatim (plain dicts/lists, FastAPI auto-JSON; no Pydantic models so nothing coerces or
+reorders the payload). Week-scoped routes take ``?as_of_week=N`` and default to the latest.
+"""
+
+from __future__ import annotations
+
+from fastapi import APIRouter
+
+from application.api import reads
+
+router = APIRouter(prefix="/api")
+
+
+@router.get("/weeks")
+def weeks() -> dict:
+    return reads.load_weeks()
+
+
+@router.get("/league-meta")
+def league_meta(as_of_week: int | None = None) -> dict:
+    return reads.load_league_meta(as_of_week)
+
+
+@router.get("/players")
+def players(as_of_week: int | None = None) -> list[dict]:
+    return reads.load_players(as_of_week)
+
+
+@router.get("/players/{sleeper_id}")
+def player_card(sleeper_id: str, as_of_week: int | None = None) -> dict:
+    return reads.load_player_card(sleeper_id, as_of_week)

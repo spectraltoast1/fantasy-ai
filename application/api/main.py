@@ -19,12 +19,16 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from application.api import db
+from application.api.routes import router as api_router
 
 app = FastAPI(
     title="fantasy-ai API",
-    description="Store-migration Session 1 skeleton — Fly.io <-> Supabase plumbing.",
-    version="0.1.0",
+    description="Store-migration API — Fly.io <-> Supabase. /health plumbing + /api read endpoints.",
+    version="0.2.0",
 )
+
+# The Players + Teams read endpoints (Session 3), backed by the Session-2 Postgres tables.
+app.include_router(api_router)
 
 
 @app.get("/")

@@ -22,6 +22,7 @@ import os
 from pathlib import Path
 
 import psycopg
+from psycopg.rows import dict_row
 from dotenv import load_dotenv
 
 # Load a local application/api/.env if present (legacy Session-1 path). A no-op when
@@ -62,3 +63,24 @@ def check_db() -> int:
             cur.execute("SELECT 1")
             row = cur.fetchone()
     return int(row[0]) if row else 0
+
+
+def connect() -> psycopg.Connection:
+    """Open a psycopg connection whose cursors yield ``dict`` rows.
+
+    The read functions in ``reads.py`` each open one connection and run their handful of
+    queries on it (mirroring a ``queries.js`` loader's ``Promise.all``), so identity/roster
+    joins happen against a single consistent snapshot. The caller manages the ``with`` block.
+    """
+    return psycopg.connect(database_url(), row_factory=dict_row, connect_timeout=10)
+
+
+def fetch_all(sql: str, params: dict | None = None) -> list[dict]:
+    """Run one query on a fresh connection and return all rows as dicts.
+
+    Parameters are passed through psycopg's server-side binding (``%(name)s`` placeholders)
+    — never string-interpolated — so identifiers like the player id are injection-safe.
+    """
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, params or {})
+        return cur.fetchall()
