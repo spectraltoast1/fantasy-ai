@@ -1,0 +1,36 @@
+# Build context = application/. Keep the image lean and NEVER ship the heavy runtime
+# or secrets to the builder. Patterns are matched relative to this context root.
+
+# Python bytecode.
+**/__pycache__/
+**/*.pyc
+
+# Every venv (durable in main, symlinked into worktrees — deps come from the image).
+**/.venv
+venv/
+
+# Heavy data-pipeline runtime: snapshots + cache. The API reads Postgres, not these.
+data
+
+# Frontend build inputs/outputs that must not reach the image.
+frontend/node_modules
+frontend/dist
+
+# CRITICAL: the symlinked parquet. `vite build` copies everything in public/ into dist,
+# so without this the parquet would bloat the image (and its out-of-context symlinks
+# would break). The SPA is a pure API client post-Session-5 — it needs no parquet.
+frontend/public/data
+
+# Secrets: config.py (the durable secret home) + any .env. Keep the example.
+config.py
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+
+# The deploy files themselves don't belong inside the image.
+Dockerfile
+.dockerignore
+fly.toml

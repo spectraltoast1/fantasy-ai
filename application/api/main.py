@@ -1,13 +1,21 @@
-"""FastAPI entrypoint for the store-migration skeleton.
+"""FastAPI entrypoint for the fantasy-ai app (store-migration go-live).
+
+ONE same-origin app: it serves the built React SPA at ``/`` AND the ``/api`` read
+endpoints, so the frontend's relative ``fetch('/api/…')`` calls just work — no CORS.
 
 Run locally:
     uvicorn application.api.main:app --port 8000    # from the repo root
 
+    In dev there is no built SPA (Vite serves it on :5173 and proxies /api here), so the
+    static mount below is skipped and ``/`` simply 404s on this process — that's fine.
+    In the image the built SPA lives at /app/static, so ``/`` serves index.html.
+
 Endpoints:
-    GET /          -> tiny index describing the skeleton
     GET /health    -> pure liveness (no DB). Always 200 while the process is up.
     GET /health/db -> opens a Supabase connection and runs SELECT 1.
                       200 {"db": "ok", "result": 1} on success, 503 on failure.
+    GET /api/*     -> the ported read endpoints (Sessions 3-4).
+    GET /*         -> the built SPA (StaticFiles, mounted LAST as the catch-all).
 
 /health is intentionally DB-free so the platform health check does not flap if the
 (free-tier) Supabase project pauses. /health/db is the explicit connectivity probe.
@@ -15,29 +23,24 @@ Endpoints:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from application.api import db
 from application.api.routes import router as api_router
 
 app = FastAPI(
-    title="fantasy-ai API",
-    description="Store-migration API — Fly.io <-> Supabase. /health plumbing + /api read endpoints.",
-    version="0.2.0",
+    title="fantasy-ai",
+    description="Same-origin app on Fly.io <-> Supabase: serves the SPA at / and /api read endpoints.",
+    version="1.0.0",
 )
 
-# The Players + Teams read endpoints (Session 3), backed by the Session-2 Postgres tables.
+# The Players + Teams + League + Matchups read endpoints (Sessions 3-4), backed by the
+# Session-2 Postgres tables.
 app.include_router(api_router)
-
-
-@app.get("/")
-def index() -> dict:
-    return {
-        "service": "fantasy-ai-api",
-        "status": "skeleton",
-        "note": "Session 1 store-migration foundation. See /health and /health/db.",
-    }
 
 
 @app.get("/health")
@@ -57,3 +60,13 @@ def health_db() -> JSONResponse:
             status_code=503,
             content={"db": "error", "detail": f"{type(exc).__name__}: {exc}"},
         )
+
+
+# Serve the built SPA at "/" — mounted LAST so the explicit /api + /health routes above
+# win and this catch-all only handles everything else. In the image the SPA is baked in
+# at /app/static (main.py lives at /app/application/api/main.py -> parents[2] == /app).
+# The is_dir() guard makes this a no-op in local dev (no build present), where Vite serves
+# the SPA and proxies /api to this process — so importing the app never requires a build.
+_STATIC_DIR = Path(__file__).resolve().parents[2] / "static"
+if _STATIC_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=_STATIC_DIR, html=True), name="spa")

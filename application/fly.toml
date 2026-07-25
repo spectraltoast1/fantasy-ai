@@ -1,5 +1,6 @@
-# Fly.io config for the fantasy-ai API skeleton (store-migration Session 1).
-# Deploy from this directory: `fly deploy` (build context = application/api/).
+# Fly.io config for the fantasy-ai app (store-migration go-live, Session 6).
+# ONE same-origin app: the multi-stage Dockerfile builds the SPA and serves it plus the
+# /api endpoints. Deploy from this directory: `fly deploy` (build context = application/).
 app = "fantasy-ai-api"
 primary_region = "iad"
 
