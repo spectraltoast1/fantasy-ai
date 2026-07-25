@@ -1,15 +1,24 @@
 # Store Migration + Multi-League/Season/Week — Architecture & Migration Plan
 
 **Last reviewed:** 2026-07-15 · **Status:** Scope / design doc — records the target architecture and the
-ordered migration. Not yet started.
+ordered migration. **Stage A in progress** (Sessions 1–3 shipped 2026-07-24; live status in
+`../../LLM context/STATUS.md`).
 
 > **Decisions locked:** (1) migrate the data store from in-browser **DuckDB-WASM** to a **server-side
-> SQLite + HTTP API**; (2) do that **store migration first** (single-league), then build
-> multi-league/season on top of the new architecture.
+> Postgres (Supabase-hosted) + HTTP API**; (2) do that **store migration first** (single-league), then
+> build multi-league/season on top of the new architecture.
 >
 > **Origin:** produced from an inspection of the current single-league frontend, data layer, and publish
 > seam (2026-07-15). Supersedes the "V3+: multi-league support" line in
 > `../core docs/PROJECT_OVERVIEW.md` with a concrete architecture.
+
+> ⚠️ **STORE DECISION UPDATED (2026-07-24, supersedes this doc's original SQLite framing):** the serving
+> store is **Supabase-hosted Postgres**, not SQLite — chosen in Session 1 so auth is a later bolt-on
+> (Supabase Auth). **Read every "SQLite" below as "Supabase Postgres"**, and `build_sqlite.py` as the
+> actual loader `application/data/serve/build_db.py`. The architecture, sequencing, and risks are otherwise
+> accurate. The "DuckDB-attached-SQLite intermediate" risk-reducer was **not** taken — Sessions 3–4 port
+> the SQL **directly to Postgres** (verified byte-parity against the browser's DuckDB path). Live status +
+> what's shipped: `../../LLM context/STATUS.md` (top section).
 
 ---
 
@@ -30,7 +39,7 @@ I flagged is an **offline batch driver** to *generate* analytics for more slices
 query path.
 
 **The two findings that drive this plan:**
-1. **The store is being migrated to server-side SQLite + API anyway**, and that seam (`db.js`, the publish
+1. **The store is being migrated to server-side Postgres + API anyway**, and that seam (`db.js`, the publish
    step, the SQL dialect) is the *same* seam multi-league touches. So we migrate the store first, then
    build multi-league on it — where "switch league" becomes an API parameter / SQL filter, not a
    per-slice file swap.
@@ -40,7 +49,7 @@ query path.
    `ros_league_view`, `ros_synthesis`) are **descoped from the corpus** (see
    `application/data/corpus/compute_spine.py`). Even the user's **2024** league has raw data but an
    **empty `derived/league/1132400260048977920/`**. This **backend content work is store-agnostic** and
-   required regardless — it produces the derived data that the SQLite loader ingests.
+   required regardless — it produces the derived data that the Postgres loader ingests.
 
 ---
 
@@ -59,7 +68,7 @@ aliases. League = ❌ no representation at all.
 
 ---
 
-## To-be architecture (server-side SQLite + API)
+## To-be architecture (server-side Postgres + API)
 
 ```
 ┌──────────────┐   HTTP/JSON    ┌───────────────────────────┐   SQL    ┌──────────────┐
@@ -76,28 +85,29 @@ aliases. League = ❌ no representation at all.
 
 **Component roles:**
 - **API server** — new `application/api/` (recommend **FastAPI + uvicorn**; Flask is a lighter
-  alternative — a swappable execution-time choice). Owns the read endpoints; runs SQL against SQLite;
+  alternative — a swappable execution-time choice). Owns the read endpoints; runs SQL against Postgres;
   performs the shaping/post-processing that currently lives in JS. Designed **auth-ready**: endpoints are
   structured so a later user/session layer can scope results to the logged-in user, but for the demo they
   serve the seeded leagues without auth. `viewer_roster_id` stands in for "the logged-in user's roster."
-- **SQLite DB** — the **serving store** (gitignored, lives in `application/data/`, like the parquet
-  today). Tables mirror the derived parquet schemas, indexed on filter columns (`as_of_week`, `week`,
-  `roster_id`, `sleeper_player_id`, and — after Stage B — `league_id`, `season`).
-- **SQLite loader** — new backend step that reads the derived parquet (compute-pipeline output) and writes
-  SQLite tables. This **replaces the hand-symlink publish step**.
+- **Postgres DB (Supabase-hosted)** — the **serving store**, reached via `DATABASE_URL` (the original plan
+  imagined a gitignored local file like the parquet; the store is now hosted). Tables mirror the derived
+  parquet schemas, indexed on filter columns (`as_of_week`, `week`, `roster_id`, `sleeper_player_id`, and
+  — after Stage B — `league_id`, `season`).
+- **Postgres loader** (`build_db.py`) — new backend step that reads the derived parquet (compute-pipeline
+  output) and writes Postgres tables. This **replaces the hand-symlink publish step**.
 - **Frontend `queries.js`** — becomes a thin **API client**: each loader does `fetch('/api/…')` and
   returns the same-shaped object it does today, so **the panels (`Players.jsx`, `Teams.jsx`, …) are
   unchanged**. `db.js`/DuckDB-WASM is **removed**.
 
 **Where the query logic goes (biggest Stage-A task):** the DuckDB SQL in `queries.js` moves **server-side
-to SQLite SQL**, and the JS post-processing (`optimalLineup`/`expandSlots` `:994`, `normalCdf`/`erf`
+to Postgres SQL**, and the JS post-processing (`optimalLineup`/`expandSlots` `:994`, `normalCdf`/`erf`
 `:1027`) moves to Python. Recommended: **port the SQL** (keeps the battle-tested query shape; apply a
 SQLite-dialect pass). *Execution-time options to weigh:* (a) re-express reads in **polars** over SQLite —
 aligns with the project's "polars + data_layer" non-negotiables but is a full rewrite; (b) as a
 risk-reducer, run the existing SQL via **server-side DuckDB attached to the SQLite file** first, then swap
 the dialect later — decouples "go client-server" from "change SQL dialect."
 
-**Why multi-league gets *simpler* here:** with a SQLite store, all slices live in **one DB keyed by
+**Why multi-league gets *simpler* here:** with a single server store, all slices live in **one DB keyed by
 `league_id`/`season`/`week`**. "Switch league" = an API parameter → a `WHERE league_id=? AND season=?`
 filter. No per-slice files, no catalog.json-as-static-asset, no in-browser re-registration. The "catalog"
 becomes a `GET /api/leagues` **endpoint** computed from the DB.
@@ -115,21 +125,22 @@ the Season selector shows all years and `(lineage, season)` resolves to the conc
 
 ## Migration plan — two stages, backend-first
 
-### STAGE A — Store migration (single-league; DuckDB-WASM → server SQLite + API)
+### STAGE A — Store migration (single-league; DuckDB-WASM → server Postgres + API)
 Goal: identical single-league app, new architecture. Ship before touching multi-league.
 
-- **A1 — API server skeleton + SQLite schema.** Scaffold `application/api/` (FastAPI + uvicorn). Define
-  SQLite tables mirroring the 13 derived datasets for the current slice; indexes on `as_of_week`/`week`/
-  `roster_id`/`sleeper_player_id`. Health endpoint + dev run target.
-- **A2 — SQLite loader (new publish seam).** New backend step (e.g.
-  `application/data/serve/build_sqlite.py`) reads the derived parquet for the current slice and writes the
-  SQLite tables. Replaces the hand symlinks. (DuckDB `COPY`/sqlite extension or polars→sqlite.)
-- **A3 — Port reads to server endpoints.** Move each `queries.js` loader's SQL to a FastAPI endpoint
-  running SQLite SQL; move JS post-processing (optimal lineup, CDF) to Python. Endpoints:
-  `/api/players`, `/api/players/{id}`, `/api/standings`, `/api/league`, `/api/teams/{rosterId}`,
-  `/api/managers/{rosterId}`, `/api/weeks`, `/api/league-meta`, `/api/matchups`,
-  `/api/matchups/{matchupId}` — each taking `as_of_week`. Apply the SQLite-dialect pass (window frames,
-  `QUALIFY`→subquery, date fns).
+- **A1 — API server skeleton + Postgres schema.** ✅ Sessions 1–2. Scaffold `application/api/` (FastAPI +
+  uvicorn). Define Postgres tables mirroring the 13 derived datasets for the current slice; indexes on
+  `as_of_week`/`week`/`roster_id`/`sleeper_player_id`. Health endpoint + dev run target.
+- **A2 — Postgres loader (new publish seam).** ✅ Session 2. `application/data/serve/build_db.py` reads the
+  derived parquet for the current slice and writes the Postgres tables (DROP+CREATE then `COPY` from polars
+  rows; idempotent). Replaces the hand symlinks.
+- **A3 — Port reads to server endpoints.** ◑ Players + Teams shipped Session 3 (`/api/players`,
+  `/api/players/{id}`, `/api/standings`, `/api/teams/{rosterId}`, `/api/managers/{rosterId}`, `/api/weeks`,
+  `/api/league-meta`); League + Matchups (`/api/league`, `/api/matchups`, `/api/matchups/{matchupId}`) +
+  the deferred team-detail `thisWeek` are Session 4. Move each `queries.js` loader's SQL to a FastAPI
+  endpoint running Postgres SQL; move JS post-processing (optimal lineup, CDF) to Python — each taking
+  `as_of_week`. The Postgres-dialect pass: `arg_max`→latest-non-null via `array_agg…FILTER`, `QUALIFY`→
+  `DISTINCT ON`/subquery, `any_value`→`max`, explicit `NULLS LAST`.
 - **A4 — Frontend becomes an API client.** Rewrite `queries.js` loaders as `fetch('/api/…')` returning the
   same shapes; **delete `db.js`/DuckDB-WASM** and its deps. Add a Vite dev proxy for `/api/*` → uvicorn;
   update `.claude/launch.json` to run **both** the API server and the Vite frontend.
@@ -148,7 +159,7 @@ during Stage A.
 - **B1 — Backend correctness (store-agnostic).** **Fix `schedule` to be league-scoped** — today
   `export_schedule.py` writes `derived/schedule_<season>.parquet` (league-agnostic) but it holds
   league-specific `roster_id`/`matchup_id`; two same-season leagues collide. Carry `league_id` on the
-  schedule (and confirm every derived dataset carries `league_id`+`season` so the SQLite loader can key
+  schedule (and confirm every derived dataset carries `league_id`+`season` so the Postgres loader can key
   them).
 - **B2 — Full-set compute for demo slices (store-agnostic; heaviest).** New batch driver
   `application/data/corpus/compute_demo_slices.py`, modeled on `compute_spine.py` (idempotent, resumable,
@@ -158,7 +169,7 @@ during Stage A.
   `compute_spine._compute_league`); (3) narrative/market (`compute_market_vor`, `compute_ros_league_view`,
   `compute_manager_features`); (4) AI (`ai/write_manager_dossiers`, `ai/write_ros_synthesis`). Validate
   with `check_spine`, `check_market_vor`, `check_manager_dossiers`, `check_ros_synthesis`.
-- **B3 — Load all slices + catalog endpoint.** Extend the SQLite loader to ingest all demo slices with
+- **B3 — Load all slices + catalog endpoint.** Extend the Postgres loader to ingest all demo slices with
   `league_id`+`season` columns. Add `GET /api/leagues` returning lineages → seasons →
   `{league_id, weeks_available, viewer_roster_id, panels}` (see contract below), grouped by
   `previous_league_id` lineage.
@@ -209,8 +220,9 @@ during Stage A.
 - **`ros_synthesis`** is an AI news read, sparse, 2026-only; it does **not** generalize historically.
   Recommend gating it off (`panels.ros_synthesis=false`) rather than fabricating it.
 - **AI reads** (`manager_dossiers`, `ros_synthesis`) cost API calls/time for ~10 slices — budget in B2.
-- **SQL dialect port** (A3) is the largest single risk; the DuckDB-attached-SQLite intermediate (above)
-  is the hedge.
+- **SQL dialect port** (A3) is the largest single risk (`arg_max`/`QUALIFY`/`any_value` → Postgres).
+  Session 3 hedged it with a **duckdb-replay byte-parity oracle** (run the verbatim `queries.js` SQL
+  against the parquet, diff every field vs the endpoint) rather than the DuckDB-attached intermediate.
 
 ---
 
@@ -218,13 +230,13 @@ during Stage A.
 
 **Create**
 - `application/api/` — FastAPI app: `main.py` + route modules mirroring the loaders (A1/A3; params in B4).
-- `application/data/serve/build_sqlite.py` — parquet → SQLite loader / new publish seam (A2; multi-slice
-  in B3).
+- `application/data/serve/build_db.py` — parquet → Postgres loader / new publish seam (A2, shipped;
+  multi-slice in B3).
 - `application/data/corpus/compute_demo_slices.py` — full-set batch driver (B2; models `compute_spine.py`).
 
 **Modify — backend**
 - `application/data/transforms/export_schedule.py` + `data_layer.py` — league-scope `schedule` (B1).
-- `application/data/data_layer.py` — SQLite/serve helpers; `demo` cohort + `viewer_roster_id` on
+- `application/data/data_layer.py` — Postgres/serve helpers; `demo` cohort + `viewer_roster_id` on
   `leagues.parquet` (B0); ensure `league_id`+`season` on all derived reads.
 - `application/data/transforms/compute_market_vor.py` (+ `check_market_vor.py`) — historical strategy, if
   chosen (B2).

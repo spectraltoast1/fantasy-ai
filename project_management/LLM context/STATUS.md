@@ -1,34 +1,45 @@
 # STATUS
 
-## STORE MIGRATION TRACK — Session 2 SHIPPED (2026-07-24): Postgres schema + parquet→PG loader
+## STORE MIGRATION TRACK — Session 3 SHIPPED (2026-07-24): Players + Teams read endpoints
 
 > This section is the **store-migration track** (DuckDB-WASM → server store + API), driven by
 > `scope docs/future work/MULTI_LEAGUE_STORE_MIGRATION.md` and the `SESSION_N_*.md` runbooks. It is a
 > **separate line of work** from the engine-improvement track (Sessions 1–9) that makes up the rest of
 > this file.
 
-**Session 2 — what shipped (schema + loader; still no app/frontend/pipeline change, one league/one slice):**
-- **Durable secret:** `DATABASE_URL` now lives in `application/config.py` (the gitignored secret home that
-  `worktree-setup.sh` already symlinks → survives every future worktree, no script change). `api/db.py`
-  resolves env-var first (Fly, unchanged) then falls back to `config.py`, via a shared `database_url()` the
-  loader reuses. Replaces Session 1's `.env`, which died with its worktree.
-- **Schema:** `application/data/serve/schema.sql` — **13 Postgres tables** mirroring the frontend's published
-  parquet (`db.js`), generated from the parquet schemas. `league_id` on every table; `season` ensured on
-  every table (added where the parquet lacks it — teams/lineup_slots/league_settings/player_signal/schedule);
-  indexes on the real filter cols (`as_of_week`/`week`/`roster_id`/`sleeper_player_id`/`position`/…) +
-  `(league_id, season)`. `ros_synthesis.headlines`→**JSONB**; `disagreement_ppr` (all-null)→explicit DOUBLE
-  PRECISION; `season.fetched_at`→TIMESTAMP.
-- **Loader:** `application/data/serve/build_db.py` (own `serve/.venv`: polars+psycopg[binary]) reads the exact
-  `frontend/public/data/*.parquet` and applies schema.sql (DROP+CREATE) then COPYs each table — **idempotent**,
-  the new publish seam replacing hand-symlinks. `--emit` regenerates schema.sql + `MANIFEST.md`; `--load`;
-  `--verify`.
-- **Loaded + verified against Supabase:** all **13 row counts match** source parquet (season 594, market_vor
-  5643, projection_consensus 6100, player_signal 650, production_vor 635, …); single `league_id` per table;
-  `ros_synthesis`=2026, rest 2025; numeric aggregate sums match parquet exactly. The DB now returns real rows;
-  the app still runs the old DuckDB-WASM way (that switch is Session 5).
+**Session 3 — what shipped (7 read endpoints; still no frontend change — the swap is Session 5):**
+- **First feature endpoints under `/api`** in `application/api/` (routers, not just health): `GET /api/weeks`,
+  `/api/league-meta`, `/api/players`, `/api/players/{sleeperId}`, `/api/standings`, `/api/teams/{rosterId}`,
+  `/api/managers/{rosterId}`. Each returns the **exact shape** of its `queries.js` loader (the Session-5
+  contract). Week-scoped ones take `?as_of_week=N`, default latest.
+- **New modules mirror the `queries.js` seam:** `reads.py` (one fn per panel, SQL + assembly), `calcs.py`
+  (Python mirror of `posture.js` + the JS helpers — `series_read`, `derive_posture`, `round1`/`js_round` as JS
+  `Math.round` not banker's rounding, `SHAPE_LABEL`, `TRADE_GAP_T`), `settings.py` (`my_username()`/`league_id()`
+  env→`config.py` seam, same precedence as `database_url()`), `routes.py` (`APIRouter(/api)`). `db.py` gained
+  `connect()`/`fetch_all()` (dict-row psycopg, parameterized — no string-built SQL).
+- **DuckDB→Postgres dialect port:** `arg_max(col, week)` → latest **non-null** per column via
+  `(array_agg(col ORDER BY week DESC) FILTER (WHERE col IS NOT NULL))[1]` (DISTINCT ON mishandles a null team
+  in the newest week); `QUALIFY` → `DISTINCT ON`; `any_value` → `max`; `ORDER BY vor DESC NULLS LAST` +
+  `sleeper_player_id` tiebreak. Every query league-scoped (Stage-B seam, no-op today).
+- **Deferred (decision):** team-detail **`thisWeek`** returns `null` — its projection/win-prob chain is
+  Session 4's core; Session 4 must fill it before the Session-5 swap. `MY_USERNAME` semantics unchanged; the
+  `projection_consensus *_ppr` wart left alone (Stage B).
+- **Verified byte-parity vs the app's own DuckDB path:** a duckdb-replay oracle ran the *verbatim* `queries.js`
+  SQL against the parquet and diffed every field of all 7 endpoints — players (wk 4/2), weeks, league-meta
+  (incl. latest), 9 player cards ×2 wks, standings (10 teams incl. rank, wk 4/2/latest), team detail (10 teams
+  ×2 wks incl. depth rank + roster split + deferred thisWeek), managers (10 rosters), + unknown/missing edges.
+  Endpoints verified locally against the live Supabase DB; **not deployed to Fly this session** (deploy lands
+  with the Session-5 frontend swap — will need `MY_USERNAME`/`LEAGUE_ID` Fly secrets + the Dockerfile COPY,
+  already updated).
 
-**NEXT — Session 3:** port the first read endpoints (**Players + Teams**) from the browser DuckDB SQL in
-`queries.js` to FastAPI/Postgres endpoints backed by these tables (`MULTI_LEAGUE_STORE_MIGRATION.md` A3).
+**NEXT — Session 4:** port the **League + Matchups** endpoints **and** build the deferred team-detail
+`thisWeek` projection/win-prob chain (`teamMatchupSummary` → `optimalLineup`, `projection_consensus`, μ/σ +
+`normalCdf`), before the Session-5 frontend swap. (`MULTI_LEAGUE_STORE_MIGRATION.md` A3→A4.)
+
+**Prior — Session 2 SHIPPED (2026-07-24): Postgres schema (13 tables) + parquet→PG loader.** Durable
+`DATABASE_URL` in `config.py` (env-first, config fallback); `schema.sql` + `build_db.py` (`--emit/--load/--verify`,
+idempotent) load the exact `frontend/public/data/*.parquet` into Supabase; all 13 row counts + numeric sums
+match; RLS enabled/no policies. The DB returns real rows; the app still runs the old DuckDB-WASM way.
 
 **Prior — Session 1 SHIPPED (2026-07-24): Fly ↔ Supabase foundation.** Minimal FastAPI skeleton at
 `application/api/` (`/health` liveness + `/health/db` `SELECT 1`), deployed to Fly app **`fantasy-ai-api`**
