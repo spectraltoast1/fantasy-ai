@@ -1,11 +1,65 @@
 # STATUS
 
-## STORE MIGRATION TRACK — Session 6 SHIPPED (2026-07-25): STAGE A COMPLETE — the app is LIVE
+## STORE MIGRATION TRACK — Stage B B0+B1 SHIPPED (2026-07-25): schedule league-scoped + demo slate recorded
 
 > This section is the **store-migration track** (DuckDB-WASM → server store + API), driven by
 > `scope docs/future work/MULTI_LEAGUE_STORE_MIGRATION.md` and the `SESSION_N_*.md` runbooks. It is a
 > **separate line of work** from the engine-improvement track (Sessions 1–9) that makes up the rest of
 > this file.
+
+**Stage B B0 + B1 — what shipped (2026-07-25, one combined worktree, 3 commits).** The two store-agnostic,
+no-dependency Stage-B sessions that must land before B2 (compute) and B3 (load + catalog). Both are
+offline-pipeline changes — **the live app and the production DB were not touched** (B3 owns the multi-slice
+reload). Ran B1 first, then B0. (`MULTI_LEAGUE_STORE_MIGRATION.md` B0 + B1.)
+
+- **B1 — `schedule` league-scoped (correctness fix before the multi-league data exists).** `schedule` was
+  the lone derived dataset stored league-agnostically (`derived/schedule_<season>.parquet`, cols
+  `week/roster_id/matchup_id`, **no `league_id`**), yet `roster_id`/`matchup_id` are only unique *within* a
+  league — so two same-season slices would silently overwrite each other. Fixed the producer to mirror the
+  L0 keying of every other derived read: `data_layer` schedule accessors now take `*, league_id=None` and
+  route via `_league_dir` → **`derived/league/<league_id>/schedule_<season>.parquet`**, and
+  `export_schedule.py` stamps a `league_id` column. **Parity proven:** regenerating the is_mine 2025 schedule
+  yields byte-identical `week→matchup_id→roster_id` pairings (180 rows) to the published
+  `frontend/public/data/schedule_2025.parquet`. **No-collision proven:** exporting is_mine 2025 (180 rows /
+  10 rosters) + `trap` 2025 `1207735666645946368` (216 rows / 12 rosters) writes two separate files in two
+  league dirs — the old bug would have clobbered them at one root path.
+  - **Keyability sweep (all 13 B3-ingested datasets attributable):** 11 are league-path
+    (`season, teams, lineup_slots, league_settings, player_signal, production_vor, market_vor, ros_synthesis,
+    bracket_odds, positional_depth, manager_dossiers`); `projection_consensus` is scoring-keyed
+    (`derived/scoring/<key>/`, legitimate, not a bug); `schedule` was the only NFL-global gap — now fixed. No
+    other gaps.
+  - **⚠ B3 HANDOFF:** the B3 loader must read `schedule` from the **new** `derived/league/<id>/schedule_<season>.parquet`
+    (+ its `league_id` column), NOT the old `derived/schedule_<season>.parquet` root. B1 deliberately left the
+    old root file + the `frontend/public/data/schedule_2025.parquet` symlink untouched (so this session's
+    serve/publish surface is unchanged); B3 repoints the loader/symlink and can retire the old root file.
+
+- **B0 — recorded the locked 12-lineage / 31-slice demo slate (`demo_manifest.parquet`).** Data-modeling only.
+  New `application/data/corpus/build_demo_manifest.py` (idempotent) reads the committed
+  `application/data/corpus/demo_slate.csv` and writes `snapshots/demo_manifest.parquet` (31 rows) via new
+  additive `data_layer` accessors (`read/write/demo_manifest`, `_DEMO_MANIFEST_COLS`). Chose a **separate
+  manifest** over widening `leagues.parquet` (whose `write_leagues` enforces a fixed 7-col schema). Per slice:
+  a root-keyed **`lineage_id`** (walks `previous_league_id` to the chain root — stable as the demo grows,
+  globally unique; note 4 lineages — `bgb/ypfl/nbl/rost` — have discovered ancestors *earlier* than their
+  earliest demo season, so "earliest demo season" would NOT have been a stable key), a pinned
+  **`viewer_roster_id`**, and the **panel policy** (`panels_manager` ON for all 31; `panels_market` +
+  `panels_ros` ON only for the live is_mine 2025 slice). Verified clean: all 31 resolve, every raw harvest
+  present, chains group per lineage (gap-tolerant — `dysf` skips 2023), read-back schema exact, re-run
+  byte-identical. The parquet is generated runtime (gitignored under `snapshots/`, like `leagues.parquet`);
+  the builder + CSV are the version-controlled deliverables.
+  - **Viewer policy:** is_mine lineage → `config.SLEEPER_USERNAME`'s roster per season; corpus lineage → the
+    owner most-tenured across the lineage's seasons (tie → lowest owner_id), resolved per season. These are
+    **provisional-but-valid** (the "mid-table for interesting buy/sell reads" refinement needs standings from
+    B2 — a post-B2 polish, per the brief).
+  - **⚠ FLAG for Will:** the B0 brief's parenthetical "lorp viewer `roster_id` 7 in 2025" is a slip. The data
+    (and the S6 live app — Tet Lasso was `rosterId` 8) resolve `spectraltoast1` to **`roster_id` 8** in both
+    lorp seasons; the manifest records 8.
+
+**NEXT — B2 (full-set compute for the demo slices; the heaviest Stage-B session).** Needs both B0's slate
+(`demo_manifest.parquet`) and B1's fix. New `compute_demo_slices.py` modeled on `compute_spine.py`: per
+`(league_id, season)` build scoring-keyed substrate → spine → narrative/market → AI (dossiers), honoring the
+panel policy (compute market/ros only where flagged). Then B3 loads all slices + adds `GET /api/leagues`.
+
+---
 
 **Session 6 — what shipped (STAGE A COMPLETE — the app is a real website): parity sign-off + go-live.**
 The server-backed stack (Sessions 1–5) is now **deployed and live** at **https://fantasy-ai-api.fly.dev/** —
