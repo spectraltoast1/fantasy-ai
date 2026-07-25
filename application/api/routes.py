@@ -32,3 +32,19 @@ def players(as_of_week: int | None = None) -> list[dict]:
 @router.get("/players/{sleeper_id}")
 def player_card(sleeper_id: str, as_of_week: int | None = None) -> dict:
     return reads.load_player_card(sleeper_id, as_of_week)
+
+
+@router.get("/standings")
+def standings(as_of_week: int | None = None) -> list[dict]:
+    return reads.load_standings(as_of_week)
+
+
+@router.get("/teams/{roster_id}")
+def team_detail(roster_id: int, as_of_week: int | None = None):
+    # Returns null (200) for an unknown roster, matching loadTeamDetail's shape.
+    return reads.load_team_detail(roster_id, as_of_week)
+
+
+@router.get("/managers/{roster_id}")
+def manager_dossier(roster_id: int) -> dict:
+    return reads.load_manager_dossier(roster_id)

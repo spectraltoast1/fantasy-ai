@@ -62,6 +62,14 @@ def num(v):
     return None if v is None else float(v)
 
 
+def js_round(x: float) -> int:
+    """JS ``Math.round(x)`` — round half *up* (toward +inf). NOT Python's ``round()``.
+
+    Used for the standings/team-detail ``avg_seed`` (Math.round). Seeds are positive.
+    """
+    return math.floor(x + 0.5)
+
+
 def round1(n: float) -> float:
     """JS ``Math.round(n * 10) / 10`` — round half *up*.
 

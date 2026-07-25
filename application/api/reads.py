@@ -352,3 +352,311 @@ def load_player_card(sleeper_id, as_of_week=None) -> dict:
         "opportunity": opportunity,
         "ros": ros,
     }
+
+
+# ---------------------------------------------------------------------------
+# Teams tab — the standings table + team detail + manager dossier.
+# ---------------------------------------------------------------------------
+
+# One row per (team, week): total points + W/L, weeks <= N. Feeds the real record and the
+# all-play "true record". any_value(col) -> max(col) (the value is constant per team-week).
+def _sql_standings_weeks(n):
+    return (
+        "SELECT roster_id, week, max(roster_total_points) AS pts, max(matchup_result) AS result "
+        "FROM season WHERE league_id = %(lid)s AND " + _week_cutoff(n) +
+        " GROUP BY roster_id, week"
+    )
+
+
+def _all_play_record(by_week, rid):
+    """all-play W/L for one roster: its weekly pts vs every *other* team. queries.js l.496-505."""
+    ap = {"w": 0, "l": 0}
+    for rows in by_week.values():
+        mine = next((x for x in rows if x["rosterId"] == rid), None)
+        if mine is None:
+            continue
+        for b in rows:
+            if b["rosterId"] == rid:
+                continue
+            if mine["pts"] > b["pts"]:
+                ap["w"] += 1
+            elif mine["pts"] < b["pts"]:
+                ap["l"] += 1
+    return ap
+
+
+def load_standings(as_of_week=None) -> list[dict]:
+    """The Teams standings: record + all-play + playoff odds/series + posture. Mirrors loadStandings (l.278)."""
+    p = _params(as_of_week)
+    me = settings.my_username()
+    with db.connect() as conn:
+        def q(sql):
+            with conn.cursor() as cur:
+                cur.execute(sql, p)
+                return cur.fetchall()
+
+        team_weeks = q(_sql_standings_weeks(as_of_week))
+        odds_rows = q(
+            "SELECT as_of_week, roster_id, playoff_odds, avg_seed, magic_wins, remaining_games "
+            "FROM bracket_odds WHERE league_id = %(lid)s AND " + _le_cutoff(as_of_week) +
+            " ORDER BY roster_id, as_of_week"
+        )
+        team_rows = q("SELECT roster_id, team_name, owner_name FROM teams WHERE league_id = %(lid)s")
+
+    # Records + all-play, from the team-week scores (insertion order = first-seen roster order).
+    by_week: dict[int, list] = {}
+    record: dict[int, dict] = {}
+    for r in team_weeks:
+        rid = int(r["roster_id"])
+        row = {"rosterId": rid, "pts": float(r["pts"]), "result": r["result"]}
+        by_week.setdefault(int(r["week"]), []).append(row)
+        rec = record.setdefault(rid, {"w": 0, "l": 0})
+        if row["result"] == "W":
+            rec["w"] += 1
+        elif row["result"] == "L":
+            rec["l"] += 1
+
+    all_play: dict[int, dict] = {}
+    for rows in by_week.values():
+        for a in rows:
+            rec = all_play.setdefault(a["rosterId"], {"w": 0, "l": 0})
+            for b in rows:
+                if b["rosterId"] == a["rosterId"]:
+                    continue
+                if a["pts"] > b["pts"]:
+                    rec["w"] += 1
+                elif a["pts"] < b["pts"]:
+                    rec["l"] += 1
+
+    # Odds: the weekly playoff-odds series (x100) + the latest slice (rows ordered by as_of_week).
+    odds_by_team: dict[int, dict] = {}
+    for r in odds_rows:
+        rid = int(r["roster_id"])
+        o = odds_by_team.setdefault(rid, {"series": [], "last": None})
+        o["series"].append(float(r["playoff_odds"]) * 100)
+        o["last"] = r
+
+    name_of = {int(t["roster_id"]): t for t in team_rows}
+
+    out = []
+    for rid in all_play:  # Object.keys(allPlay) order = first-seen roster order
+        t = name_of.get(rid)
+        o = odds_by_team.get(rid)
+        ap = all_play[rid]
+        rec = record.get(rid, {"w": 0, "l": 0})
+        last = o["last"] if o else None
+        playoff_pct = float(last["playoff_odds"]) * 100 if last and last["playoff_odds"] is not None else None
+        all_play_pct = (ap["w"] / (ap["w"] + ap["l"])) * 100 if (ap["w"] + ap["l"]) else 0
+        out.append({
+            "rosterId": rid,
+            "name": (t["team_name"] or t["owner_name"] or f"Team {rid}") if t else f"Team {rid}",
+            "owner": t["owner_name"] if t else None,
+            "isMe": (t["owner_name"] == me) if t else False,
+            "wins": rec["w"],
+            "losses": rec["l"],
+            "allPlayW": ap["w"],
+            "allPlayL": ap["l"],
+            "playoffPct": playoff_pct,
+            "allPlayPct": all_play_pct,
+            "seed": calcs.js_round(float(last["avg_seed"])) if last and last["avg_seed"] is not None else None,
+            "magicWins": int(last["magic_wins"]) if last and last["magic_wins"] is not None else None,
+            "remainingGames": int(last["remaining_games"]) if last and last["remaining_games"] is not None else None,
+            "oddsSeries": o["series"] if o else [],
+            "posture": calcs.derive_posture(playoff_pct, all_play_pct) if playoff_pct is not None else None,
+        })
+
+    # Rank by playoff odds desc (nulls -> -1), then all-play % as the tiebreak.
+    out.sort(key=lambda r: (r["playoffPct"] if r["playoffPct"] is not None else -1, r["allPlayPct"]), reverse=True)
+    for i, r in enumerate(out):
+        r["rank"] = i + 1
+    return out
+
+
+def load_team_detail(roster_id, as_of_week=None):
+    """Team detail: stat blocks, positional depth, roster split. Mirrors loadTeamDetail (l.448).
+
+    NOTE: the ``thisWeek`` projection/win-prob bar is DEFERRED to Session 4 (it needs the whole
+    Matchups chain). Returned as ``None`` here so the shape stays stable; Session 4 fills it in
+    before the Session-5 frontend swap.
+    """
+    rid = int(roster_id)
+    p = _params(as_of_week, rid=rid)
+    prod_cutoff = "TRUE" if as_of_week is None else "as_of_week <= %(n)s"
+    me = settings.my_username()
+
+    with db.connect() as conn:
+        def q(sql):
+            with conn.cursor() as cur:
+                cur.execute(sql, p)
+                return cur.fetchall()
+
+        team_weeks = q(_sql_standings_weeks(as_of_week))
+        odds_rows = q(
+            "SELECT playoff_odds, avg_seed FROM bracket_odds "
+            "WHERE league_id = %(lid)s AND roster_id = %(rid)s AND " + _as_of_slice("bracket_odds", as_of_week)
+        )
+        # positional_depth is LEAGUE-WIDE here (all rosters) — needed for the per-position rank.
+        depth_rows = q(
+            "SELECT roster_id, position, starter_value, surplus_value, marginal_vor, spectrum_pos, shape "
+            "FROM positional_depth WHERE league_id = %(lid)s AND " + _as_of_slice("positional_depth", as_of_week)
+        )
+        roster_rows = q(
+            "WITH latest AS ("
+            "  SELECT sleeper_player_id,"
+            f"    {_latest('roster_id')} AS roster_id, {_latest('is_starter')} AS is_starter,"
+            f"    {_latest('player_display_name')} AS name, {_latest('position')} AS position,"
+            f"    {_latest('team')} AS nfl_team"
+            "  FROM season"
+            "  WHERE league_id = %(lid)s AND position IN ('QB','RB','WR','TE') AND " + _week_cutoff(as_of_week) +
+            "  GROUP BY sleeper_player_id"
+            ") SELECT * FROM latest WHERE roster_id = %(rid)s ORDER BY sleeper_player_id"
+        )
+        prod_rows = q(
+            "SELECT sleeper_player_id, as_of_week, vor FROM production_vor "
+            "WHERE league_id = %(lid)s AND roster_id = %(rid)s AND " + prod_cutoff +
+            " ORDER BY sleeper_player_id, as_of_week"
+        )
+        mkt_rows = q(
+            "SELECT sleeper_player_id, snapshot_date, market_vor FROM market_vor "
+            "WHERE league_id = %(lid)s AND roster_id = %(rid)s ORDER BY sleeper_player_id, snapshot_date"
+        )
+        team_rows = q("SELECT roster_id, team_name, owner_name FROM teams WHERE league_id = %(lid)s")
+
+    # Identity / "you".
+    team_by_id = {}
+    my_roster_id = None
+    for t in team_rows:
+        team_by_id[int(t["roster_id"])] = t
+        if t["owner_name"] == me:
+            my_roster_id = int(t["roster_id"])
+    me_team = team_by_id.get(rid)
+    if me_team is None and not roster_rows:
+        return None
+
+    # Record + all-play + points-for, from the team-week scores.
+    by_week: dict[int, list] = {}
+    for r in team_weeks:
+        by_week.setdefault(int(r["week"]), []).append(
+            {"rosterId": int(r["roster_id"]), "pts": float(r["pts"]), "result": r["result"]}
+        )
+    w = l = 0
+    pts_for = 0.0
+    games = 0
+    for rows in by_week.values():
+        mine = next((x for x in rows if x["rosterId"] == rid), None)
+        if mine is None:
+            continue
+        games += 1
+        pts_for += mine["pts"]
+        if mine["result"] == "W":
+            w += 1
+        elif mine["result"] == "L":
+            l += 1
+    ap = _all_play_record(by_week, rid)
+
+    odds = odds_rows[0] if odds_rows else None
+    stats = {
+        "record": f"{w}-{l}",
+        "trueRec": f"{ap['w']}-{ap['l']}",
+        "playoffPct": float(odds["playoff_odds"]) * 100 if odds and odds["playoff_odds"] is not None else None,
+        "seed": calcs.js_round(float(odds["avg_seed"])) if odds and odds["avg_seed"] is not None else None,
+        "ptsWk": calcs.round1(pts_for / games) if games else None,
+    }
+
+    # Positional depth per position, with league rank (by starter_value) + the shape chip.
+    by_pos: dict[str, list] = {}
+    for d in depth_rows:
+        by_pos.setdefault(d["position"], []).append(d)
+    depth = []
+    for pos in POS:
+        allp = sorted(by_pos.get(pos, []), key=lambda d: float(d["starter_value"]), reverse=True)
+        idx = next((i for i, d in enumerate(allp) if int(d["roster_id"]) == rid), -1)
+        if idx < 0:
+            continue
+        d = allp[idx]
+        depth.append({
+            "position": pos,
+            "starterValue": float(d["starter_value"]),
+            "surplusValue": float(d["surplus_value"]),
+            "marginalVor": float(d["marginal_vor"]),
+            "spectrumPos": float(d["spectrum_pos"]),
+            "shape": calcs.SHAPE_LABEL.get(d["shape"], d["shape"]),
+            "rank": idx + 1,
+            "nTeams": len(allp),
+        })
+
+    # Per-player VOR series, keyed by sleeper_player_id.
+    prod_by: dict[str, list] = {}
+    for r in prod_rows:
+        prod_by.setdefault(r["sleeper_player_id"], []).append(float(r["vor"]))
+    mkt_by: dict[str, list] = {}
+    for r in mkt_rows:
+        mkt_by.setdefault(r["sleeper_player_id"], []).append(float(r["market_vor"]))
+
+    players = [
+        {
+            "sleeperId": pr["sleeper_player_id"],
+            "name": pr["name"],
+            "pos": pr["position"],
+            "nflTeam": pr["nfl_team"] if pr["nfl_team"] is not None else None,
+            "isStarter": bool(pr["is_starter"]),
+            "prod": calcs.series_read(prod_by.get(pr["sleeper_player_id"], [])),
+            "mkt": calcs.series_read(mkt_by.get(pr["sleeper_player_id"], [])),
+        }
+        for pr in roster_rows
+    ]
+
+    def by_value(pl):
+        return sorted(
+            pl,
+            key=lambda x: x["prod"]["value"] if x["prod"]["value"] is not None else float("-inf"),
+            reverse=True,
+        )
+
+    starters = by_value([pp for pp in players if pp["isStarter"]])
+    bench = by_value([pp for pp in players if not pp["isStarter"]])
+
+    return {
+        "rosterId": rid,
+        "name": (me_team["team_name"] or me_team["owner_name"] or f"Team {rid}") if me_team else f"Team {rid}",
+        "owner": me_team["owner_name"] if me_team else None,
+        "onYours": rid == my_roster_id,
+        "stats": stats,
+        "thisWeek": None,  # TODO(Session 4): the projection/win-prob chain (teamMatchupSummary)
+        "depth": depth,
+        "roster": {"starters": starters, "bench": bench},
+    }
+
+
+def load_manager_dossier(roster_id) -> dict:
+    """The Manager Dossier for one roster — a clean 1:1 passthrough. Mirrors loadManagerDossier (l.583)."""
+    rows = db.fetch_all(
+        "SELECT owner_name, team_name, headline, waiver_faab, trade_tendency, positional_lean,"
+        "       roster_construction, edge_or_blindspot, confidence_note, depth_tier,"
+        "       n_leagues, n_seasons, n_transactions, is_zero_signal, model, generated_at "
+        "FROM manager_dossiers WHERE league_id = %(lid)s AND roster_id = %(rid)s",
+        _params(rid=int(roster_id)),
+    )
+    d = rows[0] if rows else None
+    if not d:
+        return {"missing": True}
+    return {
+        "owner": d["owner_name"],
+        "teamName": d["team_name"] or d["owner_name"],
+        "isZeroSignal": bool(d["is_zero_signal"]),
+        "headline": d["headline"],
+        "tendencies": {
+            "waiverFaab": d["waiver_faab"],
+            "tradeTendency": d["trade_tendency"],
+            "positionalLean": d["positional_lean"],
+            "rosterConstruction": d["roster_construction"],
+            "edgeOrBlindspot": d["edge_or_blindspot"],
+        },
+        "depthTier": d["depth_tier"],
+        "nLeagues": int(d["n_leagues"]),
+        "nSeasons": int(d["n_seasons"]),
+        "nTransactions": int(d["n_transactions"]),
+        "confidenceNote": d["confidence_note"],
+        "model": d["model"],
+        "generatedAt": d["generated_at"],
+    }
