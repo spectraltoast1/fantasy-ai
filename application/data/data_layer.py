@@ -430,24 +430,32 @@ def read_season_matchups(season: int, through_week: int = 18, *, league_id=None)
 # is a forward slate (as-of week N shows week N+1 pairings with *projected* totals); the pairings are
 # known in advance, but their scores are the future the season replay is pretending not to know.
 # Feeds queries.loadMatchups. Written by transforms/export_schedule.py.
+#
+# League-scoped (L0 keying, Stage-B B1): `roster_id`/`matchup_id` are only unique *within* a league,
+# so the schedule lives under `derived/league/<league_id>/` and carries a `league_id` column — like
+# every other league-scoped derived read. (Before B1 it sat league-agnostically at the `derived/` root,
+# so two same-season leagues would overwrite each other.) Defaults to the is_mine league of the season.
 
-def _schedule_path(season: int) -> Path:
-    return _SNAPSHOT_DIR / "derived" / f"schedule_{season}.parquet"
+def _schedule_path(season: int, league_id) -> Path:
+    return _league_dir(league_id) / f"schedule_{season}.parquet"
 
 
-def write_schedule(df: pl.DataFrame, season: int) -> None:
-    """Write the pairing-only schedule for a season (overwrite)."""
-    path = _schedule_path(season)
+def write_schedule(df: pl.DataFrame, season: int, *, league_id=None) -> None:
+    """Write the pairing-only schedule for a league season (overwrite)."""
+    league_id = league_id or _active_league(season)[0]
+    path = _schedule_path(season, league_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path)
 
 
-def read_schedule(season: int) -> pl.DataFrame:
-    return pl.read_parquet(_schedule_path(season))
+def read_schedule(season: int, *, league_id=None) -> pl.DataFrame:
+    league_id = league_id or _active_league(season)[0]
+    return pl.read_parquet(_schedule_path(season, league_id))
 
 
-def schedule_exists(season: int) -> bool:
-    return _schedule_path(season).exists()
+def schedule_exists(season: int, *, league_id=None) -> bool:
+    league_id = league_id or _active_league(season)[0]
+    return _schedule_path(season, league_id).exists()
 
 
 # --- Sleeper Transactions ---
