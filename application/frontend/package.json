@@ -5,16 +5,18 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "api": "cd ../.. && application/api/.venv/bin/python -m uvicorn application.api.main:app --port 8000",
+    "dev:full": "concurrently -k -n api,web -c blue,green \"npm run api\" \"npm run dev\"",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
-    "@duckdb/duckdb-wasm": "^1.29.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^10.0.4",
     "vite": "^6.0.7"
   }
 }

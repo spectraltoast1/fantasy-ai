@@ -1,14 +1,52 @@
 # STATUS
 
-## STORE MIGRATION TRACK — Session 4 SHIPPED (2026-07-25): League + Matchups endpoints + team-detail thisWeek
+## STORE MIGRATION TRACK — Session 5 SHIPPED (2026-07-25): frontend becomes an API client
 
 > This section is the **store-migration track** (DuckDB-WASM → server store + API), driven by
 > `scope docs/future work/MULTI_LEAGUE_STORE_MIGRATION.md` and the `SESSION_N_*.md` runbooks. It is a
 > **separate line of work** from the engine-improvement track (Sessions 1–9) that makes up the rest of
 > this file.
 
-**Session 4 — what shipped (League + Matchups reads + the deferred `thisWeek` chain ported to
-FastAPI/Postgres; still no frontend change — that's Session 5):**
+**Session 5 — what shipped (the first *visible* milestone — the app now runs off the API, not in-browser
+DuckDB; it looks identical to before):**
+- **`queries.js` is now a thin API client** (~50 lines, down from ~1000): keeps `export const POS`, adds
+  an `apiGet(path, params)` helper (builds the query string, **omits `as_of_week` when null** so the server
+  applies its "latest week" default, throws on `!res.ok` like the old `query()`, returns `res.json()`), and
+  the 11 loaders become one-line `fetch('/api/…')` calls with **unchanged names/params/return shapes**. All
+  the DuckDB SQL, `MY_USERNAME`, and the JS calc/engine helpers are gone. **No view file was touched.**
+- **DuckDB-WASM deleted:** `src/db.js` and `src/posture.js` removed (posture is computed server-side in
+  `reads.load_standings` and arrives as the `t.posture` field); `@duckdb/duckdb-wasm` uninstalled from
+  `package.json` + the lockfile. Grep confirms no `db.js`/`posture`/`duckdb`/`.parquet`/`MY_USERNAME` refs
+  remain in `src` (the surviving `posture` hits read the endpoint's `t.posture` field).
+- **Dev wiring:** `vite.config.js` gains `server.proxy` `/api` → `http://localhost:8000` (same-origin in
+  dev, no CORS — the deployed cross-origin story is Session 6) and drops the dead DuckDB
+  `optimizeDeps`/`esnext` bits. `package.json` gains `api` + `dev:full` scripts and the `concurrently`
+  devDep so one command runs API + frontend together; the gitignored main-local `.claude/launch.json` is
+  repointed to `dev:full` (port 5173, the frontend; uvicorn on 8000). Local uvicorn reads `config.py`, so no
+  Fly secrets are needed to run.
+- **Verification — GREEN (ran the app for real, from the worktree).** API + frontend up together via
+  `dev:full`; clicked every tab at the latest week **and** an earlier week (Players, Matchups + matchup
+  detail, League + positional talent, Teams standings, team detail incl. the **`thisWeek` bar**). Confirmed:
+  every surface renders as before with numbers matching the Session-4 ground truth (Matchups 128.5/57% &
+  124.4/43%; team-detail `thisWeek` 74%/126.4 vs 26%/111.8; standings 87%/17-10); the network tab shows only
+  `/api/*` **200 JSON with NO `.parquet` and no DuckDB worker**; the console is clean; and the week selector
+  re-scopes every surface (`as_of_week` 4→3 across the calls, and omitted → latest on first load).
+- **No null-policy work (deliberate):** current data has zero nulls in rendered columns, so parity holds
+  as-is; adopting `projections._num` across the older reads is a **Stage-B prerequisite** (only matters once
+  multi-league/historical data introduces nulls), not part of the swap. No Stage-B work: `MY_USERNAME`
+  semantics unchanged server-side; no league/season selectors.
+
+**NEXT — Session 6:** parity sign-off + **go-live**. Deploy the app; set `LEAGUE_ID` + `MY_USERNAME` as Fly
+secrets alongside `DATABASE_URL`; decide the **frontend hosting + cross-origin/CORS** story (the dev Vite
+proxy is dev-only — the deployed static frontend calls the API cross-origin). Confirm the deployed `/api/*`
+return real rows (the live Fly app still serves the Session-1 skeleton). Then Stage B (multi-league).
+(`MULTI_LEAGUE_STORE_MIGRATION.md` A4 → go-live.) *A user-greenlit **deprecation inventory** (parquet
+artifacts / the pipeline that builds them / other now-unused bits) was compiled this session as a separate
+report — several items are backend-still-needed traps (the loader COPYs the same parquet), so nothing was
+removed; see that report before any broader cleanup.*
+
+**Prior — Session 4 SHIPPED (2026-07-25): League + Matchups endpoints + team-detail thisWeek
+(League + Matchups reads + the deferred `thisWeek` chain ported to FastAPI/Postgres):**
 - **The shared projection/win-prob engine (`application/api/projections.py`), built ONCE** and called by
   three surfaces: `expand_slots` (most-constrained slot first), `optimal_lineup` (greedy, strict `>` so
   first-seen wins ties), `team_projections` (roster-as-of-N × `projection_consensus WHERE week=N+1` → **μ =
@@ -43,13 +81,6 @@ FastAPI/Postgres; still no frontend change — that's Session 5):**
   quantiles. Endpoints local-only (not deployed to Fly this session).
 - **Seam held:** `MY_USERNAME`/`isMe` semantics and the `projection_consensus *_ppr` naming untouched;
   `queries.js`/`db.js`/views untouched. Endpoints local-only (not deployed to Fly this session).
-
-**NEXT — Session 5:** the frontend becomes an API client — flip the `queries.js` loaders to `fetch()` the
-endpoints, delete `db.js`/DuckDB-WASM, and **decide the null policy** (show `0` vs render "—") in `reads.py`
-when the reads first render. Every read the frontend needs now exists server-side. Deploy (set Fly secrets
-`LEAGUE_ID`+`MY_USERNAME` alongside `DATABASE_URL`; confirm the deployed `/api/*` return real rows — the
-live app still serves the Session-1 skeleton) rides with the Session-5/6 cutover.
-(`MULTI_LEAGUE_STORE_MIGRATION.md` A4→A5.)
 
 **Prior — Session 3 SHIPPED (2026-07-25): Players + Teams read endpoints
 (Players + Teams reads ported to FastAPI/Postgres; still no frontend change — that's Session 5. The
