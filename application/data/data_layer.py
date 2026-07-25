@@ -430,24 +430,32 @@ def read_season_matchups(season: int, through_week: int = 18, *, league_id=None)
 # is a forward slate (as-of week N shows week N+1 pairings with *projected* totals); the pairings are
 # known in advance, but their scores are the future the season replay is pretending not to know.
 # Feeds queries.loadMatchups. Written by transforms/export_schedule.py.
+#
+# League-scoped (L0 keying, Stage-B B1): `roster_id`/`matchup_id` are only unique *within* a league,
+# so the schedule lives under `derived/league/<league_id>/` and carries a `league_id` column — like
+# every other league-scoped derived read. (Before B1 it sat league-agnostically at the `derived/` root,
+# so two same-season leagues would overwrite each other.) Defaults to the is_mine league of the season.
 
-def _schedule_path(season: int) -> Path:
-    return _SNAPSHOT_DIR / "derived" / f"schedule_{season}.parquet"
+def _schedule_path(season: int, league_id) -> Path:
+    return _league_dir(league_id) / f"schedule_{season}.parquet"
 
 
-def write_schedule(df: pl.DataFrame, season: int) -> None:
-    """Write the pairing-only schedule for a season (overwrite)."""
-    path = _schedule_path(season)
+def write_schedule(df: pl.DataFrame, season: int, *, league_id=None) -> None:
+    """Write the pairing-only schedule for a league season (overwrite)."""
+    league_id = league_id or _active_league(season)[0]
+    path = _schedule_path(season, league_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path)
 
 
-def read_schedule(season: int) -> pl.DataFrame:
-    return pl.read_parquet(_schedule_path(season))
+def read_schedule(season: int, *, league_id=None) -> pl.DataFrame:
+    league_id = league_id or _active_league(season)[0]
+    return pl.read_parquet(_schedule_path(season, league_id))
 
 
-def schedule_exists(season: int) -> bool:
-    return _schedule_path(season).exists()
+def schedule_exists(season: int, *, league_id=None) -> bool:
+    league_id = league_id or _active_league(season)[0]
+    return _schedule_path(season, league_id).exists()
 
 
 # --- Sleeper Transactions ---
@@ -1819,3 +1827,35 @@ def _active_league_any(season: int) -> tuple[str, str]:
         raise ValueError(f"No is_mine league at or before season {season} in leagues.parquet.")
     r = prior.row(0, named=True)
     return str(r["league_id"]), str(r["scoring_key"])
+
+
+# --- Demo manifest (Stage-B B0): the recorded demo slate ---
+# The authoritative demo set the multi-league phase serves: one row per demo (league_id, season) slice
+# carrying its root-keyed lineage_id (the earliest league in the redraft chain — globally unique, never
+# collides), a pinned viewer_roster_id ("you" for that slice), and the panel-gating policy (which analytic
+# panels are honest for the slice — market/ros are "right now" reads only the live is_mine 2025 slice has).
+# Built by corpus/build_demo_manifest.py from demo_slate.csv; read by the B3 loader + /api/leagues catalog.
+# Kept separate from leagues.parquet (whose write_leagues enforces a fixed 7-col schema). Overwrite whole.
+
+_DEMO_MANIFEST_COLS = ["lineage_id", "league_id", "season", "name", "scoring_key", "num_teams",
+                       "is_mine", "previous_league_id", "viewer_roster_id",
+                       "panels_market", "panels_ros", "panels_manager"]
+
+
+def _demo_manifest_path() -> Path:
+    return _SNAPSHOT_DIR / "demo_manifest.parquet"
+
+
+def write_demo_manifest(df: pl.DataFrame) -> None:
+    """Write the demo slate (one row per demo (league_id, season)); overwrite. Enforces the column order."""
+    path = _demo_manifest_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.select(_DEMO_MANIFEST_COLS).write_parquet(path)
+
+
+def read_demo_manifest() -> pl.DataFrame:
+    return pl.read_parquet(_demo_manifest_path())
+
+
+def demo_manifest_exists() -> bool:
+    return _demo_manifest_path().exists()

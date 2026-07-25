@@ -1,0 +1,32 @@
+lineage,name,season,league_id,scoring_key,num_teams,is_mine
+lorp,League of Random People 2.0,2024,1132400260048977920,ppr,10,true
+lorp,League of Random People 2.0,2025,1182101676608823296,ppr,10,true
+trap,Trap,2020,515692323082268672,ppr,12,false
+trap,Trap,2021,694369891704213504,ppr,12,false
+trap,Trap,2022,837823936598249472,ppr,12,false
+trap,Trap,2023,951252277103271936,ppr,12,false
+trap,Trap,2024,1051229073923584000,ppr,12,false
+trap,Trap,2025,1207735666645946368,ppr,12,false
+bgb,Best Golden Balls,2024,1048343427001266176,ppr,8,false
+bgb,Best Golden Balls,2025,1180603103547080704,ppr,8,false
+fta,FTA #17 Music City Miracles,2020,588456182180519936,half,14,false
+fta,FTA #17 Music City Miracles,2021,708071830828703744,half,14,false
+fta,FTA #17 Music City Miracles,2022,850992300367679488,half,14,false
+dysf,The Dysfunctionals,2020,605520066003423232,ppr,10,false
+dysf,The Dysfunctionals,2021,733748378889990144,ppr,12,false
+dysf,The Dysfunctionals,2022,871899357723709440,ppr,14,false
+dysf,The Dysfunctionals,2024,1124853593367654400,ppr,14,false
+ypfl,Young Professional Football League,2021,729534660748656640,ppr,12,false
+ypfl,Young Professional Football League,2022,872547293516193792,ppr,12,false
+ypfl,Young Professional Football League,2023,1000568035473801216,ppr,12,false
+ypfl,Young Professional Football League,2024,1124817523821277184,ppr,12,false
+ypfl,Young Professional Football League,2025,1257433118135037952,ppr,12,false
+nbl,National Bruto Leage,2022,854774241676091392,half,12,false
+nbl,National Bruto Leage,2023,987593634767761408,half,12,false
+nbl,National Bruto Leage,2024,1124852442098302976,half,12,false
+nbl,National Bruto Leage,2025,1257478521656184832,half,12,false
+lines,TheLines Champion’s League,2023,998966700659838976,half,10,false
+rost,Rosterbaters Anonymous,2022,781959398774968320,half,12,false
+phb,Player Haters Ball,2021,740005565207597056,ppr,14,false
+boys,3590 & The Boys,2023,1001607799899553792,half,8,false
+wcfc,Winston Churchill Fan Club,2023,1002292172076539904,ppr,12,false
