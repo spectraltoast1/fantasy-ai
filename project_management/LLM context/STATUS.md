@@ -51,8 +51,9 @@ when the reads first render. Every read the frontend needs now exists server-sid
 live app still serves the Session-1 skeleton) rides with the Session-5/6 cutover.
 (`MULTI_LEAGUE_STORE_MIGRATION.md` A4→A5.)
 
-**Prior — Session 3 SHIPPED (2026-07-25): Players + Teams read endpoints (still no frontend change —
-that's Session 5):**
+**Prior — Session 3 SHIPPED (2026-07-25): Players + Teams read endpoints
+(Players + Teams reads ported to FastAPI/Postgres; still no frontend change — that's Session 5. The
+`thisWeek` deferral called out below shipped in Session 4, above):**
 - **Endpoints:** seven read endpoints in `application/api/` (`reads.py` + `calcs.py` + `routes.py`), each
   returning its `queries.js` loader's exact shape: `/api/weeks`, `/api/league-meta`, `/api/players`,
   `/api/players/{sleeperId}`, `/api/standings`, `/api/teams/{rosterId}`, `/api/managers/{rosterId}`.
@@ -63,15 +64,21 @@ that's Session 5):**
   posture, `seriesRead`, trade lean, standings sort/rank, positional-depth rank + `SHAPE_LABEL`, JS half-up
   rounding) ported to `calcs.py`. Every query filters `WHERE league_id = settings.league_id()` (no-op today;
   the Stage-B seam).
-- **Deferred (per plan):** the team-detail `thisWeek` projection/win-prob bar → **Session 4** (now shipped,
-  above). `MY_USERNAME` semantics preserved; `projection_consensus *_ppr` naming left untouched.
-- **Verification (PM audit, 2026-07-25):** endpoint shapes checked field-by-field against `queries.js`;
-  ported calcs verified logic-equivalent; the current 2025 data confirmed to have **no nulls** in the
-  crash-risk columns, so the endpoints reproduce today's app's numbers. Two **latent** items land at the
-  Session-5/6 deploy (full report: `scope docs/future work/SESSION_1_3_AUDIT.md`): (1) bare `float()` on
-  nullable numeric cols would 500 where the browser coerced null→0 — Session 4 established the `_num`
-  guardrail for its new reads; the null *policy* for the Session-3 reads is Session 5's; (2) deployed
-  endpoints need `LEAGUE_ID` + `MY_USERNAME` set as Fly secrets or they return empty.
+- **Deferred (per plan):** the team-detail `thisWeek` projection/win-prob bar → **Session 4** (returned as
+  `null` with a `TODO(Session 4)`; shape stays stable). `MY_USERNAME` semantics preserved (read env →
+  `config.py` via `settings.py`); `projection_consensus *_ppr` naming left untouched. Seam held —
+  `queries.js`/`db.js`/views untouched.
+- **Verification (PM audit, 2026-07-25 — this entry was reconstructed by the audit; Code's Session-3
+  closedown skipped the STATUS/architecture doc update):** endpoint shapes checked field-by-field against
+  `queries.js`; ported calcs verified logic-equivalent; the current 2025 data confirmed to have **no nulls**
+  in the crash-risk columns, so the endpoints reproduce today's app's numbers. Two **latent** items, both
+  landing at the **Session-5/6 deploy** (full report: `scope docs/future work/SESSION_1_3_AUDIT.md`):
+  (1) bare `float()` on nullable numeric cols would 500 where the browser coerced null→0 — decide the null
+  policy (`0` vs render "—") in `reads.py` at Session 5, when it first renders; (2) deployed endpoints need
+  `LEAGUE_ID` + `MY_USERNAME` set as Fly secrets (only `DATABASE_URL` is set) or they return empty.
+  **Confirmed 2026-07-25:** the live Fly app still serves the **Session-1 skeleton** (`/api/*` 404s) — the
+  Session-3 endpoints are local-only, **not deployed**, so both items are deploy-time, not now.
+  `TECHNICAL_ARCHITECTURE.md` was updated in the audit (progress line + a new 13-table schema reference).
 
 **Prior — Session 2 SHIPPED (2026-07-24): Postgres schema + parquet→PG loader.** 13 Postgres tables
 (`application/data/serve/schema.sql`) generated from the published parquet, `league_id`+`season` on every
