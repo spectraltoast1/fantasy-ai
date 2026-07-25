@@ -48,3 +48,24 @@ def team_detail(roster_id: int, as_of_week: int | None = None):
 @router.get("/managers/{roster_id}")
 def manager_dossier(roster_id: int) -> dict:
     return reads.load_manager_dossier(roster_id)
+
+
+@router.get("/league")
+def league(as_of_week: int | None = None) -> dict:
+    return reads.load_league(as_of_week)
+
+
+@router.get("/positional-talent")
+def positional_talent() -> dict:
+    return reads.load_positional_talent()
+
+
+@router.get("/matchups")
+def matchups(as_of_week: int | None = None) -> dict:
+    return reads.load_matchups(as_of_week)
+
+
+@router.get("/matchups/{matchup_id}")
+def matchup_detail(matchup_id: int, as_of_week: int | None = None):
+    # Returns null (200) when the game/week doesn't resolve, matching loadMatchupDetail.
+    return reads.load_matchup_detail(matchup_id, as_of_week)
