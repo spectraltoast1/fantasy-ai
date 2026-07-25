@@ -12,7 +12,7 @@ Store tables map 1:1 to the DuckDB logical names: ``'season.parquet'`` -> ``seas
 
 from __future__ import annotations
 
-from application.api import calcs, db, settings
+from application.api import calcs, db, projections, settings
 
 POS = ["QB", "RB", "WR", "TE"]
 
@@ -475,9 +475,9 @@ def load_standings(as_of_week=None) -> list[dict]:
 def load_team_detail(roster_id, as_of_week=None):
     """Team detail: stat blocks, positional depth, roster split. Mirrors loadTeamDetail (l.448).
 
-    NOTE: the ``thisWeek`` projection/win-prob bar is DEFERRED to Session 4 (it needs the whole
-    Matchups chain). Returned as ``None`` here so the shape stays stable; Session 4 fills it in
-    before the Session-5 frontend swap.
+    The ``thisWeek`` projection/win-prob bar (opponent + both projected totals + win %) comes
+    from the shared engine's ``team_matchup_summary`` (Session 4) — ``None`` when there is no
+    next game.
     """
     rid = int(roster_id)
     p = _params(as_of_week, rid=rid)
@@ -622,7 +622,7 @@ def load_team_detail(roster_id, as_of_week=None):
         "owner": me_team["owner_name"] if me_team else None,
         "onYours": rid == my_roster_id,
         "stats": stats,
-        "thisWeek": None,  # TODO(Session 4): the projection/win-prob chain (teamMatchupSummary)
+        "thisWeek": projections.team_matchup_summary(rid, as_of_week),
         "depth": depth,
         "roster": {"starters": starters, "bench": bench},
     }
@@ -660,3 +660,120 @@ def load_manager_dossier(roster_id) -> dict:
         "model": d["model"],
         "generatedAt": d["generated_at"],
     }
+
+
+# ---------------------------------------------------------------------------
+# Matchups tab — the week-N+1 slate + one game's full breakdown. The projection
+# math lives in projections.py (shared with team-detail's thisWeek bar).
+# ---------------------------------------------------------------------------
+
+def load_matchups(as_of_week=None) -> dict:
+    """The Matchups slate: the upcoming week's head-to-head games. Mirrors loadMatchups (l.878)."""
+    target_week = projections.target_week_for(as_of_week)
+    sched_rows = []
+    if target_week is not None:
+        sched_rows = db.fetch_all(
+            "SELECT roster_id, matchup_id FROM schedule "
+            "WHERE league_id = %(lid)s AND week = %(tw)s ORDER BY matchup_id, roster_id",
+            {"lid": settings.league_id(), "tw": target_week},
+        )
+    if not sched_rows:
+        return {"targetWeek": target_week, "games": [], "myGameId": None, "empty": True}
+
+    teams = projections.team_projections(as_of_week, target_week)
+    week_rows = db.fetch_all(_sql_standings_weeks(as_of_week), _params(as_of_week))
+    rec = projections.records_by_roster(week_rows)
+
+    # Group roster ids by matchup (schedule ordered by matchup_id, roster_id → ascending ids,
+    # first-seen order preserved for the within-game default sort before the win-prob sort).
+    by_matchup: dict[int, list] = {}
+    for s in sched_rows:
+        by_matchup.setdefault(int(s["matchup_id"]), []).append(int(s["roster_id"]))
+
+    games = []
+    for mid, rids in by_matchup.items():
+        sides = []
+        for rid in rids:
+            t = teams.get(rid) or {
+                "rosterId": rid, "name": f"Team {rid}", "owner": None,
+                "isMe": False, "mu": 0, "sigma": 0,
+            }
+            r = rec.get(rid, {"w": 0, "l": 0})
+            sides.append({**t, "record": f"{r['w']}-{r['l']}"})
+        probs = [None] * len(sides)
+        if len(sides) == 2:
+            probs = projections.matchup_win_probs(
+                sides[0]["mu"], sides[0]["sigma"], sides[1]["mu"], sides[1]["sigma"]
+            )
+        out = [
+            {
+                "rosterId": s["rosterId"],
+                "name": s["name"],
+                "owner": s["owner"],
+                "isMe": s["isMe"],
+                "record": s["record"],
+                "proj": s["mu"],
+                "winProb": None if probs[i] is None else calcs.js_round(probs[i] * 100),
+            }
+            for i, s in enumerate(sides)
+        ]
+        # My team first, else higher win prob first (null win prob sorts as 0).
+        out.sort(key=lambda t: (t["isMe"], t["winProb"] if t["winProb"] is not None else 0), reverse=True)
+        games.append({"matchupId": mid, "teams": out, "isMine": any(t["isMe"] for t in out)})
+
+    # My game first, else by matchup_id ascending.
+    games.sort(key=lambda g: (not g["isMine"], g["matchupId"]))
+    my_game_id = next((g["matchupId"] for g in games if g["isMine"]), None)
+    return {"targetWeek": target_week, "games": games, "myGameId": my_game_id, "empty": False}
+
+
+def load_matchup_detail(matchup_id, as_of_week=None):
+    """One matchup's full breakdown: win prob, Score Range, per-starter gauges. Mirrors loadMatchupDetail (l.942)."""
+    mid = int(matchup_id)
+    target_week = projections.target_week_for(as_of_week)
+    if target_week is None:
+        return None
+
+    teams = projections.team_projections(as_of_week, target_week)
+    sched_rows = db.fetch_all(
+        "SELECT roster_id FROM schedule "
+        "WHERE league_id = %(lid)s AND week = %(tw)s AND matchup_id = %(mid)s ORDER BY roster_id",
+        {"lid": settings.league_id(), "tw": target_week, "mid": mid},
+    )
+    week_rows = db.fetch_all(_sql_standings_weeks(as_of_week), _params(as_of_week))
+    rids = [int(r["roster_id"]) for r in sched_rows]
+    if len(rids) < 2 or rids[0] not in teams or rids[1] not in teams:
+        return None
+    rec = projections.records_by_roster(week_rows)
+
+    sides = []
+    for rid in rids:
+        t = teams[rid]
+        r = rec.get(rid, {"w": 0, "l": 0})
+        # Team Score Range = Σ starters' quantiles; a starter without a projection falls back to
+        # its μ term (p25 ?? pts) so the band stays coherent.
+        p25 = sum((p["p25"] if p["p25"] is not None else p["pts"]) for p in t["starters"])
+        p50 = sum((p["p50"] if p["p50"] is not None else p["pts"]) for p in t["starters"])
+        p75 = sum((p["p75"] if p["p75"] is not None else p["pts"]) for p in t["starters"])
+        sides.append({
+            "rosterId": rid,
+            "name": t["name"],
+            "owner": t["owner"],
+            "isMe": t["isMe"],
+            "record": f"{r['w']}-{r['l']}",
+            "proj": t["mu"],
+            "sigma": t["sigma"],
+            "range": {"p25": calcs.round1(p25), "p50": calcs.round1(p50), "p75": calcs.round1(p75)},
+            "starters": [projections.matchup_player_view(p) for p in t["starters"]],
+            "bench": [projections.matchup_player_view(p) for p in t["bench"]],
+        })
+
+    probs = projections.matchup_win_probs(
+        sides[0]["proj"], sides[0]["sigma"], sides[1]["proj"], sides[1]["sigma"]
+    )
+    for i, s in enumerate(sides):
+        s["winProb"] = calcs.js_round(probs[i] * 100)
+    # "You" first, else higher win prob first.
+    sides.sort(key=lambda s: (s["isMe"], s["winProb"]), reverse=True)
+
+    return {"matchupId": mid, "targetWeek": target_week, "teams": sides}

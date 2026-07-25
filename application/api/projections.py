@@ -12,10 +12,10 @@ Pure helpers (``expand_slots``, ``optimal_lineup``, ``matchup_win_probs``, ``nor
 (the Stage-B seam). The DuckDB ``arg_max(col, week)`` roster read is the SAME ``_latest``
 definition Team detail uses, so the surfaces agree on who is rostered.
 
-Import note: ``reads`` imports THIS module lazily (inside the functions that assemble the
-matchup endpoints), so this module can import ``reads`` at top level without a cycle — which
-lets ``team_projections`` reuse ``reads._latest`` / ``reads._week_cutoff`` verbatim (decision 3:
-same definition, do not re-derive).
+Import note: ``reads`` and this module import each other at top level, but neither *accesses*
+the other's attributes at import time (only inside function bodies) — so the circular import
+resolves cleanly whichever loads first. This lets ``team_projections`` reuse ``reads._latest``
+/ ``reads._week_cutoff`` verbatim (decision 3: same definition, do not re-derive).
 """
 
 from __future__ import annotations
