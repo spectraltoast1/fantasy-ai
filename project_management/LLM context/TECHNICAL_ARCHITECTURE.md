@@ -193,7 +193,9 @@ Winning a redraft fantasy football championship is about more than just collecti
 - **NFL stats:** nflreadpy (successor to deprecated nfl_data_py) - returns polars DataFrames
 - **Front-end:** React + Vite + DuckDB (decided). Original plan was Dash + Plotly; switched after a vertical slice in the real stack validated it and proved easier to iterate than a chat artifact.
 - **Data delivery (V1):** client-side DuckDB-WASM — the browser reads parquet and runs SQL; no server, static hosting only. A server/API was **deliberately deferred, not ruled out** — switch to one when warranted (multiple users, data too large to ship to the browser, or secrets to protect). The swap point is the front-end data-access layer `src/queries.js`; the view components never call data access directly, so moving "read files" → "call API" won't touch them.
-- **Query layer:** DuckDB — SQL directly over parquet. Adopted as the query layer (in use now in the front-end); carries into the production app.
+
+  > **UPDATE 2026-07 (store migration in progress):** that server decision has been **made and is being built**. A **FastAPI** read-API backed by **Supabase-hosted Postgres**, deployed on **Fly.io**, now exists in parallel (Sessions 1–2 shipped). The frontend still runs the DuckDB-WASM way *today*; flipping `queries.js` from "read parquet" → "call API" is Session 5 (not yet done). So "no server / static hosting only" now describes today's frontend only, not the project. See **Store migration — target architecture** below.
+- **Query layer:** DuckDB — SQL directly over parquet, in use in the front-end *today*. **Superseded server-side by Postgres SQL** under the new FastAPI store (store migration in progress); the DuckDB SQL in `queries.js` is being ported to Postgres endpoints, Players + Teams first (Session 3).
 - **Market values:** LeagueLogs API (keyed on sleeperPlayerId; QB/RB/WR/TE only; visible attribution required). **Consumed by Market VOR (§4)** via the format-matched profile `redraft-1qb-12t-ppr1` — the market-value twin of Production VOR, on the current (2026) market
 - **Scheduling:** launchd (macOS) for daily fetchers
 - **Storage:** JSON (cache), parquet (snapshots), JSONL (advisor log - future)
@@ -204,10 +206,12 @@ Winning a redraft fantasy football championship is about more than just collecti
 
 ## Client/Server Seam — Invariants
 
-V1 runs client-side (DuckDB-WASM in the browser, no server). Going server-side
-(a Python API) one day is **expected, not hypothetical** — the goal is to keep
-that switch boring. This is a bounded, ~5-item surface, not a sprawling one. Keep
-these invariants true and the switch stays a localized swap rather than a rewrite:
+The frontend today runs client-side (DuckDB-WASM in the browser). Going server-side
+(a Python API) is **now in progress, not hypothetical** — a **FastAPI + Supabase-Postgres**
+server already exists in parallel (see *Store migration — target architecture* below); the
+frontend swap is Session 5. The goal is still to keep that switch boring. This is a bounded,
+~5-item surface, not a sprawling one. The invariants below are exactly what make the
+in-progress switch a localized swap rather than a rewrite:
 
 1. **All data access lives in `src/queries.js`.** It is the single seam. Going
    server-side means rewriting the bodies of its functions ("read parquet" → "call
@@ -231,6 +235,41 @@ these invariants true and the switch stays a localized swap rather than a rewrit
 This is a one-time checklist, not a living log: if these hold, the migration is a
 swap. It is intentionally kept here (single source of truth) rather than in a
 separate decisions doc.
+
+> **UPDATE 2026-07:** that migration is now **underway (Stage A)** — the checklist is being
+> executed and the invariants are holding (the seam is intact; the port changes `queries.js`
+> and `db.js`, not the views).
+
+---
+
+### Store migration — target architecture (in progress)
+
+The frontend's data store is being moved off in-browser DuckDB-WASM to a real server. This is
+**Stage A** of `scope docs/future work/MULTI_LEAGUE_STORE_MIGRATION.md` (single-league parity
+first; multi-league is Stage B). Auth is deferred, but the platform was chosen so it's a bolt-on
+later.
+
+- **Target store:** a **FastAPI** read-API (`application/api/`, deployed on **Fly.io** — app
+  `fantasy-ai-api`, region `iad`) over **Supabase-hosted Postgres**. Postgres was chosen over the
+  migration doc's original **SQLite** — that reference is **superseded** — so real auth (Supabase
+  Auth) can be added later without a second store move.
+- **Build-time pipeline unchanged:** polars transforms still pre-compute the derived parquet; a new
+  **parquet→Postgres loader** (`application/data/serve/build_db.py` + `schema.sql`, 13 tables)
+  replaces the hand-symlink `public/data/` publish step.
+- **The seam holds:** `queries.js` stays the single frontend data-access seam — its bodies flip from
+  DuckDB SQL to `fetch('/api/…')`; `db.js`/DuckDB-WASM is deleted; views are untouched. The five
+  invariants above are what make this a swap, not a rewrite.
+- **Security:** the Postgres tables have **RLS enabled, no policies** — this closes Supabase's public
+  Data-API exposure, while the app's direct owner-role connection (the session-pooler `DATABASE_URL`)
+  bypasses RLS and is unaffected. `DATABASE_URL` resolves env-var (Fly secret) first, then a
+  `config.py` fallback, so the secret survives worktrees.
+- **Progress:** Session 1 (FastAPI `/health` skeleton on Fly + Supabase Postgres connected) and
+  Session 2 (13-table schema + loader + RLS) are **done**. Session 3 (port Players + Teams read
+  endpoints) is next; the frontend swap is Session 5; parity/go-live is Session 6.
+- **Until Session 5 the frontend still runs the old DuckDB-WASM way**, with the server in parallel —
+  nothing a user sees changes during Stage A (that's the point: identical app, new plumbing).
+  Multi-league/season (Stage B) comes after: "switch league" becomes an API param /
+  `WHERE league_id=… AND season=…` over one keyed store.
 
 ---
 
