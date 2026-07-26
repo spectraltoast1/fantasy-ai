@@ -2,7 +2,7 @@
 
 **Created:** 2026-07-12 · **Rewritten:** 2026-07-12 — *the corpus changed what this is for*
 **Status:** proposed
-**Companions:** [`LEAGUE_CORPUS.md`](./LEAGUE_CORPUS.md) · [`IMPROVEMENT_LOOP.md`](./IMPROVEMENT_LOOP.md) · [`LLM context/712_BACKEND_AUDIT.md`](../LLM%20context/712_BACKEND_AUDIT.md)
+**Companions:** [`engine-corpus.md`](./engine-corpus.md) · [`engine-improvement-loop.md`](./engine-improvement-loop.md) · [`_deprecated/audits/712_BACKEND_AUDIT.md`](../_deprecated/audits/712_BACKEND_AUDIT.md)
 
 ---
 

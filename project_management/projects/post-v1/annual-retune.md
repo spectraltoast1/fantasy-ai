@@ -1,6 +1,6 @@
 # The Annual Re-Tune — Turn the Calibration Exercise into a Yearly Script
 
-**Last reviewed:** 2026-07-18 · **Status:** Scope / design doc — **not yet started.** The offline/annual instance of the improvement-loop's **L6 Proposer** (`engine improvement/IMPROVEMENT_LOOP.md`).
+**Last reviewed:** 2026-07-18 · **Status:** Scope / design doc — **not yet started.** The offline/annual instance of the improvement-loop's **L6 Proposer** (`context/appendices/engine-improvement-loop.md`).
 
 > **Verdict:** The week-long calibration exercise (Sessions 4–8c) was almost entirely a *build*, not a *tune* — the corpus, the ledger, the scorer, the tuning harness, the dial registry, and every dial mechanism are permanent machinery. The **annual re-tune is a re-run, not a re-build**: ingest the newly-resolved season, roll the walk-forward split forward one year, re-score, sweep every registered dial through the existing harness, and emit a **proposal digest with options**. Wired into one orchestrated command, what took a week collapses to an afternoon that ends exactly where a human should pick up — a ranked "here's what the data wants, and here are your options" report. The only parts that stay human are the two that *are* judgment: **promoting** the proposals you accept, and **interpreting surprises**. This doc scopes the orchestration driver + the digest generator; both sit on top of code that already exists.
 
@@ -84,6 +84,6 @@ So the realistic promise is not "push a button, ship a tuned engine." It is "**p
 
 ## Out of scope
 
-- The **live/in-season** instance of L6 (the weekly digest) — related, but a different cadence and a different input (`served=true` + data_health); its own track in `PILOT_2026.md`.
+- The **live/in-season** instance of L6 (the weekly digest) — related, but a different cadence and a different input (`served=true` + data_health); its own track in `pilot-2026.md`.
 - **Automating promotion** — deliberately excluded; the human-in-the-loop is the design, not a gap.
 - **Re-building any stage** — this is orchestration + a digest over existing, gated modules.

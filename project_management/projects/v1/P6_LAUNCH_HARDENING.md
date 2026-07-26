@@ -11,7 +11,7 @@
 
 ## Context — the pilot's own gates
 
-`PILOT_2026.md` is explicit about the order of operations:
+`pilot-2026.md` is explicit about the order of operations:
 
 - **"Live path writes `served=true` rows for Cohort A… Do not onboard anyone"** before that. An
   un-instrumented week is unrecoverable — you can't reconstruct after the fact whether the tool saw a

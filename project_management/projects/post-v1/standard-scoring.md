@@ -11,7 +11,7 @@
 > **Origin:** produced 2026-07-16 from a code-grounded inspection of the scoring engine
 > (`transforms/_scoring.py`), the substrate builder (`transforms/build_substrate.py`), and the corpus
 > (`corpus/`, `corpus_discovery.parquet` / `corpus_manifest.parquet`). Companion to
-> [`CUSTOM_SCORING_SUPPORT.md`](./CUSTOM_SCORING_SUPPORT.md) and [`DYNASTY_SUPPORT.md`](./DYNASTY_SUPPORT.md);
+> [`custom-scoring.md`](./custom-scoring.md) and [`dynasty.md`](./dynasty.md);
 > the shared invariance thesis is stated once below and referenced by all three.
 
 ---
@@ -37,11 +37,11 @@ engine with **all deltas zero** — i.e. the baseline itself, exact by construct
 (`ppr/half · 1qb · redraft · 10-14 teams`, `_corpus.is_matched_eligible`, `_corpus.py:23`), the only
 stratum with `never_tune=False` (`select.py:313`). The project's deliberate stance is *"stay NARROW
 (PPR/half·1QB·redraft); exotic leagues are a robustness test set, never a tuning input"*
-(`LEAGUE_CORPUS.md:44-46`). **For a scoring change (std/custom), those constants are scoring-invariant** —
+(`engine-corpus.md:44-46`). **For a scoring change (std/custom), those constants are scoring-invariant** —
 they describe NFL player-week residual shape and horizon decay, not the points transform. **⇒ certify that
 the matched constants hold on `std`; never re-fit them per key.** The out-of-sample machine for that is the
 proposed **L4 Tuner** (constant registry `transforms/_constants.py` + TRAIN 2020-23 / DEV 2024 / TEST 2025
-season split + league-wise holdout; `IMPROVEMENT_LOOP.md:239-289`) — not built yet.
+season split + league-wise holdout; `engine-improvement-loop.md:239-289`) — not built yet.
 
 ---
 
@@ -68,7 +68,7 @@ season split + league-wise holdout; `IMPROVEMENT_LOOP.md:239-289`) — not built
 
 1. **Standard leagues effectively do not exist.** The discovery crawl's stored classification over 2,729
    league-seasons is `custom` / `ppr` / `half` only — **zero `std`**; the corrected classifier reduced the
-   custom pool but surfaced ppr/half, not std (`LEAGUE_CORPUS.md:52-58`, *"pure std = 0"* `:44`). No `std`
+   custom pool but surfaced ppr/half, not std (`engine-corpus.md:52-58`, *"pure std = 0"* `:44`). No `std`
    key appears in `corpus_manifest` (keys are `ppr` 207, `half` 93, ~11 `cust-…` at 1-2 each). Standard
    scoring is essentially extinct on Sleeper — so this is a **data-acquisition/synthesis** problem, not a
    harvest-what-exists problem.

@@ -11,15 +11,15 @@
 >
 > **Origin:** produced 2026-07-16 from a code-grounded read of `transforms/_scoring.py`,
 > `corpus/select.py`, and a re-run of the reject logic over `corpus_discovery.parquet`. Companion to
-> [`STANDARD_SCORING_SUPPORT.md`](./STANDARD_SCORING_SUPPORT.md) and
-> [`DYNASTY_SUPPORT.md`](./DYNASTY_SUPPORT.md); the shared invariance thesis lives in the standard doc.
+> [`standard-scoring.md`](./standard-scoring.md) and
+> [`dynasty.md`](./dynasty.md); the shared invariance thesis lives in the standard doc.
 
 ---
 
 ## Context
 
 **Why:** Custom scoring is the *dominant* real-world profile — **1,765 of the discovered custom pool**
-(after the Session 0.6 float32 correction; `LEAGUE_CORPUS.md:52-58`), the near-inverse of the product's
+(after the Session 0.6 float32 correction; `engine-corpus.md:52-58`), the near-inverse of the product's
 narrow shape. The engine's "any-league" ambition lives or dies on how much of that pool it can score.
 
 **Corrected mental model.** "Custom scoring" is two very different problems the term hides:
@@ -28,7 +28,7 @@ narrow shape. The engine's "any-league" ambition lives or dies on how much of th
 2. **Can we *tune/certify* a custom key?** — a statistics question. It sounds hard (each custom key is a
    handful of leagues) but it is **already answered**: the tuned constants are scoring-invariant and fit on
    the matched stratum; a custom key never gets its own fit. See the shared thesis in
-   [`STANDARD_SCORING_SUPPORT.md`](./STANDARD_SCORING_SUPPORT.md). So problem (2) is not a blocker — problem
+   [`standard-scoring.md`](./standard-scoring.md). So problem (2) is not a blocker — problem
    (1) is the whole job.
 
 A third subtlety the term hides: **two engines score custom leagues, and they disagree about what's
@@ -70,7 +70,7 @@ scored leagues share a substrate file (`_keys.py:17-23`), and the gen stratum ca
 ## The gap (grounded, quantified)
 
 - **802 of 1,765 discovered custom leagues (45.4%) are unscoreable** by the delta engine
-  (`LEAGUE_CORPUS.md:54`; reproduced by running `_reject_unsupported` over every `scoring_settings_json` in
+  (`engine-corpus.md:54`; reproduced by running `_reject_unsupported` over every `scoring_settings_json` in
   `corpus_discovery.parquet`). Dominant rejecting keys (league counts):
   `bonus_rush_yd_200` (460), `bonus_rec_yd_200` (452), `bonus_pass_yd_400` (449), `rush_fd` (418),
   `rec_fd` (415), `bonus_rush_yd_100` (382), `bonus_pass_yd_300` (320), `pass_fd` (208).
@@ -109,7 +109,7 @@ Recommend documenting (2b) as an explicit, gated experiment; default to (2a) unt
 
 **Stage 3 — Settle the measurement stance (custom keys are n=1).** Make the design explicit in the doc:
 **certify, don't fit.** The scoring-invariant constants are fit on matched (`_corpus.py:23`,
-`LEAGUE_CORPUS.md:44-46`); each custom key enters only as a **league-wise holdout** in the generalization
+`engine-corpus.md:44-46`); each custom key enters only as a **league-wise holdout** in the generalization
 stratum (`never_tune=True`, `select.py:313`) — the honest test that the constants generalize to an unseen
 *shape*. Per-key fitting needs a per-key corpus that will never exist at n=1, and pooling all custom keys to
 fit would reintroduce the distribution shift the narrow-corpus decision exists to avoid. So the settled

@@ -8,11 +8,11 @@ SHIP_HONEST_ENGINE.md`). The promotion introduced the **epoch model**: `constant
 + `frozen_era()` let the frozen-corpus gates validate the immutable ledger at the constants that made it
 (the append-only ledger is never overwritten). NEXT: Session 9 (cleanup) + the AI-track follow-on
 (`ros_synthesis` refresh + the front-end two-sided-band render). PARKED for Session 9 / the **annual pipeline**
-(`ANNUAL_RETUNE_PIPELINE.md`): the `compute_resolutions` symmetric-PIT-vs-asymmetric-band latent; the persisted
+(`annual-retune.md`): the `compute_resolutions` symmetric-PIT-vs-asymmetric-band latent; the persisted
 new-population ledger (a re-backfill at the promoted constants, distinct from the frozen baseline); the
 consensus-alongside display; then silent-reads confidence + the live/AI track (L5 remains design-only).
-**Premise:** [`LLM context/712_BACKEND_AUDIT.md`](../LLM%20context/712_BACKEND_AUDIT.md)
-**Feeds it:** [`LEAGUE_CORPUS.md`](./LEAGUE_CORPUS.md) (offline) · [`PILOT_2026.md`](./PILOT_2026.md) (live)
+**Premise:** [`_deprecated/audits/712_BACKEND_AUDIT.md`](../_deprecated/audits/712_BACKEND_AUDIT.md)
+**Feeds it:** [`engine-corpus.md`](./engine-corpus.md) (offline) · [`pilot-2026.md`](./pilot-2026.md) (live)
 
 The system that makes the **existing** reads better as weeks, leagues and users accumulate. It adds
 **no new features**. It adds memory, measurement, and a proposal surface — so that improving a read
@@ -229,7 +229,7 @@ process, not outcome — encoded, not just intended.
 
 | Source | `served` | Where from | When |
 |---|---|---|---|
-| **Corpus backfill** | `false` | [`LEAGUE_CORPUS.md`](./LEAGUE_CORPUS.md) — completed league-seasons, reconstructed as-of and graded against known truth | **now, offline** |
+| **Corpus backfill** | `false` | [`engine-corpus.md`](./engine-corpus.md) — completed league-seasons, reconstructed as-of and graded against known truth | **now, offline** |
 | **Live serving** | `true` | 2026, as weeks land | from week 1 |
 
 **Same schema. Same scorer. Two sources.** This is the load-bearing consequence of the corpus:
@@ -255,7 +255,7 @@ process, not outcome — encoded, not just intended.
 > **discrimination** — sliced `overall · week · league · position · cohort · scoring_key` (model quality, on
 > `inputs_ok ∧ resolved`) + `inputs_ok · resolution_status · confidence_tier` (quarantine + reliability,
 > never blended). Gated green-with-teeth by `corpus/check_scorecard.py`; the human **Trust Report**
-> (`corpus/trust_report.py` → `TRUST_REPORT.md`). **Grounding corrections vs the block below:** (a)
+> (`corpus/trust_report.py` → `engine-trust.md`). **Grounding corrections vs the block below:** (a)
 > `resolutions` carries NEITHER `confidence` NOR any naive baseline → the scorer re-joins `predictions` +
 > derives naives from `outcomes`; (b) only 2 reads had a baseline to *promote* (player_signal→`naive_ppg`,
 > playoff-odds→0.25 Brier), the rest are *declared* canonical, and the band is `skill=na` (calibration is its
@@ -440,7 +440,7 @@ when the season starts.**
 | # | Session | Why now |
 |---|---|---|
 | **1** | **L0 keying** — `league_id` + `scoring_key`, league registry, partition derived parquet **by league**, split `ros_outcome_shape` (fixes audit S1.3 / S3.1 / S3.2) | **Blocks everything.** And now it's ~10 leagues, not 2 — the partitioning also dodges the O(n²) write. |
-| **2** | **Corpus harvester** — BFS crawl (`_manager_leagues` + `classify_league`, already built) + corpus registry + the **shape matrix** (superflex, division, custom scoring, 12-team) | The asset. See [`LEAGUE_CORPUS.md`](./LEAGUE_CORPUS.md). |
+| **2** | **Corpus harvester** — BFS crawl (`_manager_leagues` + `classify_league`, already built) + corpus registry + the **shape matrix** (superflex, division, custom scoring, 12-team) | The asset. See [`engine-corpus.md`](./engine-corpus.md). |
 | **3** | **L2 ledger schema, populated by backfill** (`served=false`) + `outcomes` + `compute_resolutions` · **include the `prompt_version` column now** (free here, expensive later) | The schema the live path will reuse verbatim. |
 | **4 ✅** | **L3 scorer** + trust report **(DONE — Session 5)** | **First real measurement the project has ever taken.** 3,518 slice-verdicts; projection optimism confirmed, measurement reads hold, confidence-honesty mixed (band `ros_cv` inverted). HTML dashboard → fast-follow 5b. |
 | **5** | **L4 tuner** — constant registry + season-wise **and** league-wise holdout + retune all five constants OOS **(NEXT)** | The payoff. Expect regressions; that's the point. The scorer hands it the worst skill/confidence-honesty slices as targets. |

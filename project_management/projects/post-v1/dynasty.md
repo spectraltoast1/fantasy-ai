@@ -12,8 +12,8 @@
 > **Origin:** produced 2026-07-16 from a code-grounded read of the value seams
 > (`compute_ros_player_band.py`, `fetchers/adp.py`, `compute_market_vor.py`, `fetchers/leaguelogs.py`,
 > `transforms/_manager.py`) and the corpus. Companion to
-> [`STANDARD_SCORING_SUPPORT.md`](./STANDARD_SCORING_SUPPORT.md) and
-> [`CUSTOM_SCORING_SUPPORT.md`](./CUSTOM_SCORING_SUPPORT.md); cross-links the lineage model in
+> [`standard-scoring.md`](./standard-scoring.md) and
+> [`custom-scoring.md`](./custom-scoring.md); cross-links the lineage model in
 > [`MULTI_LEAGUE_STORE_MIGRATION.md`](./MULTI_LEAGUE_STORE_MIGRATION.md).
 
 ---
@@ -34,7 +34,7 @@ dynasty he is worth a *discounted multi-year stream weighted by age*, and a 22-y
 assumption dynasty breaks.
 
 **Where dynasty lands on the shared invariance thesis** (see
-[`STANDARD_SCORING_SUPPORT.md`](./STANDARD_SCORING_SUPPORT.md)): **split.** The residual-shape / weekly
+[`standard-scoring.md`](./standard-scoring.md)): **split.** The residual-shape / weekly
 constants `BAND_Z` (`compute_projection_consensus.py:86`) and `SKEW_GAIN` (`:95`) stay **format-invariant**
 — a player's week-to-week variance doesn't care about league format. But the **value-layer** inputs —
 `ANCHOR_W` (`compute_ros_player_band.py:57`) and the ADP anchor curve it blends toward — are
@@ -128,12 +128,12 @@ eligibility in `derive_lineup_slots`).
 - **Age curve is a new model** with its own fitting + gate; dynasty value is where the project first *fits*
   a format-specific constant, so the split discipline (TRAIN/DEV/TEST, holdout) must be applied carefully.
 - **Un-backtestable value, like market_vor.** Dynasty market history also starts 2026-05-31
-  (`LEAGUE_CORPUS.md:205`), so a dynasty market/value read can only be graded **forward** — the same
+  (`engine-corpus.md:205`), so a dynasty market/value read can only be graded **forward** — the same
   boundary the redraft market read hit.
 - **Dynasty ADP `do`/`rsf` coverage unverified** — must be probed before relying on it (a junk board is
   worse than no anchor).
 - **Selection bias.** A dynasty stratum harvested from the same 6-degrees crawl is a friend-of-friend
-  sample; fine for engine mechanics, not for behavioral claims (`LEAGUE_CORPUS.md:287-291`).
+  sample; fine for engine mechanics, not for behavioral claims (`engine-corpus.md:287-291`).
 
 ---
 
@@ -163,7 +163,7 @@ selection), `corpus/_corpus.py` + `corpus/select.py` (a `dynasty` stratum + axis
   additive/format-gated) — the 3d/3e "0/666 changed" discipline.
 - **Certification vs fit:** the tuner proposal artifact (if L4 exists) shows `BAND_Z`/`SKEW_GAIN` unchanged
   on the dynasty holdout, and any `ANCHOR_W`/age-curve fit improves the **held-out** dynasty metric with no
-  other-gate regression (`IMPROVEMENT_LOOP.md:283-289`).
+  other-gate regression (`engine-improvement-loop.md:283-289`).
 
 ---
 

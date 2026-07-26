@@ -2,7 +2,7 @@
 
 **Last reviewed:** 2026-07-12
 **Companion to:** `PRODUCT_ROADMAP.md` (the *why* — phases, four design laws, scope filter) and the
-**Decision Reads spec** (`DECISION_READS.md` — the *what*, full definition of each read).
+**Decision Reads spec** (`engine-decision-reads.md` — the *what*, full definition of each read).
 This doc is now the ***state of build*** — what's Built (Backend / Frontend) and what's
 Unbuilt+Blocked — kept in front of a condensed record of the sequencing logic that got us here.
 
@@ -102,7 +102,7 @@ pure helpers `_analytics.py` / `_manager.py`; the `league_settings`, multi-sourc
 / any-league generalization (superflex, custom scoring, division seeding).
 
 **Corpus & Improvement Loop (Track A — offline tuning asset).** **Session 0** (spike, throwaway) verified
-the corpus is viable — see `LLM context/SPIKE_CORPUS_FINDINGS.md`. **Session 0.5** built it: the additive
+the corpus is viable — see `sessions/engine/SPIKE_CORPUS_FINDINGS.md`. **Session 0.5** built it: the additive
 `application/data/corpus/` package — `discover.py` (persisted/resumable manager-keyed BFS →
 `corpus_discovery.parquet`, 2,729 league-seasons found, a lower bound), `select.py` (classification-narrow →
 inclusion filter + scoreability on a bounded pool → the stratified **league registry**
@@ -113,7 +113,7 @@ fixed a `_scoring` **float32-tolerance bug** the corpus caught (a drifted standa
 `custom` — a LIVE §7 bug + the cause of 0.5's "0 matched in 2020-21"); re-selected the corpus offline. Corrected:
 manifest **365 rows** (matched **221**, six seasons), split **TRAIN 2020-2023 · DEV 2024 · TEST 2025** (2020-21
 thin, k-folded within train); unscoreable **45.4%/1,765**. No-regression proven; §7 comparability on the real
-league unchanged (thin friend-group is genuine). See `engine improvement/SESSION_0_6_SCORING_TOLERANCE_FIX.md`.
+league unchanged (thin friend-group is genuine). See `sessions/engine/SESSION_0_6_SCORING_TOLERANCE_FIX.md`.
 **Session 1 (L0 keying) — DONE:** `league_id` + `scoring_key`, derived parquet partitioned by scope
 (`derived/league/…`, `derived/scoring/…`), `leagues.parquet` registry, `ros_outcome_shape` split into
 `ros_player_band` (scoring-scoped) + `ros_league_view` (league-scoped). **Session 1.5** retired
@@ -124,14 +124,14 @@ backfill) — DONE:** `projections` backfilled 2020–2024 (was 2025-only); `pro
 (`holdout_{S}.parquet`, `check_adp_curve_leakage.py` hard gate); the `ros_player_band` wk-4 freeze retired
 (full-season range) with `write_ros_synthesis._read_anchor` pinned so the live 2026 anchor holds. First
 multi-season calibration reported (BAND_Z=0.55 generalizes; SKEW_GAIN=1.5 fragile) — reported, not tuned.
-See `engine improvement/SESSION_2_NFL_SUBSTRATE_BACKFILL.md`. **Session 2.5 (corpus finalization) — DONE:**
+See `sessions/engine/SESSION_2_NFL_SUBSTRATE_BACKFILL.md`. **Session 2.5 (corpus finalization) — DONE:**
 manifest FINAL/harvest-ready (matched 221 + generalization 48 [8/season] + mine 2 = 271 harvested, 41 excluded),
 generalization substrate built (8 custom keys × 2020–2025), `corpus_two_way_flags` reference (10 rows; FLAG not
 exclude). **Session 3a (raw harvest) — DONE:** the deferred half of L0 — the raw fetched + join layer re-keyed
 by `league_id` (`sleeper/<season>/league/<id>/…`, `nfl_sleeper_weekly_joined/league/<id>/…`), the is_mine league
 migrated byte-identical; a new `corpus/harvest.py` pulled all 271 leagues' raw + per-league `join_season` (with
 the `is_two_way` flag riding through), gated by `corpus/check_harvest.py`. See
-`engine improvement/SESSION_3A_RAW_HARVEST.md`. **Session 3b (matched measurement spine) — DONE:** explicit
+`sessions/engine/SESSION_3A_RAW_HARVEST.md`. **Session 3b (matched measurement spine) — DONE:** explicit
 `league_id`/`scoring_key` threaded through the **5 graded reads** (`production_vor` → {`true_rank`,
 `positional_depth`, `bracket_odds`}, `player_signal`) + their backtests, defaulting to the active league so
 the seam holds; a new `corpus/compute_spine.py` computed them for the 221 matched leagues (220 computed + 1
@@ -139,7 +139,7 @@ flagged-degenerate), with a league-stable `bracket_sim` seed, unique sort tie-br
 `production_vor`; gated by `corpus/check_spine.py` (green, teeth). **`ros_league_view` + `manager_features`
 are DESCOPED from the corpus** — narrative/behavioral reads with no answer key, consumed only by the AI
 writers; they stay live/is_mine-only (so the `manager_activity` cross-league fetch is not needed). See
-`engine improvement/SESSION_3B_MATCHED_SPINE.md`. **Session 3c (expected-points substrate backfill) — DONE:**
+`sessions/engine/SESSION_3B_MATCHED_SPINE.md`. **Session 3c (expected-points substrate backfill) — DONE:**
 the §1 Quality axis was TEST-only (100% null 2020–24) because the pre-2025 `nfl_stats` predated the
 `ff_opportunity` join. Fixed **additively** (not a re-pull — moving-source drift would move the frozen
 corpus): `nfl_stats.backfill_exp(year)` appended the 14 `*_exp` components onto 2020–24 (every pre-existing
@@ -158,7 +158,7 @@ flat — frozen spine). (2) **week-1-only join** — one 2023 gen league (garble
 re-joined from persisted raw via the inherited `reg_end` floor. **Superflex pools / lineup slot codes /
 custom scoring all validated clean** on real shapes (no code fix). `corpus/check_spine.py` extended to gate
 **both strata** (269 leagues) + `never_tune`-intact, green with teeth; matched + is_mine spine byte-identical
-(0/666). See `engine improvement/SESSION_3D_GENERALIZATION_ROBUSTNESS.md`. **The corpus measurement spine is
+(0/666). See `sessions/engine/SESSION_3D_GENERALIZATION_ROBUSTNESS.md`. **The corpus measurement spine is
 now complete across both strata → next: the L2 ledger backfill.**
 
 ## Built — Frontend

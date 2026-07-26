@@ -11,7 +11,7 @@
 
 ## Context — the read is two things wearing one coat
 
-`BULL_BEAR_SITUATION_TRUST.md` establishes the key insight, and it shapes the whole project:
+`ai-outlook-trust.md` establishes the key insight, and it shapes the whole project:
 
 - **Bull / bear have a deterministic core.** `ros_player_band` already produces `ros_bull` / `ros_bear` as
   real, calibrated numbers (`ros_center ± BULL_Z·ros_sigma`, anchored to preseason ADP). This part is

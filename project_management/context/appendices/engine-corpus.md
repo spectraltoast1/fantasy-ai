@@ -31,10 +31,10 @@ custom scoring keys validated clean** on real data — no shape-code fix needed 
 caveats retired). `check_spine` extended to gate **both strata (269 leagues) + `never_tune`-intact**, green
 with teeth; matched + is_mine spine **byte-identical (0/666)**. **The corpus measurement spine is complete
 across matched + generalization → the L2 ledger is next.**
-**Companions:** [`IMPROVEMENT_LOOP.md`](./IMPROVEMENT_LOOP.md) · [`PILOT_2026.md`](./PILOT_2026.md) ·
+**Companions:** [`engine-improvement-loop.md`](./engine-improvement-loop.md) · [`pilot-2026.md`](./pilot-2026.md) ·
 [`SESSION_0_5_CORPUS_SELECTION.md`](./SESSION_0_5_CORPUS_SELECTION.md) ·
-[`LLM context/SPIKE_CORPUS_FINDINGS.md`](../LLM%20context/SPIKE_CORPUS_FINDINGS.md) ·
-[`LLM context/712_BACKEND_AUDIT.md`](../LLM%20context/712_BACKEND_AUDIT.md)
+[`sessions/engine/SPIKE_CORPUS_FINDINGS.md`](../sessions/engine/SPIKE_CORPUS_FINDINGS.md) ·
+[`_deprecated/audits/712_BACKEND_AUDIT.md`](../_deprecated/audits/712_BACKEND_AUDIT.md)
 
 > **Session 0 (spike) verified the assumptions with real API responses; Session 0.5 built the selected
 > league registry (`corpus_manifest`).** What changed vs. this doc's original prose:
@@ -93,7 +93,7 @@ just the transaction-only reads.
 
 > **RESOLVED (Session 0, 2026-07-13):** projections come back **to 2019** — full populated week-5 boards
 > every season 2019→2025. The corpus window is confirmed **2020–2025 (six seasons)**, exactly the window
-> the `nfl_stats` backfill already covers. See `LLM context/SPIKE_CORPUS_FINDINGS.md` §A.
+> the `nfl_stats` backfill already covers. See `sessions/engine/SPIKE_CORPUS_FINDINGS.md` §A.
 
 ---
 

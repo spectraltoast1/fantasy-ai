@@ -130,7 +130,7 @@ runbooks — are reference in **`sessions/v1/`**. For how the whole `project_man
 ---
 
 ### Project 1 — Reliable off-laptop data collection
-*Parallel — start immediately · 1–2 sessions · pilot go/no-go gate (`PILOT_2026.md`)*
+*Parallel — start immediately · 1–2 sessions · pilot go/no-go gate (`pilot-2026.md`)*
 
 **Delivers:** ≥95% daily collection coverage from a hosted scheduler instead of the laptop.
 
@@ -149,7 +149,7 @@ runbooks — are reference in **`sessions/v1/`**. For how the whole `project_man
 
 **Delivers:** the app runs on **live 2026 data** for connected leagues, and everything it shows is true.
 
-- **2026 preseason substrate** (ppr + half): build the 2026 ADP points curve, projection consensus, and ROS band — a re-run of the existing substrate builder for the 2026 season (constants unchanged; this is the manual, one-season version of what `ANNUAL_RETUNE_PIPELINE.md` later automates).
+- **2026 preseason substrate** (ppr + half): build the 2026 ADP points curve, projection consensus, and ROS band — a re-run of the existing substrate builder for the 2026 season (constants unchanged; this is the manual, one-season version of what `annual-retune.md` later automates).
 - **In-season weekly refresh pipeline:** fetch (Sleeper rosters/matchups/transactions, nflreadpy stats, Sleeper projections) → join → transforms → load, on a weekly cadence, per league, advancing the `as_of_week` seam. Move from full DROP+CREATE reloads to a safe, incremental, per-league in-season refresh.
 - **Surface the honest engine:** 2026 substrate is built under the current (honest 8c) constants, so the live band is the honest one from day one. *(The 2025 replay keeps the old band unless separately re-derived — low stakes if V1 is live-2026.)*
 - **Market read becomes contemporaneous:** on live 2026 data, market value (2026) × rosters (2026) is no longer cross-time — drop the POC flag and make the trade lean a real, live read.
@@ -171,7 +171,7 @@ runbooks — are reference in **`sessions/v1/`**. For how the whole `project_man
 ---
 
 ### Project 4 — Live 2026 AI outlook (bull / bear / situation)
-*Feature · 2–3 sessions · draws on `BULL_BEAR_SITUATION_TRUST.md` · see Risk R2*
+*Feature · 2–3 sessions · draws on `ai-outlook-trust.md` · see Risk R2*
 
 **Delivers:** the bull/bear/situation grades populated from **live 2026 news**, honestly.
 
@@ -199,7 +199,7 @@ runbooks — are reference in **`sessions/v1/`**. For how the whole `project_man
 ---
 
 ### Project 6 — Launch hardening + instrumentation
-*Gate · 3–5 sessions · draws on `PILOT_2026.md`*
+*Gate · 3–5 sessions · draws on `pilot-2026.md`*
 
 **Delivers:** you can safely onboard the cohort at Week 1 and actually learn from it.
 
@@ -244,13 +244,13 @@ My recommendation: commit the spine to Week 1, treat P3/P4 as "Week 1 if we're a
 
 This is the state Will wants to *reach* — where everything left is formats, platforms, and refinements, not core functionality. Each already has a scoped design doc:
 
-- **Standard scoring** (`STANDARD_SCORING_SUPPORT.md`) — engine-complete; a substrate build + a demo/certification slice. ~1–2 sessions.
-- **Custom scoring** (`CUSTOM_SCORING_SUPPORT.md`) — the first-down projection bridge recovers ~25 points of coverage; threshold bonuses stay a gated experiment. ~2–4 sessions.
-- **Dynasty** (`DYNASTY_SUPPORT.md`) — a different *value model* (multi-year horizon, age curve), the biggest lift; the one place the program actually fits new constants. ~4–6 sessions.
-- **Owner-keyed manager profiles** (`OWNER_KEYED_MANAGER_PROFILES.md`) — one coherent profile per person across their leagues; small once multi-league is standing, and a nice self-serve win (already protected by B3 carrying `owner_id`). ~1 session.
+- **Standard scoring** (`standard-scoring.md`) — engine-complete; a substrate build + a demo/certification slice. ~1–2 sessions.
+- **Custom scoring** (`custom-scoring.md`) — the first-down projection bridge recovers ~25 points of coverage; threshold bonuses stay a gated experiment. ~2–4 sessions.
+- **Dynasty** (`dynasty.md`) — a different *value model* (multi-year horizon, age curve), the biggest lift; the one place the program actually fits new constants. ~4–6 sessions.
+- **Owner-keyed manager profiles** (`owner-keyed-dossiers.md`) — one coherent profile per person across their leagues; small once multi-league is standing, and a nice self-serve win (already protected by B3 carrying `owner_id`). ~1 session.
 - **Other platforms** (ESPN / Yahoo import) — new fetchers behind the same seam. Not yet scoped.
-- **Annual re-tune automation** (`ANNUAL_RETUNE_PIPELINE.md`) — turn the offseason calibration into one command. Next offseason, not 2026.
-- **The full ROS-trust build** (`BULL_BEAR_SITUATION_TRUST.md`) — first-class divergence column, champion/challenger on the prompt — the mature version of what P4 starts.
+- **Annual re-tune automation** (`annual-retune.md`) — turn the offseason calibration into one command. Next offseason, not 2026.
+- **The full ROS-trust build** (`ai-outlook-trust.md`) — first-class divergence column, champion/challenger on the prompt — the mature version of what P4 starts.
 - **Silent-reads confidence** — give `production_vor`, `player_signal` direction, and `bracket_odds` wins/seed a confidence signal (the law-2 gap the trust report flags).
 
 ---
