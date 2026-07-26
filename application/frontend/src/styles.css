@@ -124,6 +124,13 @@ body {
   padding-left: 16px; border-left: 1px solid var(--border-2);
 }
 .gr-league-name { font-size: 13px; font-weight: 700; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* League switcher dropdown (Stage-B B5) — reads like the name, behaves like a select. */
+.gr-league-select {
+  background: transparent; border: none; color: var(--text-2); cursor: pointer;
+  font-family: var(--ui); font-size: 13px; font-weight: 700; letter-spacing: -0.01em;
+  padding: 0; margin: 0; max-width: 240px;
+}
+.gr-league-select:hover { color: var(--text); }
 .gr-league-meta { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.04em; color: var(--muted-2); }
 .gr-league-meta .rec { color: var(--violet-light); }
 
@@ -145,15 +152,17 @@ body {
 .gr-tab.active { background: var(--violet); color: var(--on-violet); }
 .gr-tab-icon { display: inline-flex; }
 
-/* Week switcher + avatar (right) */
-.gr-week { grid-area: week; display: flex; align-items: center; gap: 8px; }
+/* Season + week switchers + avatar (right). The two selectors share the one `week` grid slot. */
+.gr-controls { grid-area: week; display: flex; align-items: center; gap: 14px; }
+.gr-week { display: flex; align-items: center; gap: 8px; }
+.gr-season { display: flex; align-items: center; gap: 8px; }
 .gr-week-label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
-.gr-week select {
+.gr-week select, .gr-season select {
   background: var(--surface); color: var(--text);
   border: 1px solid var(--border-2); border-radius: var(--r-ctl);
   padding: 6px 10px; font-family: var(--mono); font-size: 12px; font-weight: 500; cursor: pointer;
 }
-.gr-week select:hover { border-color: var(--violet-border); }
+.gr-week select:hover, .gr-season select:hover { border-color: var(--violet-border); }
 .gr-avatar {
   grid-area: avatar;
   width: 30px; height: 30px; border-radius: var(--r-pill);
@@ -687,13 +696,14 @@ body {
   }
   .gr-league-name { font-size: 15px; }
   .gr-league-meta { font-size: 11px; }
-  .gr-week {
+  .gr-controls { flex-direction: row; gap: 8px; justify-self: end; }
+  .gr-week, .gr-season {
     flex-direction: column; align-items: flex-start; gap: 2px;
     border: 1px solid var(--border-2); border-radius: var(--r-ctl);
     background: var(--surface); padding: 7px 12px;
   }
   .gr-week-label { font-size: 8.5px; }
-  .gr-week select {
+  .gr-week select, .gr-season select {
     border: none; background: transparent; padding: 0; font-size: 15px; font-weight: 700;
   }
 

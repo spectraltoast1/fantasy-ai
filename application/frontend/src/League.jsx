@@ -8,7 +8,7 @@ import { Gate, REGIME } from './readiness.jsx';
 // everything comes assembled from loadLeague (which reuses loadStandings — one source for
 // records/odds/posture across Teams and League). Rows/dots drill to Team detail.
 
-export default function League({ asOfWeek, onOpenTeam }) {
+export default function League({ asOfWeek, panels, onOpenTeam }) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
 
@@ -51,7 +51,7 @@ export default function League({ asOfWeek, onOpenTeam }) {
           <div className="lg-dash">
             <PlayoffPicture data={data} onOpenTeam={onOpenTeam} />
             <PostureMap data={data} onOpenTeam={onOpenTeam} />
-            <PositionalTalent onOpenTeam={onOpenTeam} />
+            <PositionalTalent panels={panels} onOpenTeam={onOpenTeam} />
           </div>
         </Gate>
       )}
@@ -198,9 +198,10 @@ function PostureMap({ data, onOpenTeam }) {
 
 // Positional Talent — per position, teams ranked by the Market VOR they hold there (a
 // surplus is trade capital, a gap is a target). Self-contained (its own read): Market VOR
-// is the current market and does not replay with the week. Cross-time POC today, flagged.
+// is the current market and does not replay with the week. Gated on the slice's `market`
+// panel — market VOR is computed only for the live slice, so it reads "not available" elsewhere.
 // The Waiver Wire strip is deferred — it needs a free-agent pool entity (none in V1).
-function PositionalTalent({ onOpenTeam }) {
+function PositionalTalent({ panels, onOpenTeam }) {
   const [tal, setTal] = useState(null);
   const [pos, setPos] = useState('RB');
 
@@ -230,7 +231,12 @@ function PositionalTalent({ onOpenTeam }) {
           </button>
         ))}
       </div>
-      {tal == null ? (
+      {panels && panels.market === false ? (
+        <div className="ready-toosoon">
+          <span className="ready-toosoon-tag">Not available</span>
+          <span className="ready-toosoon-text">Market VOR isn’t available for this league.</span>
+        </div>
+      ) : tal == null ? (
         <div className="gr-state">Loading…</div>
       ) : (
         <>
@@ -254,11 +260,6 @@ function PositionalTalent({ onOpenTeam }) {
               </div>
             </div>
           ))}
-          {tal.isCrossTime ? (
-            <p className="lg-pt-poc">
-              Market VOR is the current market × this frozen roster — a cross-time POC, not a live read.
-            </p>
-          ) : null}
           {/* Waiver Wire strip deferred: no free-agent pool entity in V1 (same block as the
               Players "Available" filter). */}
           <div className="lg-pt-waiver">

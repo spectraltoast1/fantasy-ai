@@ -4,7 +4,7 @@ import { Gate, REGIME } from './readiness.jsx';
 import { POS_COLORS } from './posColors.js';
 
 // Players surface — the VOR-anchored table. Anchored on Production VOR (default sort),
-// with Market VOR and the ROS Synthesis bull/bear/situation grades as sortable columns.
+// with Market VOR and the rest-of-season bull/bear/situation outlook as sortable columns.
 // Pure renderer: all data comes assembled from queries.loadPlayers; filtering + sorting
 // are client-side view state (per the contract — no data access in the component).
 
@@ -18,7 +18,7 @@ const SORT_COLS = [
 ];
 const POS_FILTERS = ['ALL', ...POS];
 
-export default function Players({ asOfWeek, onOpenPlayer }) {
+export default function Players({ asOfWeek, panels, onOpenPlayer }) {
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState(null);
   const [pos, setPos] = useState('ALL');
@@ -67,9 +67,8 @@ export default function Players({ asOfWeek, onOpenPlayer }) {
         <h1>Players</h1>
         <div className="sub">
           Every rostered skill player, anchored on <strong>Production VOR</strong> over the
-          waiver line. <strong>MKT</strong> is the current market's VOR (2026 market × 2025
-          roster — a cross-time POC, not a live trade call). <strong>BULL / BEAR / SIT</strong>{' '}
-          are ROS Synthesis grades, shown where an AI read exists.
+          waiver line. <strong>MKT</strong> is the market's VOR. <strong>BULL / BEAR / SIT</strong>{' '}
+          are the rest-of-season outlook{panels && panels.ros_synthesis === false ? ' — no read yet' : ''}.
         </div>
       </div>
 

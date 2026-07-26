@@ -45,12 +45,19 @@ export function assessReadiness(regime, weeks) {
 }
 
 /**
- * Wrap a panel's content. When the data is too thin for the panel's regime, renders
- * the "too early" fallback slot instead (a custom `fallback` node if given — the hook
- * for preseason/qualitative content later — else a default message). When the read is
- * usable but still firming up, renders the content with a subtle low-confidence note.
+ * Wrap a panel's content. Two gates, in order:
+ *   1. Catalog gate (Stage-B B5) — when `panel` is given and the active slice's `panels` map marks
+ *      it off (`panels[panel] === false`), the panel isn't meaningful for THIS league, so render the
+ *      "not for this league" slot (a custom `fallback` if given, else a default note). Optional and
+ *      backward-compatible: callers that pass no `panel` skip it entirely.
+ *   2. Readiness gate — when the data is too thin for the panel's regime, render the "too early"
+ *      fallback slot; when usable-but-early, render with a subtle low-confidence note.
+ * Catalog = "is this panel meaningful for this slice"; readiness = "is there enough data yet".
  */
-export function Gate({ regime, weeks, label, fallback, children }) {
+export function Gate({ regime, weeks, label, fallback, panel, panels, children }) {
+  if (panel && panels && panels[panel] === false) {
+    return <PanelOff label={label}>{fallback}</PanelOff>;
+  }
   const r = assessReadiness(regime, weeks);
   if (r.state === 'tooEarly') {
     return <TooEarly label={label} weeks={r.weeks} needed={r.needed}>{fallback}</TooEarly>;
@@ -60,6 +67,20 @@ export function Gate({ regime, weeks, label, fallback, children }) {
       {r.state === 'building' && <BuildingNote weeks={r.weeks} />}
       {children}
     </>
+  );
+}
+
+// The slot a panel shows when the catalog says it isn't available for the selected league (e.g.
+// market isn't computed outside the live slice). Honest "not here" rather than an empty chart.
+function PanelOff({ label, children }) {
+  if (children) return <div className="ready-slot">{children}</div>;
+  return (
+    <div className="ready-toosoon">
+      <span className="ready-toosoon-tag">Not available</span>
+      <span className="ready-toosoon-text">
+        {label ?? 'This read'} isn’t available for this league.
+      </span>
+    </div>
   );
 }
 
