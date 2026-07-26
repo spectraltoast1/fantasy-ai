@@ -59,19 +59,25 @@ from application.data.transforms import (
 from application.ai import write_manager_dossiers, check_manager_dossiers
 
 # The lineages whose manager dossiers are backfilled this session (root-keyed lineage_id — the
-# chain-root league_id B0 recorded). A representative subset spanning the demo's axes:
-#   lorp  1132400260048977920 — ppr / 10 / 1QB / redraft — is_mine (your league)
-#   nbl    599438300482174976 — half / 12 / 1QB / redraft / division — a 4-season lineage
-#   bgb    866773569361801216 — ppr /  8 / SUPERFLEX / redraft
-#   wcfc  1002292172076539904 — ppr / 12 / SUPERFLEX / keeper
-# The other 8 lineages deliberately ship WITHOUT dossiers this session; a missing dossier degrades
-# cleanly to the front-end's "No dossier for this manager" empty state (reads.py load_manager_dossier
-# → {"missing": True}), so a skipped slice looks intentional, not broken.
+# chain-root league_id B0 recorded). Chosen SIGNAL-FIRST: the cross-league dossier only lights up
+# for managers who also play in other COMPARABLE-format public leagues, so common formats (ppr/half,
+# 1QB, redraft) populate richly while superflex/keeper come back all-"no intel" (empirically: nbl
+# 2023 = 12/12 signal; wcfc 2023 = 0/12). Format diversity is already shown by the base panels on all
+# 31 slices, so this pick optimizes for dossiers that actually populate — plus ONE deliberate empty
+# lineage to prove graceful degradation:
+#   lorp  1132400260048977920 — ppr  / 10       / 1QB / redraft — is_mine (your league); rich
+#   nbl    599438300482174976 — half / 12 / div  / 1QB / redraft — 4 seasons; rich (confirmed 12/12)
+#   dysf   605520066003423232 — ppr  / 10·12·14  / 1QB / redraft — 4 seasons, size variety; rich
+#   wcfc  1002292172076539904 — ppr  /  8 / SUPERFLEX / keeper   — the DELIBERATE empty example (0/12)
+# (bgb, ppr/8/SUPERFLEX, was dropped — it would come back empty like wcfc.) The other lineages ship
+# WITHOUT dossiers; a missing dossier degrades cleanly to the front-end's "No dossier for this
+# manager" empty state (reads.py load_manager_dossier → {"missing": True}), so a skipped slice — and
+# an all-zero-signal one like wcfc — looks intentional, not broken.
 DOSSIER_LINEAGES = (
-    "1132400260048977920",
-    "599438300482174976",
-    "866773569361801216",
-    "1002292172076539904",
+    "1132400260048977920",   # lorp (is_mine)
+    "599438300482174976",    # nbl
+    "605520066003423232",    # dysf
+    "1002292172076539904",   # wcfc (deliberate empty example)
 )
 
 SPINE_READS = compute_spine.READS
