@@ -113,17 +113,18 @@ def records_by_roster(week_rows) -> dict:
     return rec
 
 
-def target_week_for(as_of_week, conn=None):
+def target_week_for(as_of_week, conn=None, lid=None):
     """Resolve as-of N → the upcoming target week N+1 (queries.js targetWeekFor, l.740).
 
     ``as_of_week`` null → ``max(week) + 1`` (the latest played week's next week); a number →
-    ``N + 1``. Returns ``None`` only when the season has no weeks.
+    ``N + 1``. Returns ``None`` only when the season has no weeks. ``lid`` defaults to the is_mine
+    league (parity) when None.
     """
     if as_of_week is not None:
         return int(as_of_week) + 1
 
     sql = "SELECT max(week) AS w FROM season WHERE league_id = %(lid)s"
-    params = {"lid": settings.league_id()}
+    params = {"lid": lid or settings.league_id()}
     if conn is not None:
         with conn.cursor() as cur:
             cur.execute(sql, params)
@@ -134,7 +135,7 @@ def target_week_for(as_of_week, conn=None):
     return None if w is None else int(w) + 1
 
 
-def team_projections(as_of_week, target_week) -> dict:
+def team_projections(as_of_week, target_week, lid=None) -> dict:
     """Per-team projected lineup for ``target_week`` (queries.js teamProjections, l.765).
 
     Roster-as-of-N (``_latest`` arg_max — the SAME definition Team detail uses) × that week's
@@ -144,10 +145,10 @@ def team_projections(as_of_week, target_week) -> dict:
     what the win-prob math consumes downstream (round first, then compute win prob).
 
     Returns ``rosterId → {rosterId, name, owner, isMe, mu, sigma, starters, bench}`` — bench =
-    non-starters sorted by ``pts`` desc.
+    non-starters sorted by ``pts`` desc. ``lid`` defaults to the is_mine league (parity) when None.
     """
     me = settings.my_username()
-    lid = settings.league_id()
+    lid = lid or settings.league_id()
 
     with db.connect() as conn:
         def q(sql, params):
@@ -239,28 +240,30 @@ def team_projections(as_of_week, target_week) -> dict:
     return teams
 
 
-def team_matchup_summary(roster_id, as_of_week):
+def team_matchup_summary(roster_id, as_of_week, lid=None):
     """One team's upcoming (week N+1) game — opponent + projected totals + win prob.
 
     The Team-detail ``thisWeek`` bar (queries.js teamMatchupSummary, l.846). ``None`` when there
-    is no next game (season complete) or the team isn't scheduled that week.
+    is no next game (season complete) or the team isn't scheduled that week. ``lid`` defaults to
+    the is_mine league (parity) when None.
     """
     rid = int(roster_id)
-    target_week = target_week_for(as_of_week)
+    lid = lid or settings.league_id()
+    target_week = target_week_for(as_of_week, lid=lid)
     if target_week is None:
         return None
 
-    lid = settings.league_id()
     mine = db.fetch_all(
         "SELECT matchup_id FROM schedule "
-        "WHERE league_id = %(lid)s AND week = %(tw)s AND roster_id = %(rid)s",
+        "WHERE league_id = %(lid)s AND week = %(tw)s AND roster_id = %(rid)s "
+        "AND matchup_id IS NOT NULL",
         {"lid": lid, "tw": target_week, "rid": rid},
     )
     if not mine:
         return None
     mid = int(mine[0]["matchup_id"])
 
-    teams = team_projections(as_of_week, target_week)
+    teams = team_projections(as_of_week, target_week, lid=lid)
     sides = db.fetch_all(
         "SELECT roster_id FROM schedule "
         "WHERE league_id = %(lid)s AND week = %(tw)s AND matchup_id = %(mid)s",
