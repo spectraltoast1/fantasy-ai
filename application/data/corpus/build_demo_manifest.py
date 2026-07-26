@@ -176,7 +176,11 @@ def build(report: bool = False) -> pl.DataFrame:
                 "previous_league_id": prev_lid,
                 "viewer_roster_id": viewer_roster,
                 "panels_market": live_mine_2025,
-                "panels_ros": live_mine_2025,
+                # ROS is OFF everywhere (Stage-B B4): the 2026-news→2025 splice was a POC, retired in
+                # B3 (ros_synthesis loads 0 rows for every slice). Decoupled from panels_market so the
+                # catalog is honest — market stays on for the is_mine 2025 slice. A future year-matched
+                # 2025 news read is how the bull/bear/sit grades come back.
+                "panels_ros": False,
                 "panels_manager": True,
             })
 
