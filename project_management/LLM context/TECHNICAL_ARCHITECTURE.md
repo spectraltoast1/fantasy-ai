@@ -282,11 +282,19 @@ deferred, but the platform was chosen so it's a bolt-on later.
 
 ### Store schema reference (13 tables — Session 2)
 
-The serving store is 13 Postgres tables, one per published parquet dataset (the 13 `registerParquet`
-datasets in `frontend/src/db.js`). The DDL is **machine-generated** — `application/data/serve/build_db.py --emit`
-reads each parquet's schema and writes `schema.sql` + `MANIFEST.md`; **do not hand-edit `schema.sql`**,
-re-run `--emit`. `build_db.py --load` applies it (DROP+CREATE) and COPYs the exact `public/data/*.parquet`
-the app serves today, so the DB is a byte-faithful copy of the current app. `--verify` asserts row counts.
+The serving store is 13 Postgres tables (one per derived dataset) + a 14th `demo_manifest` catalog table.
+The DDL is **machine-generated** — `application/data/serve/build_db.py --emit` writes `schema.sql` +
+`MANIFEST.md`; **do not hand-edit `schema.sql`**, re-run `--emit`. **Stage-B B3 turned the loader
+multi-league**: it now reads **all 31 demo slices from the derived store** (via `data_layer.read_demo_manifest()`
++ `data_layer` path helpers — the RAW parquet, all as-of-weeks, NOT the "latest slice" `read_*` accessors),
+keyed by `league_id`+`season`. **Skip-if-absent** per (slice, dataset) encodes the panel gating (base 31,
+`manager_dossiers` 11, `market_vor` 1, `ros_synthesis` 0 — the year-match rule). The DDL is a **UNION** across
+slices (division-aware leagues add `teams.division`); `schedule`'s own `league_id` is de-duped; `manager_
+dossiers` is indexed on `(league_id, owner_id)`. `build_db.py --load` applies the schema (DROP+CREATE) and
+COPYs every present slice; `--dry-run` prints the load/skip plan offline; `--verify` asserts per-table row
+counts == the on-disk sum over present slices + prints per-table distinct-league counts. The catalog endpoint
+`GET /api/leagues` (`reads.load_leagues`) reads `demo_manifest` from Postgres — the lineage→seasons tree the
+B5 switcher will render, `weeks_available` derived from the `season` table (played weeks).
 
 Conventions on every table:
 - **`league_id TEXT`** — the active league, stamped on every row. A no-op filter today (one league); the

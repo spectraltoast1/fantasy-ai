@@ -192,7 +192,8 @@ CREATE TABLE "teams" (
     roster_id BIGINT,
     team_name TEXT,
     owner_name TEXT,
-    owner_id TEXT
+    owner_id TEXT,
+    division BIGINT
 );
 CREATE INDEX IF NOT EXISTS "ix_teams_roster_id" ON "teams" (roster_id);
 CREATE INDEX IF NOT EXISTS "ix_teams_league_id_season" ON "teams" (league_id, season);

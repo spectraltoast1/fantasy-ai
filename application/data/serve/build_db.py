@@ -135,6 +135,26 @@ def _ref() -> tuple[int, str, str]:
     return int(r["season"]), str(r["league_id"]), str(r["scoring_key"])
 
 
+def _table_schema(ds: "Dataset") -> dict:
+    """The UNION of columns across every slice that has this dataset (+ the --emit reference), so the
+    DDL is a superset. Slices are heterogeneous: division-aware corpus leagues carry a ``division``
+    column the is_mine slice lacks. Each column resolves to the first NON-Null dtype seen (an all-Null
+    column stays Null -> DOUBLE via pg_type). A per-slice COPY names only its own columns, so a slice
+    missing a union column simply leaves it NULL."""
+    rs, rl, rk = _ref()
+    ref_path = ds.ref() if ds.ref else ds.path(rs, rl, rk)
+    sources = [ref_path] + [ds.path(s, lid, sk) for lid, s, sk in _slices()]
+    merged: dict = {}
+    for p in sources:
+        if not p.exists():
+            continue
+        for name, dt in pl.read_parquet_schema(p).items():
+            if name not in merged or (merged[name].base_type() == pl.Null and dt.base_type() != pl.Null):
+                merged[name] = dt
+    merged.pop("league_id", None)
+    return merged
+
+
 def pg_type(dt: pl.DataType) -> str:
     """Map a polars dtype to a Postgres column type."""
     bt = dt.base_type()
@@ -206,7 +226,7 @@ def emit() -> None:
 
     for ds in DATASETS:
         ref_path = ds.ref() if ds.ref else ds.path(rs, rl, rk)
-        schema = pl.read_parquet_schema(ref_path)
+        schema = _table_schema(ds)   # UNION across slices — superset DDL (e.g. teams.division)
         n = pl.scan_parquet(ref_path).select(pl.len()).collect().item()
         cols, _add_season, jsonb_cols = _plan(ds.table, schema)
 

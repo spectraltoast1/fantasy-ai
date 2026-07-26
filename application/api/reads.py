@@ -855,8 +855,9 @@ def load_leagues() -> dict:
 
     The one deliberately UNSCOPED read — it spans every league, so it does NOT filter on
     ``settings.league_id()`` like the per-panel reads. ``weeks_available`` is derived at query
-    time from the loaded ``schedule`` (keyed on league_id+season). Panels + name + viewer mirror
-    the manifest exactly (lorp ``viewer_roster_id`` is 8). Shape = the B3 contract.
+    time from the loaded ``season`` (the PLAYED weeks — the same source ``load_weeks`` uses — so a
+    frozen slice like is_mine 2025 reports [1..4], not the schedule's full forward [1..18]). Panels
+    + name + viewer mirror the manifest exactly (lorp ``viewer_roster_id`` is 8). Shape = the B3 contract.
     """
     with db.connect() as conn, conn.cursor() as cur:
         cur.execute(
@@ -867,7 +868,7 @@ def load_leagues() -> dict:
         rows = cur.fetchall()
         cur.execute(
             "SELECT league_id, season, array_agg(DISTINCT week ORDER BY week) AS weeks "
-            "FROM schedule GROUP BY league_id, season"
+            "FROM season GROUP BY league_id, season"
         )
         weeks_by = {(w["league_id"], int(w["season"])): [int(x) for x in w["weeks"]]
                     for w in cur.fetchall()}
