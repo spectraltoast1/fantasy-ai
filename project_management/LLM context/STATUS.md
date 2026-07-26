@@ -1,6 +1,6 @@
 # STATUS
 
-## STORE MIGRATION TRACK — Stage B B0+B1 SHIPPED (2026-07-25): schedule league-scoped + demo slate recorded
+## STORE MIGRATION TRACK — Stage B B2 SHIPPED (2026-07-25): demo slices computed (base for all 31, dossiers for 4 lineages)
 
 > This section is the **store-migration track** (DuckDB-WASM → server store + API), driven by
 > `scope docs/future work/MULTI_LEAGUE_STORE_MIGRATION.md` and the `SESSION_N_*.md` runbooks. It is a
@@ -54,10 +54,57 @@ reload). Ran B1 first, then B0. (`MULTI_LEAGUE_STORE_MIGRATION.md` B0 + B1.)
     (and the S6 live app — Tet Lasso was `rosterId` 8) resolve `spectraltoast1` to **`roster_id` 8** in both
     lorp seasons; the manifest records 8.
 
-**NEXT — B2 (full-set compute for the demo slices; the heaviest Stage-B session).** Needs both B0's slate
-(`demo_manifest.parquet`) and B1's fix. New `compute_demo_slices.py` modeled on `compute_spine.py`: per
-`(league_id, season)` build scoring-keyed substrate → spine → narrative/market → AI (dossiers), honoring the
-panel policy (compute market/ros only where flagged). Then B3 loads all slices + adds `GET /api/leagues`.
+**Stage B B2 — what shipped (2026-07-25, worktree `worktree-stage-b2`, 3 commits).** The heavy compute over
+the demo slate: every slice now has the complete derived analytics the B3 loader needs, honoring the panel
+policy. Store-agnostic — derived **parquet only**; the live app + production DB were **not touched** (B3 owns
+the reload). (`MULTI_LEAGUE_STORE_MIGRATION.md` B2.)
+
+- **New driver `application/data/corpus/compute_demo_slices.py`** (modeled on `compute_spine.py`): reads
+  `demo_manifest.parquet` (31 slices / 12 lineages) as its work-list; **idempotent, resumable, per-slice-
+  isolated** (a sub-artifact on disk is skipped; one slice's failure is logged + isolated, never fatal, never a
+  half-write). Two phases — `base` (un-gated, all 31) and `dossiers` (panel-gated + lineage-scoped).
+- **Producers league-scoped (the real code change).** The `data_layer` was already fully league-keyed, but the
+  narrative/AI producers hard-wired the is_mine league. Threaded `*, league_id=None` (default is_mine, backward-
+  compatible) through **`compute_manager_features`**, **`write_manager_dossiers`**, and
+  **`check_manager_dossiers`** — mirroring the keying the spine producers already had. (Spine/schedule producers
+  needed no change: `export_schedule` got `--league-id` in B1; the 5 spine reads were league-scoped since 3b.)
+- **BASE pass — all 31 slices, valid.** Schedule exported to B1's per-league path for the 29 that lacked it
+  (each keyed in its own `derived/league/<id>/`, no collisions); the 5-read **spine** reused for 30, **computed
+  for the is_mine 2024 slice** (`1132400260048977920`, its derived dir was empty) and determinism-validated.
+  Substrate ({ppr,half}×2020–2025) **reused, never rebuilt**. The corpus `check_spine` gate stays green (the 30
+  corpus slices are in its manifest; the 2 is_mine slices are self-validated by the driver).
+- **DOSSIERS — 4 lineages / 11 slices, 130 manager rows, 11/11 gate-validated.** Backfilled the real cross-
+  league `manager_activity` fan-out → `manager_features` → Haiku dossiers for a **signal-first** pick.
+  **Key finding:** the cross-league dossier only populates for managers who *also* play in comparable-format
+  public leagues, so common formats (ppr/half, 1QB, redraft) render rich while superflex/keeper come back all
+  "no intel" (nbl 2023 = 12/12; wcfc 2023 = 0/12). Format diversity is already carried by the base panels on all
+  31, so the pick optimized for slices that populate:
+  - **lorp** (is_mine) + **nbl** + **dysf** — rich common-format lineages; **wcfc** kept as **one deliberate
+    empty** (superflex/keeper) to prove clean degradation. **bgb dropped** (would come back empty; not fetched).
+  - **Signal concentrates in recent seasons:** nbl 2023/24/25 fully deep, dysf 2020/2024 populate, lorp 2025
+    rich; older seasons (2020–22) + wcfc render the honest zero-signal state (fewer comparable public leagues
+    existed on Sleeper then). One transient malformed-JSON Haiku reply (nbl 2024) was **isolated and recovered on
+    a re-run** — resumability working as designed.
+- **Gated panels are a no-op (by design).** `panels_market`/`panels_ros` are ON only for the is_mine 2025 slice,
+  which already had market_vor + ros_synthesis from Stage A — so B2 computed **no new** market/news data. The
+  other 30 slices get standings/VOR/projections/matchups/positional-depth (+ dossiers where backfilled) and
+  nothing gated. The "gate historical, keep dossiers" decision, honored.
+- **Degradation confirmed clean (dossiers are user-facing).** A slice with no dossier → API
+  `load_manager_dossier` returns `{"missing": True}` → front-end renders *"No dossier for this manager"*
+  (`Dossier.jsx`); an all-zero-signal slice (wcfc) → the *"No intel"* state. A skipped/empty slice looks
+  intentional, not broken.
+
+**⚠ B3 HANDOFFS (carry into the B3 brief):**
+1. Load `schedule` from the **new** `derived/league/<id>/schedule_<season>.parquet` (+ `league_id` col), not the
+   old root (B1's handoff, still open).
+2. **Load all 31 slices from the derived store** (not `public/data`). Base analytics exist for all 31; **manager
+   dossiers exist for only 11 slices** (lorp 2024–25, nbl 2022–25, dysf 2020/21/22/24, wcfc 2023). The loader
+   **must tolerate a league with zero dossier rows** without crashing (the WHERE returns empty → `missing:True` →
+   clean). Optional front-end polish: a **league-level** "dossiers not computed for this league" instead of N
+   per-manager empties.
+3. Add `GET /api/leagues` (the lineage-grouped catalog) + the league/season selectors.
+
+**NEXT — B3 (load all slices from the derived store + `GET /api/leagues`).** See the handoffs above.
 
 ---
 
