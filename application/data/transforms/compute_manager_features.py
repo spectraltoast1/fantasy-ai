@@ -10,6 +10,10 @@ confidence on. Rate/lean features are null when the sample is too thin to define
 a fabricated 0 (law 2). NOT a forward projection and NOT the dossier — this is the pre-filtered
 feature substrate; the AI synthesis is Phase B.
 
+League-scoped (Stage-B B2): `run`/`compute` take `*, league_id=None` (default the is_mine league)
+and route reads + the write through `data_layer`'s league keying → the per-league derived dir
+`derived/league/<league_id>/manager_features_{season}.parquet`, so any demo slice can be computed.
+
 Same SOLID shape as the other compute transforms: the pure per-manager math lives in
 `_manager.manager_features` (injected constants, no I/O), `compute(season)` is the composition
 root, `run(season)` writes. Every manager in the league gets a row — including a manager with
@@ -44,9 +48,9 @@ def _primary_username() -> str | None:
         return None
 
 
-def compute(season: int) -> pl.DataFrame:
-    activity = data_layer.read_manager_activity(season)
-    teams = data_layer.read_sleeper_teams(season)          # owner_id, roster_id, owner_name, team_name
+def compute(season: int, *, league_id=None) -> pl.DataFrame:
+    activity = data_layer.read_manager_activity(season, league_id=league_id)
+    teams = data_layer.read_sleeper_teams(season, league_id=league_id)   # owner_id, roster_id, owner_name, team_name
 
     # sleeper_player_id -> position, skill only (for the positional lean of adds).
     players = data_layer.read_sleeper_players()
@@ -90,14 +94,17 @@ def compute(season: int) -> pl.DataFrame:
     return df
 
 
-def run(season: int) -> None:
-    df = compute(season)
-    data_layer.write_manager_features(df, season)
-    print(f"  → snapshots/derived/manager_features_{season}.parquet")
+def run(season: int, *, league_id=None) -> None:
+    df = compute(season, league_id=league_id)
+    data_layer.write_manager_features(df, season, league_id=league_id)
+    lid = league_id or data_layer._active_league(season)[0]
+    print(f"  → snapshots/derived/league/{lid}/manager_features_{season}.parquet")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Compute the per-manager cross-league behavioural features.")
     parser.add_argument("--season", type=int, required=True)
+    parser.add_argument("--league-id", type=str, default=None,
+                        help="League to compute (default: the is_mine league of the season).")
     args = parser.parse_args()
-    run(args.season)
+    run(args.season, league_id=args.league_id)
