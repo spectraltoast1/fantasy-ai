@@ -9,13 +9,26 @@ export const POS = ['QB', 'RB', 'WR', 'TE'];
 
 const API = '/api';
 
-// GET `${API}${path}` with `params` as the query string. `as_of_week` (or any null/undefined
-// param) is OMITTED so the server applies its "latest week" default — the old `n == null →
-// latest` seam. Throws on a non-2xx, mirroring the DuckDB-era `query()` so views' existing
+// The active slice (Stage-B B5): { league_id, season, viewer_roster_id }. A module-level value —
+// like the old MY_USERNAME constant — that `apiGet` merges into EVERY request, so the view
+// components keep calling loadPlayers(asOfWeek) etc. unchanged while the whole app follows the
+// selected league/season/viewer. App sets it SYNCHRONOUSLY on a slice switch, before the reloads
+// fire. Empty {} until the first slice is set → the server falls back to the is_mine default (parity).
+let _slice = {};
+
+// Set the active slice. Pass the fields you have; nulls/undefined are dropped per-request by apiGet.
+export function setActiveSlice(slice) {
+  _slice = slice || {};
+}
+
+// GET `${API}${path}` with the active slice + per-call `params` as the query string. `as_of_week`
+// (or any null/undefined param) is OMITTED so the server applies its "latest week" default — the
+// old `n == null → latest` seam; unset slice fields drop the same way. Per-call params win on a key
+// collision. Throws on a non-2xx, mirroring the DuckDB-era `query()` so views' existing
 // loading/error states keep working. Returns the parsed JSON (which may be `null` — e.g. an
 // unknown roster/matchup — matching the old loaders).
 async function apiGet(path, params = {}) {
-  const qs = Object.entries(params)
+  const qs = Object.entries({ ..._slice, ...params })
     .filter(([, v]) => v != null)
     .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
     .join('&');
