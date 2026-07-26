@@ -5,18 +5,25 @@ Engineering guide for Claude Code sessions on this project. **Read this first.**
 ## What this project is
 
 A fantasy football analytics dashboard (V1) and a future AI advisor (V2+).
-Authoritative context lives in two docs — read them; don't rely on chat history:
+Authoritative context lives in `project_management/context/` — read these; don't
+rely on chat history:
 
-- `project_management/LLM context/STATUS.md` — current project state + next move
-- `project_management/LLM context/TECHNICAL_ARCHITECTURE.md` — stack, data layer, principles
+- `context/STATUS.md` — current project state + next move
+- `context/ARCHITECTURE.md` — stack, data layer, current design
+- `context/CODING_BIBLE.md` — the rules every coding agent must follow (read before
+  writing code)
+- `context/PRODUCT.md` · `context/ROADMAP.md` — what/why + the master roadmap
 
-If a fact isn't in those two docs, it isn't established. **Update them — don't
-duplicate their content here.**
+Deeper rationale lives in `context/appendices/` (pull one in when a task needs it).
+Project roadmaps are in `projects/`; per-project session records are in `sessions/`.
+If a fact isn't in the SOT or an appendix, it isn't established. **Keep STATUS &
+ARCHITECTURE current per the anti-bloat rule (CODING_BIBLE §7) — replace or condense,
+push depth to appendices, never append a log.**
 
 ## Session lifecycle
 
 One session = one worktree = a bounded chunk of work = one merge. Full detail in
-`project_management/co-build guides/SESSION_GUIDE.md`. The short version:
+`project_management/context/SESSION_GUIDE.md`. The short version:
 
 ### Setup (start of every session)
 1. **Work in a worktree, not main.** Isolation is the point: main stays clean and
@@ -26,7 +33,7 @@ One session = one worktree = a bounded chunk of work = one merge. Full detail in
 2. **Run `scripts/worktree-setup.sh`.** It links the gitignored runtime
    (config, data, node_modules, dev-server data) from main into the worktree.
    Without it the app cannot run here — see "Runtime lives in main" below.
-3. **Read STATUS.md** to orient on the current state and next move.
+3. **Read `context/STATUS.md`** to orient on the current state and next move.
 
 ### Work
 - Plan → execute → **verify** (run the app / browser preview; never ask the user
@@ -35,8 +42,10 @@ One session = one worktree = a bounded chunk of work = one merge. Full detail in
 
 ### Closedown — trigger: task done **OR 3 commits**, whichever comes first
 1. `git status` clean — only intended edits remain.
-2. Update STATUS.md (and TECHNICAL_ARCHITECTURE.md if the stack, folder structure,
-   or a technical decision changed).
+2. **Update `context/STATUS.md`** (and `context/ARCHITECTURE.md` if the stack, folder
+   structure, or a technical decision changed) — **per the anti-bloat rule
+   (CODING_BIBLE §7): replace stale state, don't append a dated log; the session's
+   own narrative goes in `sessions/<project>/`, not STATUS.**
 3. `scripts/worktree-close.sh` to review the diff, then
    `scripts/worktree-close.sh --merge` to merge into main, remove the worktree, and
    delete the now-merged branch (it self-cleans — no leftover branches/worktrees).
@@ -56,7 +65,7 @@ through the links lands in main's single store, so there's no duplicate/stale
 copy. Gotchas (committed-file traps, symlink vs `.gitignore`, venv) are documented
 in the SESSION_GUIDE.
 
-## Non-negotiables (full list in TECHNICAL_ARCHITECTURE.md)
+## Non-negotiables (full list in `context/CODING_BIBLE.md`)
 
 - **polars, never pandas.**
 - All data I/O goes through `application/data/data_layer.py`.
