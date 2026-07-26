@@ -135,7 +135,7 @@ def target_week_for(as_of_week, conn=None, lid=None):
     return None if w is None else int(w) + 1
 
 
-def team_projections(as_of_week, target_week, lid=None) -> dict:
+def team_projections(as_of_week, target_week, lid=None, viewer=None) -> dict:
     """Per-team projected lineup for ``target_week`` (queries.js teamProjections, l.765).
 
     Roster-as-of-N (``_latest`` arg_max — the SAME definition Team detail uses) × that week's
@@ -145,9 +145,10 @@ def team_projections(as_of_week, target_week, lid=None) -> dict:
     what the win-prob math consumes downstream (round first, then compute win prob).
 
     Returns ``rosterId → {rosterId, name, owner, isMe, mu, sigma, starters, bench}`` — bench =
-    non-starters sorted by ``pts`` desc. ``lid`` defaults to the is_mine league (parity) when None.
+    non-starters sorted by ``pts`` desc. ``lid`` defaults to the is_mine league (parity) when None;
+    ``viewer`` is the resolved "you" roster_id (from the caller's ``resolve_viewer``) — ``isMe`` is
+    ``rid == viewer``. When ``viewer`` is None (no viewer in this league) nothing is flagged "me".
     """
-    me = settings.my_username()
     lid = lid or settings.league_id()
 
     with db.connect() as conn:
@@ -231,7 +232,7 @@ def team_projections(as_of_week, target_week, lid=None) -> dict:
             "rosterId": rid,
             "name": t["team_name"] or t["owner_name"] or f"Team {rid}",
             "owner": t["owner_name"] if t["owner_name"] is not None else None,
-            "isMe": t["owner_name"] == me,
+            "isMe": rid == viewer,
             "mu": calcs.round1(mu),  # round μ at the team level; the win-prob math reads THIS.
             "sigma": sigma,
             "starters": picks,

@@ -19,15 +19,17 @@ from application.api import reads
 router = APIRouter(prefix="/api")
 
 
-def slice_params(league_id: str | None = None, season: int | None = None) -> dict:
+def slice_params(league_id: str | None = None, season: int | None = None,
+                 viewer_roster_id: int | None = None) -> dict:
     """The optional slice selector shared by every read route. Validates a non-None ``league_id``
     against the demo_manifest catalog (404 on an unknown slice); ``None`` → the is_mine default
     (resolved inside each ``load_*``). ``season`` is carried for validation/future dynasty, never a
-    SQL filter (a redraft ``league_id`` already pins one ``(league, season)`` slice). Returned as a
-    kwargs dict so routes forward it with ``**slice``."""
+    SQL filter (a redraft ``league_id`` already pins one ``(league, season)`` slice).
+    ``viewer_roster_id`` (Stage-B B5) selects the "you" roster; ``None`` → ``MY_USERNAME``'s roster
+    (parity). Returned as a kwargs dict so routes forward it with ``**slice``."""
     if league_id is not None and not reads.slice_exists(league_id):
         raise HTTPException(status_code=404, detail=f"unknown league_id {league_id}")
-    return {"league_id": league_id, "season": season}
+    return {"league_id": league_id, "season": season, "viewer_roster_id": viewer_roster_id}
 
 
 @router.get("/weeks")

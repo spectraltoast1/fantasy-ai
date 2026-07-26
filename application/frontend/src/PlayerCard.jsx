@@ -10,7 +10,7 @@ import { POS_COLORS } from './posColors.js';
 
 const TRADE_COLOR = { BUY: 'var(--violet-light)', SELL: 'var(--ridingluck)', HOLD: 'var(--muted)' };
 
-export default function PlayerCard({ sleeperId, asOfWeek }) {
+export default function PlayerCard({ sleeperId, asOfWeek, panels }) {
   const [card, setCard] = useState(null);
   const [err, setErr] = useState(null);
 
@@ -60,7 +60,6 @@ export default function PlayerCard({ sleeperId, asOfWeek }) {
             valueStr={fmt(card.mkt.value)}
             deltaStr={card.mkt.delta != null ? signed(card.mkt.delta) : null}
             up={card.mkt.up}
-            muted={card.mkt.crossTime}
           />
           {card.lean ? (
             <div className="pc-trade">
@@ -68,9 +67,6 @@ export default function PlayerCard({ sleeperId, asOfWeek }) {
                 {card.lean.call}
               </span>
               <span className="pc-trade-why">{card.lean.why}</span>
-              {card.lean.crossTime ? (
-                <span className="pc-poc">POC · cross-time (2026 market × 2025 roster) — not a live call</span>
-              ) : null}
             </div>
           ) : null}
         </div>
@@ -103,7 +99,9 @@ export default function PlayerCard({ sleeperId, asOfWeek }) {
         )}
       </section>
 
-      {/* ROS Outcome Shape — the AI bull/bear/situation read (sparse). */}
+      {/* ROS Outcome Shape — the bull/bear/situation read. It runs on live in-season news; until a
+          year-matched live-news read exists it shows an honest empty state (matches the dossier
+          "no intel" pattern) rather than fabricated grades. */}
       <section className="pc-section">
         <div className="pc-h3">ROS Outcome Shape</div>
         {card.ros ? (
@@ -116,12 +114,12 @@ export default function PlayerCard({ sleeperId, asOfWeek }) {
             <div className="pc-conf">
               <span className={`pc-conf-tag c-${card.ros.confidence}`}>{cap(card.ros.confidence)} confidence</span>
               {card.ros.confidenceNote ? <span className="pc-conf-note">{card.ros.confidenceNote}</span> : null}
-              {card.ros.priorSeason ? <span className="pc-thin"> · anchor is prior-season</span> : null}
             </div>
           </>
         ) : (
           <div className="pc-empty">
-            No ROS synthesis for this player yet — the AI read runs for a subset today.
+            No rest-of-season outlook yet — the bull / bear / situation read runs on live in-season
+            news, arriving with live data.
           </div>
         )}
       </section>

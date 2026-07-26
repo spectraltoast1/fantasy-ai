@@ -57,12 +57,31 @@ def slice_exists(league_id) -> bool:
     ))
 
 
+def resolve_viewer(lid, viewer_roster_id=None):
+    """The "you" roster for a league (Stage-B B5). Given ``viewer_roster_id`` → that roster; else
+    resolve it from ``MY_USERNAME`` for this league exactly as today (the same teams lookup
+    ``load_league_meta`` already does) → the is_mine default. Returns an ``int`` roster_id, or None
+    when the viewer isn't in the league (→ no "me" highlight, same as today's owner-not-found).
+
+    Parity: when ``viewer_roster_id`` is None this returns today's ``my_roster_id`` (roster 8 for the
+    is_mine league = ``MY_USERNAME``'s roster), so the ``roster_id == viewer`` test yields the identical
+    isMe set as the old ``owner_name == MY_USERNAME`` test."""
+    if viewer_roster_id is not None:
+        return int(viewer_roster_id)
+    rows = db.fetch_all(
+        "SELECT roster_id FROM teams WHERE league_id = %(lid)s AND owner_name = %(me)s",
+        {"lid": lid, "me": settings.my_username()},
+    )
+    return int(rows[0]["roster_id"]) if rows else None
+
+
 # ---------------------------------------------------------------------------
 # Shared reads — weeks selector + league-meta chrome.
 # ---------------------------------------------------------------------------
 
-def load_weeks(league_id=None, season=None) -> dict:
-    """Weeks played + the default (latest). Mirrors loadWeeks (l.644)."""
+def load_weeks(league_id=None, season=None, viewer_roster_id=None) -> dict:
+    """Weeks played + the default (latest). Mirrors loadWeeks (l.644).
+    (``viewer_roster_id`` accepted for a uniform slice signature; weeks have no "me" flag.)"""
     lid = league_id or settings.league_id()
     rows = db.fetch_all(
         "SELECT DISTINCT week FROM season WHERE league_id = %(lid)s ORDER BY week",
@@ -72,9 +91,10 @@ def load_weeks(league_id=None, season=None) -> dict:
     return {"weeks": weeks, "latest": weeks[-1] if weeks else None}
 
 
-def load_league_meta(as_of_week=None, league_id=None, season=None) -> dict:
+def load_league_meta(as_of_week=None, league_id=None, season=None, viewer_roster_id=None) -> dict:
     """Top-bar chrome: "10-tm · PPR · 1QB" label + the user's record. Mirrors loadLeagueMeta (l.659)."""
     lid = league_id or settings.league_id()
+    viewer = resolve_viewer(lid, viewer_roster_id)
     p = _params(as_of_week, lid=lid)
     with db.connect() as conn:
         def q(sql, extra=None):
@@ -88,10 +108,13 @@ def load_league_meta(as_of_week=None, league_id=None, season=None) -> dict:
             "WHERE league_id = %(lid)s AND section = 'scoring' AND key = 'rec'"
         )
         slot_rows = q("SELECT slot, count, eligible FROM lineup_slots WHERE league_id = %(lid)s")
+        # The viewer's team row (record + "myOwner" chrome), keyed on the resolved viewer roster
+        # (= MY_USERNAME's roster by default). `roster_id = NULL` matches nothing when the viewer
+        # isn't in the league — same as today's owner-not-found.
         me_rows = q(
             "SELECT roster_id, owner_name FROM teams "
-            "WHERE league_id = %(lid)s AND owner_name = %(me)s",
-            {"me": settings.my_username()},
+            "WHERE league_id = %(lid)s AND roster_id = %(viewer)s",
+            {"viewer": viewer},
         )
 
         team_count = int(team_rows[0]["n"]) if team_rows else 0
@@ -202,10 +225,10 @@ def _sql_players(n):
     )
 
 
-def load_players(as_of_week=None, league_id=None, season=None) -> list[dict]:
+def load_players(as_of_week=None, league_id=None, season=None, viewer_roster_id=None) -> list[dict]:
     """The Players table: rostered skill players priced by PROD VOR. Mirrors loadPlayers (l.87)."""
     lid = league_id or settings.league_id()
-    me = settings.my_username()
+    viewer = resolve_viewer(lid, viewer_roster_id)
     rows = db.fetch_all(_sql_players(as_of_week), _params(as_of_week, lid=lid))
     return [
         {
@@ -215,7 +238,7 @@ def load_players(as_of_week=None, league_id=None, season=None) -> list[dict]:
             "nflTeam": r["nfl_team"] if r["nfl_team"] is not None else None,
             "rosterId": int(r["roster_id"]),
             "teamName": r["team_name"] or r["owner_name"] or None,
-            "isMe": r["owner_name"] == me,
+            "isMe": int(r["roster_id"]) == viewer,
             "prodVor": calcs.num(r["prod_vor"]),
             "mktVor": calcs.num(r["mkt_vor"]),
             "tradeGap": calcs.num(r["trade_gap"]),
@@ -228,12 +251,13 @@ def load_players(as_of_week=None, league_id=None, season=None) -> list[dict]:
     ]
 
 
-def load_player_card(sleeper_id, as_of_week=None, league_id=None, season=None) -> dict:
+def load_player_card(sleeper_id, as_of_week=None, league_id=None, season=None,
+                     viewer_roster_id=None) -> dict:
     """The full player card (Value·VOR + Opportunity + ROS shape). Mirrors loadPlayerCard (l.120)."""
     lid = league_id or settings.league_id()
+    viewer = resolve_viewer(lid, viewer_roster_id)
     p = _params(as_of_week, lid=lid, sid=str(sleeper_id))
     prod_cutoff = "TRUE" if as_of_week is None else "as_of_week <= %(n)s"
-    me_name = settings.my_username()
 
     with db.connect() as conn:
         def q(sql):
@@ -281,14 +305,9 @@ def load_player_card(sleeper_id, as_of_week=None, league_id=None, season=None) -
 
     # Identity + roster status.
     roster_id = int(ident["roster_id"]) if ident and ident["roster_id"] is not None else None
-    team_by_id = {}
-    my_roster_id = None
-    for t in team_rows:
-        team_by_id[int(t["roster_id"])] = t
-        if t["owner_name"] == me_name:
-            my_roster_id = int(t["roster_id"])
+    team_by_id = {int(t["roster_id"]): t for t in team_rows}
     my_team = team_by_id.get(roster_id)
-    on_yours = roster_id is not None and roster_id == my_roster_id
+    on_yours = roster_id is not None and roster_id == viewer
     if on_yours:
         status = "On your roster"
     elif my_team:
@@ -402,11 +421,11 @@ def _all_play_record(by_week, rid):
     return ap
 
 
-def load_standings(as_of_week=None, league_id=None, season=None) -> list[dict]:
+def load_standings(as_of_week=None, league_id=None, season=None, viewer_roster_id=None) -> list[dict]:
     """The Teams standings: record + all-play + playoff odds/series + posture. Mirrors loadStandings (l.278)."""
     lid = league_id or settings.league_id()
+    viewer = resolve_viewer(lid, viewer_roster_id)
     p = _params(as_of_week, lid=lid)
-    me = settings.my_username()
     with db.connect() as conn:
         def q(sql):
             with conn.cursor() as cur:
@@ -469,7 +488,7 @@ def load_standings(as_of_week=None, league_id=None, season=None) -> list[dict]:
             "rosterId": rid,
             "name": (t["team_name"] or t["owner_name"] or f"Team {rid}") if t else f"Team {rid}",
             "owner": t["owner_name"] if t else None,
-            "isMe": (t["owner_name"] == me) if t else False,
+            "isMe": rid == viewer,
             "wins": rec["w"],
             "losses": rec["l"],
             "allPlayW": ap["w"],
@@ -490,7 +509,7 @@ def load_standings(as_of_week=None, league_id=None, season=None) -> list[dict]:
     return out
 
 
-def load_team_detail(roster_id, as_of_week=None, league_id=None, season=None):
+def load_team_detail(roster_id, as_of_week=None, league_id=None, season=None, viewer_roster_id=None):
     """Team detail: stat blocks, positional depth, roster split. Mirrors loadTeamDetail (l.448).
 
     The ``thisWeek`` projection/win-prob bar (opponent + both projected totals + win %) comes
@@ -498,10 +517,10 @@ def load_team_detail(roster_id, as_of_week=None, league_id=None, season=None):
     next game.
     """
     lid = league_id or settings.league_id()
+    viewer = resolve_viewer(lid, viewer_roster_id)
     rid = int(roster_id)
     p = _params(as_of_week, lid=lid, rid=rid)
     prod_cutoff = "TRUE" if as_of_week is None else "as_of_week <= %(n)s"
-    me = settings.my_username()
 
     with db.connect() as conn:
         def q(sql):
@@ -542,12 +561,7 @@ def load_team_detail(roster_id, as_of_week=None, league_id=None, season=None):
         team_rows = q("SELECT roster_id, team_name, owner_name FROM teams WHERE league_id = %(lid)s")
 
     # Identity / "you".
-    team_by_id = {}
-    my_roster_id = None
-    for t in team_rows:
-        team_by_id[int(t["roster_id"])] = t
-        if t["owner_name"] == me:
-            my_roster_id = int(t["roster_id"])
+    team_by_id = {int(t["roster_id"]): t for t in team_rows}
     me_team = team_by_id.get(rid)
     if me_team is None and not roster_rows:
         return None
@@ -639,7 +653,7 @@ def load_team_detail(roster_id, as_of_week=None, league_id=None, season=None):
         "rosterId": rid,
         "name": (me_team["team_name"] or me_team["owner_name"] or f"Team {rid}") if me_team else f"Team {rid}",
         "owner": me_team["owner_name"] if me_team else None,
-        "onYours": rid == my_roster_id,
+        "onYours": rid == viewer,
         "stats": stats,
         "thisWeek": projections.team_matchup_summary(rid, as_of_week, lid=lid),
         "depth": depth,
@@ -647,8 +661,9 @@ def load_team_detail(roster_id, as_of_week=None, league_id=None, season=None):
     }
 
 
-def load_manager_dossier(roster_id, league_id=None, season=None) -> dict:
-    """The Manager Dossier for one roster — a clean 1:1 passthrough. Mirrors loadManagerDossier (l.583)."""
+def load_manager_dossier(roster_id, league_id=None, season=None, viewer_roster_id=None) -> dict:
+    """The Manager Dossier for one roster — a clean 1:1 passthrough. Mirrors loadManagerDossier (l.583).
+    (``viewer_roster_id`` accepted for a uniform slice signature; the dossier has no "me" flag.)"""
     lid = league_id or settings.league_id()
     rows = db.fetch_all(
         "SELECT owner_name, team_name, headline, waiver_faab, trade_tendency, positional_lean,"
@@ -686,14 +701,14 @@ def load_manager_dossier(roster_id, league_id=None, season=None) -> dict:
 # League tab — the standings-backed race view + positional talent (market VOR).
 # ---------------------------------------------------------------------------
 
-def load_league(as_of_week=None, league_id=None, season=None) -> dict:
+def load_league(as_of_week=None, league_id=None, season=None, viewer_roster_id=None) -> dict:
     """The League surface: full standings + the "me" row + the real playoff cut / team count.
 
     Light — wraps the already-ported ``load_standings(N)`` and one ``league_settings`` read.
     Mirrors loadLeague (l.370).
     """
     lid = league_id or settings.league_id()
-    standings = load_standings(as_of_week, league_id=lid, season=season)
+    standings = load_standings(as_of_week, league_id=lid, season=season, viewer_roster_id=viewer_roster_id)
     cfg_rows = db.fetch_all(
         "SELECT key, value FROM league_settings "
         "WHERE league_id = %(lid)s AND section = 'league' AND key IN ('playoff_teams', 'num_teams')",
@@ -708,11 +723,11 @@ def load_league(as_of_week=None, league_id=None, season=None) -> dict:
     }
 
 
-def load_positional_talent(league_id=None, season=None) -> dict:
+def load_positional_talent(league_id=None, season=None, viewer_roster_id=None) -> dict:
     """Positional Talent: teams ranked per position by the Market VOR they hold (sum of positive
     ``market_vor`` at the latest snapshot). Not week-scoped. Mirrors loadPositionalTalent (l.396)."""
     lid = league_id or settings.league_id()
-    me = settings.my_username()
+    viewer = resolve_viewer(lid, viewer_roster_id)
     rows = db.fetch_all(
         "WITH latest AS ("
         "  SELECT roster_id, position,"
@@ -738,7 +753,7 @@ def load_positional_talent(league_id=None, season=None) -> dict:
         by_pos.setdefault(r["position"], []).append({
             "rosterId": rid,
             "name": r["team_name"] or r["owner_name"] or f"Team {rid}",
-            "isMe": r["owner_name"] == me,
+            "isMe": rid == viewer,
             "vor": float(r["pos_vor"]),
         })
     for pos in POS:
@@ -755,9 +770,10 @@ def load_positional_talent(league_id=None, season=None) -> dict:
 # math lives in projections.py (shared with team-detail's thisWeek bar).
 # ---------------------------------------------------------------------------
 
-def load_matchups(as_of_week=None, league_id=None, season=None) -> dict:
+def load_matchups(as_of_week=None, league_id=None, season=None, viewer_roster_id=None) -> dict:
     """The Matchups slate: the upcoming week's head-to-head games. Mirrors loadMatchups (l.878)."""
     lid = league_id or settings.league_id()
+    viewer = resolve_viewer(lid, viewer_roster_id)
     target_week = projections.target_week_for(as_of_week, lid=lid)
     sched_rows = []
     if target_week is not None:
@@ -770,7 +786,7 @@ def load_matchups(as_of_week=None, league_id=None, season=None) -> dict:
     if not sched_rows:
         return {"targetWeek": target_week, "games": [], "myGameId": None, "empty": True}
 
-    teams = projections.team_projections(as_of_week, target_week, lid=lid)
+    teams = projections.team_projections(as_of_week, target_week, lid=lid, viewer=viewer)
     week_rows = db.fetch_all(_sql_standings_weeks(as_of_week), _params(as_of_week, lid=lid))
     rec = projections.records_by_roster(week_rows)
 
@@ -817,15 +833,16 @@ def load_matchups(as_of_week=None, league_id=None, season=None) -> dict:
     return {"targetWeek": target_week, "games": games, "myGameId": my_game_id, "empty": False}
 
 
-def load_matchup_detail(matchup_id, as_of_week=None, league_id=None, season=None):
+def load_matchup_detail(matchup_id, as_of_week=None, league_id=None, season=None, viewer_roster_id=None):
     """One matchup's full breakdown: win prob, Score Range, per-starter gauges. Mirrors loadMatchupDetail (l.942)."""
     lid = league_id or settings.league_id()
+    viewer = resolve_viewer(lid, viewer_roster_id)
     mid = int(matchup_id)
     target_week = projections.target_week_for(as_of_week, lid=lid)
     if target_week is None:
         return None
 
-    teams = projections.team_projections(as_of_week, target_week, lid=lid)
+    teams = projections.team_projections(as_of_week, target_week, lid=lid, viewer=viewer)
     sched_rows = db.fetch_all(
         "SELECT roster_id FROM schedule "
         "WHERE league_id = %(lid)s AND week = %(tw)s AND matchup_id = %(mid)s ORDER BY roster_id",

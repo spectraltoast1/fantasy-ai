@@ -118,10 +118,6 @@ export default function TeamDetail({ rosterId, asOfWeek, onOpenPlayer, onOpenDos
             <button className={metric === 'mkt' ? 'active' : ''} onClick={() => setMetric('mkt')}>MKT VOR</button>
           </div>
         </div>
-        {metric === 'mkt' ? (
-          <p className="td-poc">MKT VOR is the current market × this frozen roster — a cross-time POC, not a live call.</p>
-        ) : null}
-
         <RosterGroup title="Starters" players={team.roster.starters} metric={metric} onOpenPlayer={onOpenPlayer} />
         <RosterGroup title="Bench" players={team.roster.bench} metric={metric} onOpenPlayer={onOpenPlayer} />
       </section>

@@ -59,7 +59,9 @@ store-schema, engine-improvement-loop.*
 `/health` · `/health/db` · `/api/weeks` · `/api/league-meta` · `/api/players` · `/api/players/{id}` ·
 `/api/standings` · `/api/teams/{id}` · `/api/managers/{id}` · `/api/league` · `/api/positional-talent` ·
 `/api/matchups` · `/api/matchups/{id}` · `/api/leagues` (catalog). **Read-only** — there is no write/ingest
-surface. Every read filters `WHERE league_id = …` — the multi-league seam, a no-op until B4 parameterizes it.
+surface. Every read takes an optional `?league_id=`(+`?season=`+`?viewer_roster_id=`) via the `slice_params`
+dependency, defaulting to the owner's league (a 404 guards an unknown `league_id`); `/api/leagues` is the one
+unscoped catalog read.
 
 ## Scoring
 
@@ -72,10 +74,11 @@ scoring-mechanism.*
 
 ## Multi-league / multi-user (current state)
 
-- **Multi-league** — the store is fully keyed and the `WHERE league_id` seam is in every read, but reads
-  still default to the single current league until B4 parameterizes them; the frontend selector is B5.
-- **Viewer identity** — `viewer_roster_id` (per league) is the "you" seam that replaces the `MY_USERNAME`
-  hardcode; it lands in B5.
+- **Multi-league** — live: the store is fully keyed, every read is parameterized on `league_id`(+`season`),
+  and the SPA has league + season selectors (from `/api/leagues`) that switch across the 12 demo lineages.
+- **Viewer identity** — `viewer_roster_id` (per league, from the catalog) is the "you" seam; a request with no
+  `viewer_roster_id` falls back to `MY_USERNAME`'s roster (the default). The `MY_USERNAME` Fly secret stays as
+  that default resolver.
 - **Multi-user / auth** — none today: single-tenant, one owner-role Postgres connection, RLS enabled with no
   policies. Postgres was chosen so **Supabase Auth** is a later bolt-on. Adding it is a V1 project. →
   `projects/v1/` (P5).
