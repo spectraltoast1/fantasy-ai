@@ -61,8 +61,8 @@ def build_dossier_row(feat: dict, season: int, generated_at: str, *, model: str)
     return {**base, "model": model, **{k: dossier[k] for k in dp.DOSSIER_KEYS}}, usage
 
 
-def compute(season: int, *, model: str = client.DEFAULT_MODEL) -> pl.DataFrame:
-    feats = data_layer.read_manager_features(season).sort("owner_name")
+def compute(season: int, *, league_id=None, model: str = client.DEFAULT_MODEL) -> pl.DataFrame:
+    feats = data_layer.read_manager_features(season, league_id=league_id).sort("owner_name")
     generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     print(f"=== Manager dossiers: season={season}  model={model}  managers={feats.height} ===")
 
@@ -82,20 +82,23 @@ def compute(season: int, *, model: str = client.DEFAULT_MODEL) -> pl.DataFrame:
     return pl.DataFrame(rows)
 
 
-def run(season: int, *, force: bool = False, model: str = client.DEFAULT_MODEL) -> None:
-    if data_layer.manager_dossiers_exist(season) and not force:
+def run(season: int, *, league_id=None, force: bool = False, model: str = client.DEFAULT_MODEL) -> None:
+    if data_layer.manager_dossiers_exist(season, league_id=league_id) and not force:
         print(f"Manager dossiers for {season} already exist — run once per season. "
               f"Use --force to regenerate.")
         return
-    df = compute(season, model=model)
-    data_layer.write_manager_dossiers(df, season)
-    print(f"  -> snapshots/derived/manager_dossiers_{season}.parquet")
+    df = compute(season, league_id=league_id, model=model)
+    data_layer.write_manager_dossiers(df, season, league_id=league_id)
+    lid = league_id or data_layer._active_league(season)[0]
+    print(f"  -> snapshots/derived/league/{lid}/manager_dossiers_{season}.parquet")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Write per-manager cross-league AI dossiers (Phase B).")
     parser.add_argument("--season", type=int, required=True)
+    parser.add_argument("--league-id", type=str, default=None,
+                        help="League to write (default: the is_mine league of the season).")
     parser.add_argument("--force", action="store_true", help="regenerate even if dossiers exist")
     parser.add_argument("--model", default=client.DEFAULT_MODEL)
     args = parser.parse_args()
-    run(args.season, force=args.force, model=args.model)
+    run(args.season, league_id=args.league_id, force=args.force, model=args.model)

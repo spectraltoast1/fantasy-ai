@@ -98,9 +98,9 @@ def _evidence(dossiers: pl.DataFrame) -> None:
         print(f"  evidence: primary user's blindspot is self-framed (mentions you/your): {self_framed}")
 
 
-def run(season: int) -> bool:
-    dossiers = data_layer.read_manager_dossiers(season)
-    feats = data_layer.read_manager_features(season)
+def run(season: int, *, league_id=None) -> bool:
+    dossiers = data_layer.read_manager_dossiers(season, league_id=league_id)
+    feats = data_layer.read_manager_features(season, league_id=league_id)
     print(f"=== Manager dossiers gate: season={season}  dossiers={dossiers.height} ===")
 
     c1 = _check_coverage(dossiers, feats)
@@ -119,8 +119,10 @@ def run(season: int) -> bool:
 def __main():
     parser = argparse.ArgumentParser(description="Internal-consistency gate for manager dossiers.")
     parser.add_argument("--season", type=int, required=True)
+    parser.add_argument("--league-id", type=str, default=None,
+                        help="League to check (default: the is_mine league of the season).")
     args = parser.parse_args()
-    sys.exit(0 if run(args.season) else 1)
+    sys.exit(0 if run(args.season, league_id=args.league_id) else 1)
 
 
 if __name__ == "__main__":
