@@ -297,8 +297,14 @@ counts == the on-disk sum over present slices + prints per-table distinct-league
 B5 switcher will render, `weeks_available` derived from the `season` table (played weeks).
 
 Conventions on every table:
-- **`league_id TEXT`** — the active league, stamped on every row. A no-op filter today (one league); the
-  column the Stage-B "switch league" filter keys on. Every read endpoint already filters `WHERE league_id = …`.
+- **`league_id TEXT`** — stamped on every row; the `WHERE league_id = …` seam every read filters on.
+  **Stage-B B4 parameterized the reads**: every `/api` read endpoint takes an OPTIONAL `?league_id=`
+  (+`?season=`) via the `routes.slice_params` dependency, defaulting to the is_mine slice
+  (`settings.league_id()`) — omitting it reproduces today byte-for-byte (parity), passing a corpus id scopes
+  the read to that slice (unknown id → 404 via `reads.slice_exists`, a `demo_manifest` DB check). `season` is
+  validated, never a SQL filter (a redraft `league_id` already pins one `(league, season)`). The catalog
+  reload is `build_db.py --reload-manifest` (atomic TRUNCATE+COPY of just `demo_manifest`). Viewer identity
+  (`MY_USERNAME`→"me") + the frontend selectors are B5.
 - **`season`** — the source year: **2025 for all tables except `ros_synthesis` (2026** — the AI news world).
   Native in the parquet where present; added as a constant where absent (teams / lineup_slots /
   league_settings / player_signal / schedule). *Type note:* `season`/`week` are `INTEGER` in the
