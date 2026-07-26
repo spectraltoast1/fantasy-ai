@@ -12,8 +12,9 @@
 
 - A deployed, mobile-responsive React SPA on **FastAPI + Supabase Postgres** (Fly.io, same-origin). Five
   surfaces: **Players, Teams, League, Matchups, Manager Dossier**.
-- **Single league, no auth.** It serves one league (the owner's, 2025) **frozen at Week 4** — a season
-  *replay*, not live data. A week selector (1–4) re-scopes every surface.
+- **Multi-league, no auth.** A **league + season selector** switches across the **12 demo lineages**; the
+  owner's league (2025, **frozen at Week 4** — a season *replay*) is the default, and the "you" highlight
+  follows the selected league. A week selector re-scopes every surface.
 - Fully migrated off in-browser DuckDB-WASM (Stage A complete); the client is now a thin API client.
 
 ## The engine
@@ -30,24 +31,22 @@
 
 ## What's real vs. proof-of-concept (current caveats)
 
-- **Market value + trade lean = cross-time POC** — 2026 prices against 2025 rosters, explicitly not a live
-  call. Resolves once the app runs on live 2026 data.
-- **ROS bull/bear/situation grades render "—"** (empty). The old 2026-news-vs-2025 splice was retired; this
-  is the honest empty state until a year-matched live-news read exists.
+- **ROS bull/bear/situation shows an explicit "No rest-of-season outlook yet" empty state** — the read runs on
+  live in-season news, which isn't wired yet; an honest empty state, not fabricated grades.
 - **Rostered-only** — no free-agent / waiver value yet.
 - **Data collection runs on a laptop** (~63–71% daily coverage) — not yet moved off-host. → *see appendix:
   data-collection.*
 
 ## In flight — Stage B (multi-league)
 
-- **B0–B3 shipped:** all 31 demo league-seasons are loaded into the production database, `schedule` is
-  league-scoped, and the lineage catalog endpoint `GET /api/leagues` exists. **Parity held** — the deployed
-  app still renders only the owner's league. → *detail: `sessions/v1/`.*
-- **Two items to close in B4:** `/api/leagues` is loaded but the app wasn't redeployed, so it **404s on the
-  live URL**; and the 2025 catalog entry still flags `panels_ros=true` while ROS is empty (set false).
-- **NEXT — B4:** parameterize every read endpoint on `league_id`(+`season`), defaulting to the current league
-  so nothing visibly changes (parity), and redeploy. **Drafted and ready to run.** Then B5 (selectors +
-  `viewer_roster_id` + panel gating) and B6 (verify). → `projects/v1/` (P0).
+- **B0–B5 shipped — multi-league is live and VISIBLE.** All 31 demo league-seasons are in the production DB
+  (`schedule` league-scoped, `GET /api/leagues` catalog); every read is parameterized on
+  `league_id`(+`season`+`viewer_roster_id`), defaulting to the owner's league (byte-identical parity when
+  omitted); and the deployed SPA has **league + season selectors** — switching re-renders any of the 12
+  lineages with the right "you" highlight and honest per-slice panel gating (market only where computed, ROS
+  the empty state everywhere). → *detail + audits: `sessions/v1/`.*
+- **NEXT — B6:** full end-to-end verification across every league × season × sample weeks (the per-league
+  quirks it shakes out, e.g. B4's playoff-week NULL `matchup_id`). → `projects/v1/` (P0).
 
 ## The active roadmap
 
