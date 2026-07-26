@@ -69,3 +69,9 @@ def matchups(as_of_week: int | None = None) -> dict:
 def matchup_detail(matchup_id: int, as_of_week: int | None = None):
     # Returns null (200) when the game/week doesn't resolve, matching loadMatchupDetail.
     return reads.load_matchup_detail(matchup_id, as_of_week)
+
+
+@router.get("/leagues")
+def leagues() -> dict:
+    # The lineage catalog (Stage-B B3) — unscoped; feeds the B5 league/season switcher.
+    return reads.load_leagues()

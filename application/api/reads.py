@@ -843,3 +843,62 @@ def load_matchup_detail(matchup_id, as_of_week=None):
     sides.sort(key=lambda s: (s["isMe"], s["winProb"]), reverse=True)
 
     return {"matchupId": mid, "targetWeek": target_week, "teams": sides}
+
+
+# ---------------------------------------------------------------------------
+# Catalog — the lineage -> seasons -> slice tree (Stage-B B3; the B5 switcher reads this).
+# ---------------------------------------------------------------------------
+
+def load_leagues() -> dict:
+    """The demo catalog: every lineage grouped by its root ``lineage_id`` (a league_id string,
+    NOT a slug), each with its seasons (desc), weeks available, pinned viewer, and panel flags.
+
+    The one deliberately UNSCOPED read — it spans every league, so it does NOT filter on
+    ``settings.league_id()`` like the per-panel reads. ``weeks_available`` is derived at query
+    time from the loaded ``season`` (the PLAYED weeks — the same source ``load_weeks`` uses — so a
+    frozen slice like is_mine 2025 reports [1..4], not the schedule's full forward [1..18]). Panels
+    + name + viewer mirror the manifest exactly (lorp ``viewer_roster_id`` is 8). Shape = the B3 contract.
+    """
+    with db.connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT lineage_id, league_id, season, name, scoring_key, is_mine, "
+            "viewer_roster_id, panels_market, panels_manager, panels_ros "
+            "FROM demo_manifest ORDER BY lineage_id, season DESC"
+        )
+        rows = cur.fetchall()
+        cur.execute(
+            "SELECT league_id, season, array_agg(DISTINCT week ORDER BY week) AS weeks "
+            "FROM season GROUP BY league_id, season"
+        )
+        weeks_by = {(w["league_id"], int(w["season"])): [int(x) for x in w["weeks"]]
+                    for w in cur.fetchall()}
+
+    lineages: dict = {}
+    order: list = []
+    for r in rows:
+        key = r["lineage_id"]
+        if key not in lineages:
+            lineages[key] = {
+                "lineage_id": r["lineage_id"],
+                "name": r["name"],
+                "scoring_key": r["scoring_key"],
+                "is_mine": bool(r["is_mine"]),
+                "seasons": [],
+            }
+            order.append(key)
+        lineages[key]["seasons"].append({
+            "season": int(r["season"]),
+            "league_id": r["league_id"],
+            "weeks_available": weeks_by.get((r["league_id"], int(r["season"])), []),
+            "viewer_roster_id": (int(r["viewer_roster_id"])
+                                 if r["viewer_roster_id"] is not None else None),
+            "panels": {
+                "market": bool(r["panels_market"]),
+                "manager": bool(r["panels_manager"]),
+                "ros_synthesis": bool(r["panels_ros"]),
+            },
+        })
+
+    leagues = [lineages[k] for k in order]
+    leagues.sort(key=lambda lg: not lg["is_mine"])   # is_mine first, else manifest order (stable)
+    return {"leagues": leagues}

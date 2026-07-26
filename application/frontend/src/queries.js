@@ -28,6 +28,9 @@ async function apiGet(path, params = {}) {
 export const loadWeeks = () => apiGet('/weeks');
 export const loadLeagueMeta = (asOfWeek) => apiGet('/league-meta', { as_of_week: asOfWeek });
 
+// --- Catalog (Stage-B B3) — the lineage→seasons tree the B5 league/season switcher reads.
+export const loadLeagues = () => apiGet('/leagues');
+
 // --- Players tab -------------------------------------------------------------------------
 export const loadPlayers = (asOfWeek) => apiGet('/players', { as_of_week: asOfWeek });
 export const loadPlayerCard = (sleeperId, asOfWeek) =>

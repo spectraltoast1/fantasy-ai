@@ -1,11 +1,61 @@
 # STATUS
 
-## STORE MIGRATION TRACK — Stage B B2 SHIPPED (2026-07-25): demo slices computed (base for all 31, dossiers for 4 lineages)
+## STORE MIGRATION TRACK — Stage B B3 SHIPPED (2026-07-26): all 31 slices in the production DB + GET /api/leagues (parity held)
 
 > This section is the **store-migration track** (DuckDB-WASM → server store + API), driven by
 > `scope docs/future work/MULTI_LEAGUE_STORE_MIGRATION.md` and the `SESSION_N_*.md` runbooks. It is a
 > **separate line of work** from the engine-improvement track (Sessions 1–9) that makes up the rest of
 > this file.
+
+**Stage B B3 — what shipped (2026-07-26, worktree `worktree-stage-b3`, 3 commits). The first Stage-B
+production write.** The loader now publishes all 31 demo slices from the derived store into the live
+Supabase, and the lineage catalog endpoint exists. The deployed app still renders only the is_mine league
+(its `LEAGUE_ID` Fly secret is unchanged; reads are rewired in B4) — **parity held**, with one intended
+change (ROS, below). (`MULTI_LEAGUE_STORE_MIGRATION.md` B3.)
+
+- **Multi-slice loader (`application/data/serve/build_db.py`).** Rewritten from "one is_mine slice from
+  `public/data`" to "all 31 slices from the **derived store**," driven by `data_layer.read_demo_manifest()`.
+  Routes through `data_layer` PATH helpers (the base reads live in the raw/join tree, not `derived/league/`)
+  and loads the **RAW parquet** (all as-of-weeks/snapshots) — NOT the `read_*` accessors, which apply the
+  app's "latest slice" semantics and would silently drop every week but the newest (an is_mine pre-flight
+  caught it: production_vor would've been 164 not 635). **Skip-if-absent** per (slice, dataset) → panel
+  gating falls out of the data: base 31, `manager_dossiers` 11, `market_vor` 1, `ros_synthesis` 0.
+- **Schema is a UNION across slices** — the is_mine reference alone was insufficient: division-aware corpus
+  leagues carry a `teams.division` column lorp lacks, so the DDL is a superset (a per-slice COPY names only
+  its own columns, leaving `division` NULL for non-division slices). This surfaced mid-load (the first
+  `--load` DROP+CREATE'd then failed on `teams.division`, briefly leaving the is_mine data absent; the
+  corrected re-load restored it — direct-reload risk, roll-forward-recoverable).
+- **schedule league_id de-dup** (assert == slice, drop before COPY); **`owner_id` kept + indexed
+  `(league_id, owner_id)`** on `manager_dossiers` (owner-keyed-dossier prereq); **`verify()` multi-league**
+  (per-table row count == on-disk sum over present slices + distinct-league counts + an is_mine parity
+  spot-check); new **`--dry-run`** prints the load/skip plan offline.
+- **ROS matches year-to-year (retired the 2026→2025 POC splice).** `ros_synthesis`'s only file is the 2026
+  news world; no slice is season 2026, so the per-slice read at each slice's own season finds nothing →
+  ros loads **0 rows**. The bull/bear/sit grades now render as "—" across the app (honest empty state). The
+  table + read path stay for a future year-matched news read. (`market_vor` is a separate panel, left as the
+  cross-time POC — unchanged.)
+- **`GET /api/leagues`** (`reads.load_leagues` + route + `queries.js loadLeagues`) — a pure DB read of the
+  loaded `demo_manifest` table, grouped by root `lineage_id` (string, not slug), seasons desc, is_mine first;
+  `weeks_available` from the **`season`** table (the PLAYED weeks — is_mine 2025 = [1..4] frozen, not the
+  schedule's forward [1..18]); panels/name/viewer mirror the manifest (lorp `viewer_roster_id` = 8). The one
+  deliberately UNSCOPED read. Not wired into any view yet (B5 consumes it).
+- **Parity proven.** Pre-load captured the is_mine 2025 per-table counts + live endpoint JSON; post-reload
+  `verify` shows the is_mine slice **identical except `ros_synthesis` 16→0**; the deployed app's
+  `/api/weeks|standings(wk4+wk2)|league|matchups` responses are **byte-identical** before/after, a ROS-bearing
+  player card's `ros` block went present→null with every other field identical, and a live browser pass
+  (Players/Teams/team-detail) renders as before with ROS grades showing "—". Fly secrets untouched.
+
+**⚠ B4 HANDOFFS:** reads are still hardwired to one league via `settings.league_id()`. B4 parameterizes every
+endpoint on `league_id`+`season` (path/query param) + filters the SQL; then B5 adds the selectors (reading
+`GET /api/leagues`) + per-slice `viewer_roster_id` + panel gating in `readiness.jsx`. Note: `projection_
+consensus` is loaded **duplicated per slice** (stamped per league to keep the read SQL untouched) — a later
+normalization to a single scoring-keyed load is possible, not done. The lorp 2025 catalog entry still
+advertises `panels.ros_synthesis = true` (from the manifest) while ROS is now empty — reconciling that flag
+is a B0 manifest change, out of B3 scope.
+
+**NEXT — B4 (parameterize the reads on league_id+season).** See the handoffs above.
+
+---
 
 **Stage B B0 + B1 — what shipped (2026-07-25, one combined worktree, 3 commits).** The two store-agnostic,
 no-dependency Stage-B sessions that must land before B2 (compute) and B3 (load + catalog). Both are
