@@ -1,11 +1,57 @@
 # STATUS
 
-## STORE MIGRATION TRACK — Stage B B3 SHIPPED (2026-07-26): all 31 slices in the production DB + GET /api/leagues (parity held)
+## STORE MIGRATION TRACK — Stage B B4 SHIPPED (2026-07-26): reads parameterized on league_id, /api/leagues LIVE, parity held
 
 > This section is the **store-migration track** (DuckDB-WASM → server store + API), driven by
 > `scope docs/future work/MULTI_LEAGUE_STORE_MIGRATION.md` and the `SESSION_N_*.md` runbooks. It is a
 > **separate line of work** from the engine-improvement track (Sessions 1–9) that makes up the rest of
 > this file.
+
+**Stage B B4 — what shipped (2026-07-26, worktree `worktree-stage-b4`, 3 commits). The last backend step
+before B5's frontend selectors.** Every read endpoint is now parameterized on an **optional** `league_id`
+(+`season`), defaulting to the is_mine slice, and the app was **redeployed** (so `/api/leagues` is finally
+live). Multi-league data is reachable by param while the deployed app stays byte-identical when the params
+are omitted. (`MULTI_LEAGUE_STORE_MIGRATION.md` B4.)
+
+- **Reads parameterized (`reads.py` + `projections.py` + `routes.py`).** Every read SQL already used
+  `%(lid)s` placeholders; the concrete id was baked in 6 spots. Threaded a resolved `lid` through all of
+  them: `_params` gains `lid` (None → `settings.league_id()`); the 11 `load_*` gain `league_id=None,
+  season=None` and resolve `lid = league_id or settings.league_id()`; `projections.target_week_for /
+  team_projections / team_matchup_summary` gain `lid`. `routes.py` adds a shared `slice_params` dependency
+  exposing `?league_id=&season=` on every read route, **404-ing an unknown `league_id`** (via a new
+  `reads.slice_exists`, a DB read of `demo_manifest` — the deployed image ships no parquet). `load_leagues`
+  stays UNSCOPED. **`season` is validated, never a SQL filter** (a redraft `league_id` already pins one
+  `(league, season)` slice).
+- **Multi-league null-safety (a real edge case, not a threading bug).** A corpus league's "next week"
+  (`max_played+1`) can be a **playoff week** where `schedule.matchup_id` is NULL (unpaired) — the is_mine
+  mid-season slice never hits it. Added `AND matchup_id IS NOT NULL` to the matchup schedule reads so a
+  corpus matchups/`thisWeek` query returns the real paired games (or the empty state) instead of crashing.
+  No-op for is_mine → parity preserved.
+- **Catalog honesty — `panels_ros=false` for lorp-2025 (Will's ratified call).** The 2026-news→2025 ROS was
+  a POC, retired in B3 (loads 0 rows). `build_demo_manifest.py` decouples `panels_ros` from the shared
+  `live_mine_2025` boolean and sets it `False` (market stays on for lorp-2025); the regenerated parquet
+  changes **exactly one cell** (diffed vs a backup). New `build_db.py --reload-manifest` refreshes ONLY the
+  `demo_manifest` catalog table (atomic TRUNCATE+COPY; the 31 data slices + `ros_synthesis` table/read path
+  untouched). `/api/leagues` now shows `panels.ros_synthesis` false everywhere.
+- **Redeployed + live smoke-test — GREEN.** `fly deploy` from `application/` (rebuilds the SPA + recopies
+  `api/`; Fly secrets untouched). On the **deployed** URL: (1) `/api/leagues` returns the 12-lineage tree
+  (200 — was 404), `panels.ros_synthesis` false throughout, lorp `viewer_roster_id` 8, `weeks_available`
+  [1..4]; (2) `?league_id=<corpus>` returns that league's data; (3) an unknown `?league_id=` → 404;
+  (4) **no-params parity — 7 endpoints (weeks/standings wk4+wk2/league/matchups/positional-talent/
+  league-meta) byte-identical** before/after; the SPA still renders the is_mine league identically.
+
+**⚠ B5 HANDOFFS:** the frontend is unchanged — the switcher is B5. Consume `GET /api/leagues` for the
+league/season dropdowns (pass `?league_id=&season=` to the existing loaders); swap `MY_USERNAME →
+viewer_roster_id` (per-slice, from the catalog); panel gating + the honest "no rest-of-season outlook yet"
+empty state in `readiness.jsx` (bull/bear/sit are off everywhere now) + remove the cross-time POC copy
+(`PlayerCard.jsx`/`Players.jsx`/`TeamDetail.jsx`/`League.jsx`); land the app on the **League** tab
+(`App.jsx` `useState('players')` → `useState('league')`) + fix the two stale "only Players wired" comments.
+Interim B4 state: for a non-is_mine league `MY_USERNAME` matches nobody → no "me" highlight, personal panels
+empty (the viewer swap is B5).
+
+**NEXT — B5 (frontend selectors + viewer_roster_id + panel gating).** See the handoffs above.
+
+---
 
 **Stage B B3 — what shipped (2026-07-26, worktree `worktree-stage-b3`, 3 commits). The first Stage-B
 production write.** The loader now publishes all 31 demo slices from the derived store into the live

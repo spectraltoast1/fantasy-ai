@@ -323,6 +323,25 @@ def _copy_plain(conn, table: str, df: pl.DataFrame) -> int:
     return df.height
 
 
+def reload_manifest() -> None:
+    """Refresh ONLY the demo_manifest catalog table (Stage-B B4 catalog-only write) — TRUNCATE +
+    re-COPY in one transaction, leaving the 31 data-slice tables untouched. The table schema is
+    unchanged (only panel-flag values differ), so no DROP/CREATE/--emit is needed; atomic, so a
+    concurrent reader never sees the catalog empty."""
+    df = dl.read_demo_manifest()
+    jsonb_cols = {n for n, dt in df.schema.items() if pg_type(dt) == "JSONB"}
+    with psycopg.connect(database_url()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(f'TRUNCATE "{_MANIFEST_TABLE}"')
+            copy_sql = f'COPY "{_MANIFEST_TABLE}" ({", ".join(df.columns)}) FROM STDIN'
+            with cur.copy(copy_sql) as cp:
+                for row in df.iter_rows(named=True):
+                    cp.write_row([Jsonb(row[c]) if (c in jsonb_cols and row[c] is not None) else row[c]
+                                  for c in df.columns])
+        conn.commit()
+    print(f"reloaded {_MANIFEST_TABLE} ({df.height} rows) — catalog-only; the 31 data slices untouched")
+
+
 def load() -> None:
     """Apply schema.sql then COPY every present (slice, dataset) + the demo_manifest catalog."""
     if not _SCHEMA_SQL.exists():
@@ -423,16 +442,20 @@ def main() -> None:
     ap.add_argument("--emit", action="store_true", help="regenerate schema.sql + MANIFEST.md")
     ap.add_argument("--dry-run", action="store_true", help="print the load/skip plan offline (no DB)")
     ap.add_argument("--load", action="store_true", help="apply schema.sql and load all slices")
+    ap.add_argument("--reload-manifest", action="store_true",
+                    help="refresh ONLY the demo_manifest catalog table (TRUNCATE+COPY; data slices untouched)")
     ap.add_argument("--verify", action="store_true", help="assert row counts + print league counts + parity")
     args = ap.parse_args()
-    if not (args.emit or args.dry_run or args.load or args.verify):
-        ap.error("nothing to do — pass --emit, --dry-run, --load and/or --verify")
+    if not (args.emit or args.dry_run or args.load or args.reload_manifest or args.verify):
+        ap.error("nothing to do — pass --emit, --dry-run, --load, --reload-manifest and/or --verify")
     if args.emit:
         emit()
     if args.dry_run:
         dry_run()
     if args.load:
         load()
+    if args.reload_manifest:
+        reload_manifest()
     if args.verify:
         verify()
 

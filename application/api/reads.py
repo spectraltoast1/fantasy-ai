@@ -37,30 +37,45 @@ def _le_cutoff(n):
     return "TRUE" if n is None else "as_of_week <= %(n)s"
 
 
-def _params(n=None, **extra):
-    """Base bind dict every query shares: league id + optional as-of week + extras."""
-    p = {"lid": settings.league_id(), "n": n}
+def _params(n=None, lid=None, **extra):
+    """Base bind dict every query shares: league id + optional as-of week + extras.
+
+    ``lid`` resolves to ``settings.league_id()`` (the is_mine default) when None — so a read
+    called with no ``league_id`` binds exactly today's value (parity). Callers that accept a
+    ``league_id`` resolve it once and pass it here as ``lid``.
+    """
+    p = {"lid": lid or settings.league_id(), "n": n}
     p.update(extra)
     return p
+
+
+def slice_exists(league_id) -> bool:
+    """Whether a ``league_id`` is a known demo slice (catalog membership; a DB read, since the
+    deployed image ships no parquet). Used to 404 an unknown ``?league_id=`` at the route layer."""
+    return bool(db.fetch_all(
+        "SELECT 1 FROM demo_manifest WHERE league_id = %(lid)s LIMIT 1", {"lid": str(league_id)}
+    ))
 
 
 # ---------------------------------------------------------------------------
 # Shared reads — weeks selector + league-meta chrome.
 # ---------------------------------------------------------------------------
 
-def load_weeks() -> dict:
+def load_weeks(league_id=None, season=None) -> dict:
     """Weeks played + the default (latest). Mirrors loadWeeks (l.644)."""
+    lid = league_id or settings.league_id()
     rows = db.fetch_all(
         "SELECT DISTINCT week FROM season WHERE league_id = %(lid)s ORDER BY week",
-        _params(),
+        _params(lid=lid),
     )
     weeks = [int(r["week"]) for r in rows]
     return {"weeks": weeks, "latest": weeks[-1] if weeks else None}
 
 
-def load_league_meta(as_of_week=None) -> dict:
+def load_league_meta(as_of_week=None, league_id=None, season=None) -> dict:
     """Top-bar chrome: "10-tm · PPR · 1QB" label + the user's record. Mirrors loadLeagueMeta (l.659)."""
-    p = _params(as_of_week)
+    lid = league_id or settings.league_id()
+    p = _params(as_of_week, lid=lid)
     with db.connect() as conn:
         def q(sql, extra=None):
             with conn.cursor() as cur:
@@ -187,10 +202,11 @@ def _sql_players(n):
     )
 
 
-def load_players(as_of_week=None) -> list[dict]:
+def load_players(as_of_week=None, league_id=None, season=None) -> list[dict]:
     """The Players table: rostered skill players priced by PROD VOR. Mirrors loadPlayers (l.87)."""
+    lid = league_id or settings.league_id()
     me = settings.my_username()
-    rows = db.fetch_all(_sql_players(as_of_week), _params(as_of_week))
+    rows = db.fetch_all(_sql_players(as_of_week), _params(as_of_week, lid=lid))
     return [
         {
             "sleeperId": r["sleeper_id"],
@@ -212,9 +228,10 @@ def load_players(as_of_week=None) -> list[dict]:
     ]
 
 
-def load_player_card(sleeper_id, as_of_week=None) -> dict:
+def load_player_card(sleeper_id, as_of_week=None, league_id=None, season=None) -> dict:
     """The full player card (Value·VOR + Opportunity + ROS shape). Mirrors loadPlayerCard (l.120)."""
-    p = _params(as_of_week, sid=str(sleeper_id))
+    lid = league_id or settings.league_id()
+    p = _params(as_of_week, lid=lid, sid=str(sleeper_id))
     prod_cutoff = "TRUE" if as_of_week is None else "as_of_week <= %(n)s"
     me_name = settings.my_username()
 
@@ -385,9 +402,10 @@ def _all_play_record(by_week, rid):
     return ap
 
 
-def load_standings(as_of_week=None) -> list[dict]:
+def load_standings(as_of_week=None, league_id=None, season=None) -> list[dict]:
     """The Teams standings: record + all-play + playoff odds/series + posture. Mirrors loadStandings (l.278)."""
-    p = _params(as_of_week)
+    lid = league_id or settings.league_id()
+    p = _params(as_of_week, lid=lid)
     me = settings.my_username()
     with db.connect() as conn:
         def q(sql):
@@ -472,15 +490,16 @@ def load_standings(as_of_week=None) -> list[dict]:
     return out
 
 
-def load_team_detail(roster_id, as_of_week=None):
+def load_team_detail(roster_id, as_of_week=None, league_id=None, season=None):
     """Team detail: stat blocks, positional depth, roster split. Mirrors loadTeamDetail (l.448).
 
     The ``thisWeek`` projection/win-prob bar (opponent + both projected totals + win %) comes
     from the shared engine's ``team_matchup_summary`` (Session 4) — ``None`` when there is no
     next game.
     """
+    lid = league_id or settings.league_id()
     rid = int(roster_id)
-    p = _params(as_of_week, rid=rid)
+    p = _params(as_of_week, lid=lid, rid=rid)
     prod_cutoff = "TRUE" if as_of_week is None else "as_of_week <= %(n)s"
     me = settings.my_username()
 
@@ -622,20 +641,21 @@ def load_team_detail(roster_id, as_of_week=None):
         "owner": me_team["owner_name"] if me_team else None,
         "onYours": rid == my_roster_id,
         "stats": stats,
-        "thisWeek": projections.team_matchup_summary(rid, as_of_week),
+        "thisWeek": projections.team_matchup_summary(rid, as_of_week, lid=lid),
         "depth": depth,
         "roster": {"starters": starters, "bench": bench},
     }
 
 
-def load_manager_dossier(roster_id) -> dict:
+def load_manager_dossier(roster_id, league_id=None, season=None) -> dict:
     """The Manager Dossier for one roster — a clean 1:1 passthrough. Mirrors loadManagerDossier (l.583)."""
+    lid = league_id or settings.league_id()
     rows = db.fetch_all(
         "SELECT owner_name, team_name, headline, waiver_faab, trade_tendency, positional_lean,"
         "       roster_construction, edge_or_blindspot, confidence_note, depth_tier,"
         "       n_leagues, n_seasons, n_transactions, is_zero_signal, model, generated_at "
         "FROM manager_dossiers WHERE league_id = %(lid)s AND roster_id = %(rid)s",
-        _params(rid=int(roster_id)),
+        _params(lid=lid, rid=int(roster_id)),
     )
     d = rows[0] if rows else None
     if not d:
@@ -666,17 +686,18 @@ def load_manager_dossier(roster_id) -> dict:
 # League tab — the standings-backed race view + positional talent (market VOR).
 # ---------------------------------------------------------------------------
 
-def load_league(as_of_week=None) -> dict:
+def load_league(as_of_week=None, league_id=None, season=None) -> dict:
     """The League surface: full standings + the "me" row + the real playoff cut / team count.
 
     Light — wraps the already-ported ``load_standings(N)`` and one ``league_settings`` read.
     Mirrors loadLeague (l.370).
     """
-    standings = load_standings(as_of_week)
+    lid = league_id or settings.league_id()
+    standings = load_standings(as_of_week, league_id=lid, season=season)
     cfg_rows = db.fetch_all(
         "SELECT key, value FROM league_settings "
         "WHERE league_id = %(lid)s AND section = 'league' AND key IN ('playoff_teams', 'num_teams')",
-        _params(),
+        _params(lid=lid),
     )
     cfg = {r["key"]: (None if r["value"] is None else float(r["value"])) for r in cfg_rows}
     return {
@@ -687,9 +708,10 @@ def load_league(as_of_week=None) -> dict:
     }
 
 
-def load_positional_talent() -> dict:
+def load_positional_talent(league_id=None, season=None) -> dict:
     """Positional Talent: teams ranked per position by the Market VOR they hold (sum of positive
     ``market_vor`` at the latest snapshot). Not week-scoped. Mirrors loadPositionalTalent (l.396)."""
+    lid = league_id or settings.league_id()
     me = settings.my_username()
     rows = db.fetch_all(
         "WITH latest AS ("
@@ -705,7 +727,7 @@ def load_positional_talent() -> dict:
         "SELECT l.roster_id, l.position, l.pos_vor, l.is_cross_time, t.team_name, t.owner_name "
         "FROM latest l "
         "LEFT JOIN teams t ON t.roster_id = l.roster_id AND t.league_id = %(lid)s",
-        _params(),
+        _params(lid=lid),
     )
     by_pos: dict[str, list] = {p: [] for p in POS}
     cross_time = False
@@ -733,21 +755,23 @@ def load_positional_talent() -> dict:
 # math lives in projections.py (shared with team-detail's thisWeek bar).
 # ---------------------------------------------------------------------------
 
-def load_matchups(as_of_week=None) -> dict:
+def load_matchups(as_of_week=None, league_id=None, season=None) -> dict:
     """The Matchups slate: the upcoming week's head-to-head games. Mirrors loadMatchups (l.878)."""
-    target_week = projections.target_week_for(as_of_week)
+    lid = league_id or settings.league_id()
+    target_week = projections.target_week_for(as_of_week, lid=lid)
     sched_rows = []
     if target_week is not None:
         sched_rows = db.fetch_all(
             "SELECT roster_id, matchup_id FROM schedule "
-            "WHERE league_id = %(lid)s AND week = %(tw)s ORDER BY matchup_id, roster_id",
-            {"lid": settings.league_id(), "tw": target_week},
+            "WHERE league_id = %(lid)s AND week = %(tw)s AND matchup_id IS NOT NULL "
+            "ORDER BY matchup_id, roster_id",
+            {"lid": lid, "tw": target_week},
         )
     if not sched_rows:
         return {"targetWeek": target_week, "games": [], "myGameId": None, "empty": True}
 
-    teams = projections.team_projections(as_of_week, target_week)
-    week_rows = db.fetch_all(_sql_standings_weeks(as_of_week), _params(as_of_week))
+    teams = projections.team_projections(as_of_week, target_week, lid=lid)
+    week_rows = db.fetch_all(_sql_standings_weeks(as_of_week), _params(as_of_week, lid=lid))
     rec = projections.records_by_roster(week_rows)
 
     # Group roster ids by matchup (schedule ordered by matchup_id, roster_id → ascending ids,
@@ -793,20 +817,21 @@ def load_matchups(as_of_week=None) -> dict:
     return {"targetWeek": target_week, "games": games, "myGameId": my_game_id, "empty": False}
 
 
-def load_matchup_detail(matchup_id, as_of_week=None):
+def load_matchup_detail(matchup_id, as_of_week=None, league_id=None, season=None):
     """One matchup's full breakdown: win prob, Score Range, per-starter gauges. Mirrors loadMatchupDetail (l.942)."""
+    lid = league_id or settings.league_id()
     mid = int(matchup_id)
-    target_week = projections.target_week_for(as_of_week)
+    target_week = projections.target_week_for(as_of_week, lid=lid)
     if target_week is None:
         return None
 
-    teams = projections.team_projections(as_of_week, target_week)
+    teams = projections.team_projections(as_of_week, target_week, lid=lid)
     sched_rows = db.fetch_all(
         "SELECT roster_id FROM schedule "
         "WHERE league_id = %(lid)s AND week = %(tw)s AND matchup_id = %(mid)s ORDER BY roster_id",
-        {"lid": settings.league_id(), "tw": target_week, "mid": mid},
+        {"lid": lid, "tw": target_week, "mid": mid},
     )
-    week_rows = db.fetch_all(_sql_standings_weeks(as_of_week), _params(as_of_week))
+    week_rows = db.fetch_all(_sql_standings_weeks(as_of_week), _params(as_of_week, lid=lid))
     rids = [int(r["roster_id"]) for r in sched_rows]
     if len(rids) < 2 or rids[0] not in teams or rids[1] not in teams:
         return None
