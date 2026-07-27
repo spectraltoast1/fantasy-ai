@@ -17,3 +17,8 @@ urllib3==2.6.3
 # application/api/requirements.txt.
 psycopg[binary]==3.2.10
 python-dotenv==1.1.1
+
+# Snapshot storage backend (P1/S1): the hosted daily collectors write their raw parquet to a
+# Supabase Storage bucket (S3-compatible) via data_layer's 'supabase' backend. Lazy-imported —
+# only the CI collector job (SNAPSHOT_BACKEND=supabase) needs it; the local backend never does.
+boto3==1.43.56
