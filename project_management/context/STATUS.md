@@ -2,7 +2,7 @@
 
 **What this is:** Gridiron — a fantasy-football decision-support dashboard whose unit is the manager's
 *decision*, not the player. Live, single-league, on the server stack.
-**Live at:** https://fantasy-ai-api.fly.dev/ · **Updated:** 2026-07-26
+**Live at:** https://fantasy-ai-api.fly.dev/ · **Updated:** 2026-07-27
 **Read next:** `ARCHITECTURE.md` (how it's built) · `CODING_BIBLE.md` (rules for coding agents) ·
 `ROADMAP.md` (where it's going) · `projects/v1/` (the active build).
 
@@ -37,23 +37,25 @@
 - **Data collection runs on a laptop** (~63–71% daily coverage) — not yet moved off-host. → *see appendix:
   data-collection.*
 
-## In flight — Stage B (multi-league)
+## Stage B — COMPLETE (multi-league)
 
-- **B0–B5 shipped — multi-league is live and VISIBLE.** All 31 demo league-seasons are in the production DB
-  (`schedule` league-scoped, `GET /api/leagues` catalog); every read is parameterized on
+- **Multi-league is live, visible, and verified end-to-end.** All 31 demo league-seasons (12 lineages) are in
+  the production DB (`schedule` league-scoped, `GET /api/leagues` catalog); every read is parameterized on
   `league_id`(+`season`+`viewer_roster_id`), defaulting to the owner's league (byte-identical parity when
-  omitted); and the deployed SPA has **league + season selectors** — switching re-renders any of the 12
-  lineages with the right "you" highlight and honest per-slice panel gating (market only where computed, ROS
-  the empty state everywhere). → *detail + audits: `sessions/v1/`.*
-- **NEXT — B6:** full end-to-end verification across every league × season × sample weeks (the per-league
-  quirks it shakes out, e.g. B4's playoff-week NULL `matchup_id`). → `projects/v1/` (P0).
+  omitted); and the SPA has **league + season + week selectors** with per-league "you" identity and honest
+  per-slice panel gating (Market VOR only where computed = lorp-2025; the ROS "no outlook yet" empty state
+  everywhere; dossiers rich / "no intel" / "no dossier" per data).
+- **B6 swept all 31 slices × sample weeks: 31/31 PASS** on renders + console/network, identity
+  (`viewer_roster_id`), panel gating, and week-bounds; parity held; **0 bugs**, two minor observations logged
+  (completed-season team-detail PLAYOFF % "—" vs standings 100%; graceful no-"YOUR MATCHUP"-pin at an upcoming
+  playoff-bye week). → *full coverage matrix + the two proof screenshots: `sessions/v1/SESSION_B6_VERIFICATION_REPORT.md`.*
 
 ## The active roadmap
 
 **V1** = a working, **invite-gated self-serve** product for **Sleeper PPR / half-PPR redraft** (1QB and
 superflex), running on **live 2026 data**, ready for the invited cohort by **Week 1**. Seven projects
-(P0 finish multi-league → P6 launch hardening); critical-path spine is P0 → P2 → P5. →
-`ROADMAP.md` + `projects/v1/BUILD_ORDER.md`.
+(P0 finish multi-league → P6 launch hardening); critical-path spine P0 → P2 → P5 — **P0 is now done (Stage B
+complete); next up is P2, go-live on 2026 data.** → `ROADMAP.md` + `projects/v1/BUILD_ORDER.md`.
 
 ## Deferred / parked (not blocking; each picked up in its project)
 
