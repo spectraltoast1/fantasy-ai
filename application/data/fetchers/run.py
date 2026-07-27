@@ -35,6 +35,8 @@ REGISTRY = {
         "coverage": {
             "read": data_layer.read_leaguelogs_market,
             "exists": data_layer.leaguelogs_market_exists,
+            "meta_read": data_layer.read_leaguelogs_market_metadata,
+            "meta_write": data_layer.write_leaguelogs_market_metadata,
             "date_col": "snapshot_date",   # pl.Date
             "card_col": "profile",         # distinct profiles/day = completeness
             "mode": "strict",
@@ -47,6 +49,8 @@ REGISTRY = {
         "coverage": {
             "read": data_layer.read_team_news_raw,
             "exists": data_layer.team_news_raw_exists,
+            "meta_read": data_layer.read_team_news_raw_metadata,
+            "meta_write": data_layer.write_team_news_raw_metadata,
             "date_col": "collected_at",    # ISO string; date = first 10 chars
             "card_col": None,              # append-only → recency mode
             "mode": "recency",
@@ -56,14 +60,17 @@ REGISTRY = {
 
 
 def dispatch(name: str) -> None:
-    """Run one collector through the uniform process: header → collect → post-run freshness check."""
+    """Run one collector through the uniform process: header → collect → metadata sidecar →
+    freshness check → flush the durable store (one upload per series on the supabase backend)."""
     entry = REGISTRY[name]
     print(f"=== run collector '{name}' (cadence={entry['cadence']}, series={entry['series']}) ===")
     entry["run"]()
     # Lazy import avoids a module-load cycle (check_collectors imports REGISTRY from here).
     from application.data.fetchers import check_collectors
+    check_collectors.record_run(name)   # write the fetch-timestamp metadata sidecar (P1/S2)
     print()
     check_collectors.freshness(name)
+    data_layer.flush_snapshots()         # P1/S2: batch — upload the run's writes once, at the end
 
 
 def main() -> None:
