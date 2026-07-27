@@ -1,6 +1,6 @@
 # Project 0 — Finish Multi-League & Make It Visible
 
-**Created:** 2026-07-26 · **Status:** In flight (B4 drafted & ready) · **Track:** Critical spine — foundation for everything else · **Est:** 3–4 sessions
+**Created:** 2026-07-26 · **Status:** ✅ COMPLETE (B4–B6 shipped; Stage B verified end-to-end 2026-07-27 — see `sessions/v1/SESSION_B6_VERIFICATION_REPORT.md`) · **Track:** Critical spine — foundation for everything else · **Est:** 3–4 sessions
 
 > **This project has no new architecture doc — it is the completion slice of the existing
 > `MULTI_LEAGUE_STORE_MIGRATION.md` (Stage B).** That doc is the authoritative project brief; read it
