@@ -34,8 +34,10 @@
 - **ROS bull/bear/situation shows an explicit "No rest-of-season outlook yet" empty state** — the read runs on
   live in-season news, which isn't wired yet; an honest empty state, not fabricated grades.
 - **Rostered-only** — no free-agent / waiver value yet.
-- **Data collection runs on a laptop** (~63–71% daily coverage) — not yet moved off-host. → *see appendix:
-  data-collection.*
+- **Data collection is moving off-laptop (P1/S1).** The storage-backend seam (local ↔ Supabase Storage) and a
+  GitHub Actions workflow that hosts the two daily collectors are built and locally verified; **go-live is
+  gated on provisioning the bucket + CI secrets and proving one hosted run**, after which the laptop `launchd`
+  jobs retire. Until then the laptop still banks (~63–71% coverage). → *see appendix: data-collection.*
 
 ## Stage B — COMPLETE (multi-league)
 
