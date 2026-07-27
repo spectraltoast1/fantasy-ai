@@ -1,0 +1,75 @@
+# Daily data collectors — hosted off-laptop (V1 · P1 · S1).
+#
+# Replaces the macOS launchd plists (application/data/fetchers/scheduler/) that ran the two
+# "bank it or lose it" daily collectors on Will's Mac at ~63-71% coverage. Each job invokes the
+# EXISTING dispatcher — `python -m application.data.fetchers.run <name>` — which collects, then runs
+# a post-run freshness check. Output is written to a durable Supabase Storage bucket via data_layer's
+# `supabase` backend (SNAPSHOT_BACKEND=supabase), because a CI runner has no persistent disk.
+#
+# Neither collector needs auth (LeagueLogs is an open developer API; news is public RSS). The only
+# secrets are the storage-scoped Supabase S3 credentials below — set them in repo Settings -> Secrets
+# -> Actions (never commit them). Bucket + scoped S3 keys are created in the Supabase dashboard.
+#
+# Schedules are UTC; the collectors want ~4am / ~5am ET. 0 8 / 0 9 UTC = 4am / 5am EDT (the season
+# opens in EDT). After DST ends in early November they land at 3am / 4am ET (EST, UTC-5) — a ~1h
+# drift a daily bank tolerates. (GitHub-hosted cron can also be delayed/skipped under load; the
+# coverage hardening — retry, coverage alert, 2-week soak — is P1/S2.)
+
+name: Daily Collectors
+
+on:
+  workflow_dispatch:
+    inputs:
+      collector:
+        description: "Which collector to run now"
+        type: choice
+        options: [leaguelogs, news, all]
+        default: all
+  schedule:
+    - cron: "0 8 * * *"   # leaguelogs — 04:00 EDT / 03:00 EST
+    - cron: "0 9 * * *"   # news       — 05:00 EDT / 04:00 EST
+
+# Shared storage-backend config for both jobs. The SUPABASE_* values come from repo secrets.
+env:
+  SNAPSHOT_BACKEND: supabase
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_S3_ENDPOINT: ${{ secrets.SUPABASE_S3_ENDPOINT }}
+  SUPABASE_STORAGE_BUCKET: ${{ secrets.SUPABASE_STORAGE_BUCKET }}
+  SUPABASE_S3_ACCESS_KEY_ID: ${{ secrets.SUPABASE_S3_ACCESS_KEY_ID }}
+  SUPABASE_S3_SECRET_ACCESS_KEY: ${{ secrets.SUPABASE_S3_SECRET_ACCESS_KEY }}
+  SUPABASE_S3_REGION: ${{ secrets.SUPABASE_S3_REGION }}
+
+jobs:
+  leaguelogs:
+    # Fires on its own 08:00 UTC cron, or when dispatched for leaguelogs / all.
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '0 8 * * *') ||
+      (github.event_name == 'workflow_dispatch' && (inputs.collector == 'leaguelogs' || inputs.collector == 'all'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install collector deps (slim subset of application/requirements.txt)
+        run: pip install polars==1.43.0 pyarrow==20.0.0 requests==2.33.1 feedparser==6.0.12 boto3==1.43.56
+      - name: Collect LeagueLogs market values
+        run: python -m application.data.fetchers.run leaguelogs
+
+  news:
+    # Fires on its own 09:00 UTC cron, or when dispatched for news / all.
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '0 9 * * *') ||
+      (github.event_name == 'workflow_dispatch' && (inputs.collector == 'news' || inputs.collector == 'all'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install collector deps (slim subset of application/requirements.txt)
+        run: pip install polars==1.43.0 pyarrow==20.0.0 requests==2.33.1 feedparser==6.0.12 boto3==1.43.56
+      - name: Collect NFL team news (96 RSS feeds)
+        run: python -m application.data.fetchers.run news

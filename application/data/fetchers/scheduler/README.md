@@ -4,6 +4,35 @@ Two version-controlled launchd jobs run the daily snapshot fetchers on the machi
 time (DST-aware). If the Mac is asleep at the scheduled time, the job runs at next wake. Each
 `.plist` here is the canonical copy; the live copy lives at `~/Library/LaunchAgents/<label>.plist`.
 
+> **⚠ SUPERSEDED by GitHub Actions (V1 · P1 · S1).** These launchd jobs are being replaced by
+> **`.github/workflows/collectors.yml`**, which runs the *same* dispatcher off-laptop and writes to a
+> durable **Supabase Storage** bucket (via `data_layer`'s `supabase` backend). That closes the
+> powered-off days (63–71% → target ≥95%). **Keep these plists running until the hosted runs are proven
+> landing data — then retire them (no collection gap).** Cutover runbook is below.
+
+## Cutover to GitHub Actions (one-time, Will)
+
+1. **Create the store.** In the Supabase dashboard: a **private Storage bucket** (e.g. `snapshots`) +
+   **storage-scoped S3 access keys** (Storage → S3 Access Keys). These grant only Storage access, not the DB.
+2. **Set repo secrets** (Settings → Secrets and variables → Actions): `SUPABASE_URL`,
+   `SUPABASE_STORAGE_BUCKET`, `SUPABASE_S3_ACCESS_KEY_ID`, `SUPABASE_S3_SECRET_ACCESS_KEY`,
+   `SUPABASE_S3_REGION` (optionally `SUPABASE_S3_ENDPOINT`). Never commit them.
+3. **Seed the bucket once** from the laptop's current local snapshots, so hosted runs append onto the
+   season-to-date history (not an empty file). Run on the laptop with the same env set:
+   ```sh
+   SNAPSHOT_BACKEND=supabase SUPABASE_URL=… SUPABASE_STORAGE_BUCKET=… \
+   SUPABASE_S3_ACCESS_KEY_ID=… SUPABASE_S3_SECRET_ACCESS_KEY=… SUPABASE_S3_REGION=… \
+   application/venv/bin/python -c "import polars as pl, application.data.data_layer as dl; \
+   L=dl._LocalSnapshotStore(); R=dl._store(); \
+   [ (R.write_parquet(L.read_parquet(p), p), print('seeded', p.name)) \
+     for p in (dl._leaguelogs_market_path(), dl._team_news_raw_path()) if L.exists(p) ]"
+   ```
+4. **Prove it before trusting the cron:** Actions → *Daily Collectors* → *Run workflow* (collector=all), or
+   `gh workflow run collectors.yml -f collector=all`. Confirm both jobs green and the two objects land in
+   the bucket. A re-run must be idempotent (leaguelogs replaces today; news dedups).
+5. **Only then retire these plists:** `launchctl bootout gui/$(id -u)/<label>` for both labels, `rm` the live
+   copies, and delete the two `.plist` files here + this scheduler dir. The workflow is now the meter.
+
 > **Caveat — powered-off ≠ asleep (2026-07-11 audit).** "Runs at next wake" only covers *sleep*.
 > If the Mac is **powered off** across the scheduled time, launchd skips the run entirely (no
 > catch-up), and both APIs serve only "now" (no historical endpoint) — so that day is lost for good.
