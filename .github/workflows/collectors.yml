@@ -1,19 +1,24 @@
-# Daily data collectors — hosted off-laptop (V1 · P1 · S1).
+# Daily data collectors — hosted off-laptop (V1 · P1).
 #
 # Replaces the macOS launchd plists (application/data/fetchers/scheduler/) that ran the two
-# "bank it or lose it" daily collectors on Will's Mac at ~63-71% coverage. Each job invokes the
-# EXISTING dispatcher — `python -m application.data.fetchers.run <name>` — which collects, then runs
-# a post-run freshness check. Output is written to a durable Supabase Storage bucket via data_layer's
-# `supabase` backend (SNAPSHOT_BACKEND=supabase), because a CI runner has no persistent disk.
+# "bank it or lose it" daily collectors on Will's Mac at ~63-71% coverage. Each collector job invokes
+# the EXISTING dispatcher — `python -m application.data.fetchers.run <name>` — which collects, writes a
+# fetch-timestamp metadata sidecar, runs a freshness check, and flushes the run's writes to a durable
+# Supabase Storage bucket (SNAPSHOT_BACKEND=supabase) once at the end. Neither collector needs auth
+# (LeagueLogs is an open developer API; news is public RSS); the only secrets are the storage-scoped
+# Supabase S3 credentials below (repo Settings -> Secrets -> Actions; bucket + keys via the dashboard).
 #
-# Neither collector needs auth (LeagueLogs is an open developer API; news is public RSS). The only
-# secrets are the storage-scoped Supabase S3 credentials below — set them in repo Settings -> Secrets
-# -> Actions (never commit them). Bucket + scoped S3 keys are created in the Supabase dashboard.
+# Reliability (P1/S2):
+#   * Each collector has a PRIMARY + a later CATCH-UP cron. The catch-up is idempotent (collectors de-dup
+#     by date) — a no-op if the day already banked, else it recovers a missed/failed primary run. This is
+#     what turns the old "no-retry day -> permanent miss" into "recovered", and makes flush-at-end safe.
+#   * A daily COVERAGE gate job runs check_collectors after the catch-ups and EXITS NON-ZERO on a missing/
+#     short day -> GitHub's built-in workflow-failure email is the alert (no extra infra).
 #
-# Schedules are UTC; the collectors want ~4am / ~5am ET. 0 8 / 0 9 UTC = 4am / 5am EDT (the season
-# opens in EDT). After DST ends in early November they land at 3am / 4am ET (EST, UTC-5) — a ~1h
-# drift a daily bank tolerates. (GitHub-hosted cron can also be delayed/skipped under load; the
-# coverage hardening — retry, coverage alert, 2-week soak — is P1/S2.)
+# Schedules are UTC; the collectors want ~4am / ~5am ET. 0 8 / 0 9 UTC = 4am / 5am EDT (the season opens
+# in EDT). After DST ends in early November they land ~1h earlier in ET (EST, UTC-5) — a drift a daily
+# bank tolerates. GitHub-hosted cron can also be delayed/skipped under load; the catch-up run + the
+# coverage alert cover that, and the rolling two-week coverage report is the >=95% proof (P1/S2).
 
 name: Daily Collectors
 
@@ -21,15 +26,18 @@ on:
   workflow_dispatch:
     inputs:
       collector:
-        description: "Which collector to run now"
+        description: "Which job to run now"
         type: choice
-        options: [leaguelogs, news, all]
+        options: [leaguelogs, news, coverage, all]
         default: all
   schedule:
-    - cron: "0 8 * * *"   # leaguelogs — 04:00 EDT / 03:00 EST
-    - cron: "0 9 * * *"   # news       — 05:00 EDT / 04:00 EST
+    - cron: "0 8 * * *"    # leaguelogs primary  — 04:00 EDT
+    - cron: "0 14 * * *"   # leaguelogs catch-up — 10:00 EDT
+    - cron: "0 9 * * *"    # news primary        — 05:00 EDT
+    - cron: "0 15 * * *"   # news catch-up       — 11:00 EDT
+    - cron: "0 18 * * *"   # coverage gate       — 14:00 EDT (after both catch-ups)
 
-# Shared storage-backend config for both jobs. The SUPABASE_* values come from repo secrets.
+# Shared storage-backend config for every job. The SUPABASE_* values come from repo secrets.
 env:
   SNAPSHOT_BACKEND: supabase
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -41,9 +49,9 @@ env:
 
 jobs:
   leaguelogs:
-    # Fires on its own 08:00 UTC cron, or when dispatched for leaguelogs / all.
+    # Primary (08:00) or catch-up (14:00) cron, or dispatched for leaguelogs / all.
     if: >-
-      (github.event_name == 'schedule' && github.event.schedule == '0 8 * * *') ||
+      (github.event_name == 'schedule' && (github.event.schedule == '0 8 * * *' || github.event.schedule == '0 14 * * *')) ||
       (github.event_name == 'workflow_dispatch' && (inputs.collector == 'leaguelogs' || inputs.collector == 'all'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -58,9 +66,9 @@ jobs:
         run: python -m application.data.fetchers.run leaguelogs
 
   news:
-    # Fires on its own 09:00 UTC cron, or when dispatched for news / all.
+    # Primary (09:00) or catch-up (15:00) cron, or dispatched for news / all.
     if: >-
-      (github.event_name == 'schedule' && github.event.schedule == '0 9 * * *') ||
+      (github.event_name == 'schedule' && (github.event.schedule == '0 9 * * *' || github.event.schedule == '0 15 * * *')) ||
       (github.event_name == 'workflow_dispatch' && (inputs.collector == 'news' || inputs.collector == 'all'))
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -73,3 +81,21 @@ jobs:
         run: pip install polars==1.43.0 pyarrow==20.0.0 requests==2.33.1 feedparser==6.0.12 boto3==1.43.56
       - name: Collect NFL team news (96 RSS feeds)
         run: python -m application.data.fetchers.run news
+
+  coverage:
+    # Daily health gate (18:00), or dispatched for coverage / all. A non-zero exit fails the job, which
+    # triggers GitHub's built-in workflow-failure email to the repo owner — the alert.
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '0 18 * * *') ||
+      (github.event_name == 'workflow_dispatch' && (inputs.collector == 'coverage' || inputs.collector == 'all'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install collector deps (slim subset of application/requirements.txt)
+        run: pip install polars==1.43.0 pyarrow==20.0.0 requests==2.33.1 feedparser==6.0.12 boto3==1.43.56
+      - name: Certify coverage (fails the job -> failure email on a missing/short day)
+        run: python -m application.data.fetchers.check_collectors
