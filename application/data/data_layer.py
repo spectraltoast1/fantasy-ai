@@ -1,3 +1,4 @@
+import json
 import os
 import time
 from pathlib import Path
@@ -48,7 +49,7 @@ def snapshot_backend() -> str:
 
 
 class _LocalSnapshotStore:
-    """The laptop / on-disk backend — the historical behavior, unchanged."""
+    """The laptop / on-disk backend — the historical behavior, unchanged. `flush()` is a no-op."""
 
     def exists(self, path: Path) -> bool:
         return path.exists()
@@ -60,17 +61,28 @@ class _LocalSnapshotStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         df.write_parquet(path)
 
+    def read_bytes(self, path: Path) -> bytes:
+        return path.read_bytes()
+
+    def write_bytes(self, data: bytes, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+
+    def flush(self) -> None:
+        return None
+
 
 class _SupabaseSnapshotStore:
     """Durable object-store backend for the diskless CI collectors (Supabase Storage, S3-compatible).
 
-    The runner's ephemeral disk is a *working copy*: an object is downloaded on first access
-    (priming the read-modify-write append), operated on locally exactly as the local backend does,
-    and re-uploaded after each write (preserving the collectors' per-item crash-resilience — a run
-    that dies mid-way has still banked what it wrote). The object key is the snapshot path relative
-    to `_SNAPSHOT_DIR`, so the on-disk hierarchy maps 1:1 to bucket keys. `boto3` is imported lazily
-    so a laptop on the local backend never needs it. (An S2 optimization is to flush once at end of
-    run instead of uploading after every write.)
+    The runner's ephemeral disk is a *working copy*: an object is downloaded on first access (priming
+    the read-modify-write append) and operated on locally exactly as the local backend does. Writes go
+    to the working copy and mark the key *dirty*; **uploads happen once, at `flush()` (end of run)** —
+    P1/S2's batching (a daily bank doesn't need per-item upload, and news wrote ~96×/run). A run that
+    dies before `flush()` uploads nothing that run — the same-day catch-up cron re-collects (collectors
+    de-dup by date), so nothing is lost. The object key is the snapshot path relative to `_SNAPSHOT_DIR`,
+    so the on-disk hierarchy maps 1:1 to bucket keys. `boto3` is imported lazily so the local backend
+    never needs it.
     """
 
     def __init__(self):
@@ -87,6 +99,7 @@ class _SupabaseSnapshotStore:
             aws_secret_access_key=_require_conf("SUPABASE_S3_SECRET_ACCESS_KEY"),
             region_name=_snapshot_conf("SUPABASE_S3_REGION") or "us-east-1",
         )
+        self._dirty: set[Path] = set()   # working-copy paths written this run, uploaded on flush()
 
     def _key(self, path: Path) -> str:
         return str(Path(path).relative_to(_SNAPSHOT_DIR))
@@ -118,7 +131,23 @@ class _SupabaseSnapshotStore:
     def write_parquet(self, df: pl.DataFrame, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         df.write_parquet(path)
-        self._s3.upload_file(str(path), self._bucket, self._key(path))
+        self._dirty.add(path)   # uploaded on flush()
+
+    def read_bytes(self, path: Path) -> bytes:
+        if not path.exists():
+            self._download(path)
+        return path.read_bytes()
+
+    def write_bytes(self, data: bytes, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        self._dirty.add(path)   # uploaded on flush()
+
+    def flush(self) -> None:
+        """Upload every working copy written this run to the bucket, then clear the dirty set."""
+        for path in sorted(self._dirty):
+            self._s3.upload_file(str(path), self._bucket, self._key(path))
+        self._dirty.clear()
 
 
 _STORE = None
@@ -130,6 +159,15 @@ def _store():
     if _STORE is None:
         _STORE = _SupabaseSnapshotStore() if snapshot_backend() == "supabase" else _LocalSnapshotStore()
     return _STORE
+
+
+def flush_snapshots() -> None:
+    """Upload any buffered snapshot writes to the durable store (no-op on the local backend).
+
+    The supabase backend batches writes to a working copy and uploads once here (P1/S2). The collector
+    dispatcher calls this at the end of a run, after the collect + metadata sidecar are written.
+    """
+    _store().flush()
 
 
 # --- Player ID Map ---
@@ -718,6 +756,25 @@ def write_leaguelogs_market_snapshot(df: pl.DataFrame, snapshot_date) -> None:
     store.write_parquet(df, path)
 
 
+# Fetch-timestamp metadata sidecar (P1/S2): a small JSON beside the series in the store recording
+# *when* the last run fetched + its status/count. The cache records what was fetched, not when; the
+# coverage gate reads this to report last-fetch age + run status. One sidecar per banked series.
+
+def _leaguelogs_market_meta_path() -> Path:
+    return _SNAPSHOT_DIR / "leaguelogs" / "market_values.meta.json"
+
+
+def write_leaguelogs_market_metadata(meta: dict) -> None:
+    _store().write_bytes(json.dumps(meta, indent=2, sort_keys=True).encode(), _leaguelogs_market_meta_path())
+
+
+def read_leaguelogs_market_metadata() -> dict | None:
+    path = _leaguelogs_market_meta_path()
+    if not _store().exists(path):
+        return None
+    return json.loads(_store().read_bytes(path))
+
+
 # --- Player News (news collector, DECISION_READS.md §2 aggregation half) ---
 # The aggregation half of the §2 ROS AI-interpretation layer: a live, scheduled RSS
 # collector (fetchers/news.py) banks current NFL player news as a de-duplicated,
@@ -855,6 +912,21 @@ def prune_team_news_raw_content(cutoff_date: str, *, dry_run: bool = False) -> d
     store.write_parquet(pruned, path)
     report["written"] = True
     return report
+
+
+def _team_news_raw_meta_path() -> Path:
+    return _SNAPSHOT_DIR / "news" / "team_news_raw.meta.json"
+
+
+def write_team_news_raw_metadata(meta: dict) -> None:
+    _store().write_bytes(json.dumps(meta, indent=2, sort_keys=True).encode(), _team_news_raw_meta_path())
+
+
+def read_team_news_raw_metadata() -> dict | None:
+    path = _team_news_raw_meta_path()
+    if not _store().exists(path):
+        return None
+    return json.loads(_store().read_bytes(path))
 
 
 # --- Team News Dossier (weekly per-team synthesis, §2 news pipeline Stage B) ---

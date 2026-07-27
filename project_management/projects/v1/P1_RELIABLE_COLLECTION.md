@@ -1,6 +1,6 @@
 # Project 1 — Reliable Off-Laptop Data Collection
 
-**Created:** 2026-07-26 · **Status:** In flight — **S1 machinery built + locally verified (2026-07-27); go-live gated on the bucket + CI secrets + a proven hosted run.** S2 next. · **Track:** Must-have; longest lead time · **Est:** 1–2 sessions
+**Created:** 2026-07-26 · **Status:** ~Complete — **S1 live (hosted → Supabase Storage); S2 hardening shipped (2026-07-27): sidecar timestamps + catch-up retry + flush-batching + coverage-gate email. Only the rolling two-week ≥95% soak remains (calendar) — P1 closes when it clears.** · **Track:** Must-have; longest lead time · **Est:** 1–2 sessions
 
 > **What this project does:** move the daily data collectors off Will's laptop (macOS launchd, ~63–71%
 > coverage) to a **hosted scheduler** that hits **≥95% coverage**, and add the fetch-timestamp metadata the

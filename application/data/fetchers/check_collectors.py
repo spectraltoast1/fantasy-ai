@@ -59,6 +59,54 @@ def _recent_days(since_days: int) -> list[str]:
     return [(today - timedelta(days=i)).isoformat() for i in range(since_days, 0, -1)]
 
 
+def _age_days(iso_utc: str | None) -> float | None:
+    """Whole+fractional days since an ISO-8601 UTC timestamp (None if absent/unparseable)."""
+    if not iso_utc:
+        return None
+    try:
+        ts = datetime.fromisoformat(iso_utc.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return (datetime.now(timezone.utc) - ts).total_seconds() / 86400
+
+
+def _read_meta(cov: dict) -> dict | None:
+    reader = cov.get("meta_read")
+    return reader() if reader else None
+
+
+def record_run(name: str) -> None:
+    """Write the fetch-timestamp metadata sidecar after a collect (P1/S2).
+
+    Records WHEN the run fetched — independent of net-new data, which matters for news: the series'
+    'recency' reflects the last NEW article and lags in a quiet news week, whereas the last-RUN
+    timestamp says a collection actually happened. Also banks the row count + (strict) today's
+    completeness status. The coverage gate reads it back. Called post-collect by run.py's dispatch.
+    """
+    cov = REGISTRY[name]["coverage"]
+    if not cov.get("meta_write"):
+        return
+    df = cov["read"]()
+    counts = _daily_counts(df, cov)
+    today = _today().isoformat()
+    got = counts.get(today, 0)
+    if cov["mode"] == "strict":
+        expected = max(counts.values()) if counts else 0
+        status = "ok" if got and got >= expected else "partial"
+    else:
+        expected = None            # append-only: no fixed daily cardinality
+        status = "ok"              # the run completed; net-new (may be 0 in a quiet week) is today_count
+    cov["meta_write"]({
+        "series": REGISTRY[name]["series"],
+        "last_fetch_utc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "as_of_date": today,
+        "rows": int(df.height),
+        "today_count": int(got),
+        "expected": (int(expected) if expected is not None else None),
+        "status": status,
+    })
+
+
 def _certify_strict(name: str, cov: dict, since_days: int) -> bool:
     counts = _daily_counts(cov["read"](), cov)
     if not counts:
@@ -80,29 +128,53 @@ def _certify_strict(name: str, cov: dict, since_days: int) -> bool:
     detail = "all present + complete" if ok else ", ".join(
         f"{d}={'missing' if counts.get(d, 0) == 0 else f'{counts[d]}/{expected}'}" for d in bad)
     print(f"    recent {since_days}d (excl. today): {detail}  {'PASS' if ok else 'FAIL'}")
+
+    meta = _read_meta(cov)   # P1/S2 sidecar: report last-run age + status; fail on an error status
+    if meta:
+        age = _age_days(meta.get("last_fetch_utc"))
+        age_s = f"{age:.1f}d ago" if age is not None else "?"
+        print(f"    last RUN {meta.get('last_fetch_utc')} ({age_s}), status={meta.get('status')}, "
+              f"rows={meta.get('rows')}")
+        if meta.get("status") == "error":
+            ok = False
+    else:
+        print("    metadata: (no sidecar yet — pre-S2 history or not yet run)")
     return ok
 
 
 def _certify_recency(name: str, cov: dict, stale_days: int) -> bool:
     df = cov["read"]()
     counts = _daily_counts(df, cov)
-    if not counts:
-        print(f"  {name}: series empty — FAIL")
+    meta = _read_meta(cov)
+
+    # P1/S2: prefer the sidecar's last-RUN timestamp as the recency signal. The series' article-recency
+    # reflects the last NEW article, which lags in a quiet news week even though runs are still happening
+    # — so gating on it would false-alarm. Fall back to article-recency only when no sidecar exists.
+    if meta and meta.get("last_fetch_utc"):
+        age = _age_days(meta["last_fetch_utc"])
+        ok = age is not None and age <= stale_days and meta.get("status") != "error"
+        age_s = f"{age:.1f}d ago" if age is not None else "?"
+        print(f"  {name}: last RUN {meta['last_fetch_utc']} ({age_s}), status={meta.get('status')}  "
+              f"{'PASS' if ok else f'STALE (>{stale_days}d) / ERROR'}")
+    elif not counts:
+        print(f"  {name}: series empty + no run metadata — FAIL")
         return False
-    days = sorted(counts)
-    last = days[-1]
-    days_since = (_today() - date.fromisoformat(last)).days
-    ok = days_since <= stale_days
-    print(f"  {name}: {len(days)} collection day(s), span {days[0]}→{last}; "
-          f"last collection {days_since}d ago  {'PASS' if ok else f'STALE (>{stale_days}d)'}")
+    else:
+        last = sorted(counts)[-1]
+        days_since = (_today() - date.fromisoformat(last)).days
+        ok = days_since <= stale_days
+        print(f"  {name}: (no sidecar) {len(counts)} collection day(s), last article {last}, "
+              f"{days_since}d ago  {'PASS' if ok else f'STALE (>{stale_days}d)'}")
 
     # Soft evidence: net-new articles on the latest date. NOTE the store is append-only, so this counts
     # only NET-NEW articles (not which feeds ran) — feed health (the 2/3 floor) is reported live by the
     # collector at snapshot time, and can't be reliably reconstructed from the store.
-    latest = df.filter(pl.col(cov["date_col"]).cast(pl.Utf8).str.slice(0, 10) == last)
-    n_teams = latest.select("team").n_unique()
-    print(f"    latest date {last}: {latest.height} net-new article(s) across {n_teams} team(s) "
-          f"(append-only — net-new only, not feed health)")
+    if counts:
+        last = sorted(counts)[-1]
+        latest = df.filter(pl.col(cov["date_col"]).cast(pl.Utf8).str.slice(0, 10) == last)
+        n_teams = latest.select("team").n_unique()
+        print(f"    latest article date {last}: {latest.height} net-new article(s) across {n_teams} "
+              f"team(s) (append-only — net-new only, not feed health)")
     return ok
 
 

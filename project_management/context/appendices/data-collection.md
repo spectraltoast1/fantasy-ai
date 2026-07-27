@@ -37,15 +37,18 @@ timestamp** — a `metadata.json` sidecar is needed before in-season use.
 
 **Fix (V1 P1):**
 
-- **S1 — built + locally verified.** An env-selected storage backend in `data_layer` (`SNAPSHOT_BACKEND`:
-  `local` for the laptop, `supabase` for CI) lets the *same* collectors write to a durable **Supabase Storage**
-  bucket (S3-compatible, via `boto3`) on a diskless runner; a **GitHub Actions** workflow
-  (`.github/workflows/collectors.yml`) runs the two collectors through the `run.py` dispatcher on independent
-  daily crons. Neither collector needs auth (open LeagueLogs API + public RSS) — the *only* secret is the
-  storage-scoped S3 credential. **Go-live is gated on creating the bucket + setting the CI secrets + proving one
-  hosted run**; the laptop `launchd` jobs retire only after that (no gap) — cutover runbook in
-  `application/data/fetchers/scheduler/README.md`.
-- **S2 — remaining.** The `metadata.json` fetch-timestamp sidecar, retry/backoff, a daily coverage alert, and a
-  2-week soak to prove **≥95%** coverage.
+- **S1 — live.** An env-selected storage backend in `data_layer` (`SNAPSHOT_BACKEND`: `local` for the laptop,
+  `supabase` for CI) lets the *same* collectors write to a durable **Supabase Storage** bucket (S3-compatible,
+  via `boto3`) on a diskless runner; a **GitHub Actions** workflow (`.github/workflows/collectors.yml`) runs the
+  two collectors through the `run.py` dispatcher. Neither collector needs auth (open LeagueLogs API + public
+  RSS) — the *only* secret is the storage-scoped S3 credential. Cutover done (bucket seeded, hosted collection
+  running); the laptop `launchd` jobs are retired.
+- **S2 — shipped.** Each run writes a **fetch-timestamp sidecar** (`<series>.meta.json`: last-fetch UTC, count,
+  status). A same-day **catch-up cron** per collector recovers a missed/failed primary (idempotent — collectors
+  de-dup by date). Uploads are **flush-batched** (one per series per run; news was ~96×). A daily **coverage
+  gate** job (`check_collectors`, exits non-zero on a missing/short day) → **GitHub's native workflow-failure
+  email**. The news gate keys on the sidecar's last-*run* time (not last-*article*, which lags in a quiet week).
+- **Remaining (calendar):** the rolling **two-week soak** on the hosted, hardened collectors — the coverage
+  gate's report is the **≥95%** evidence. **P1 closes when it clears.**
 
 This is a pilot go/no-go gate and gates the live market read (P2) and the live AI outlook (P4).
