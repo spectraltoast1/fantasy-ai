@@ -1,3 +1,4 @@
+import os
 import time
 from pathlib import Path
 
@@ -6,6 +7,129 @@ import polars as pl
 _HERE = Path(__file__).resolve().parent
 _SNAPSHOT_DIR = _HERE / "snapshots"
 _CACHE_DIR = _HERE / "cache"
+
+
+# --- Snapshot storage backend (P1/S1: hosted collectors write off-laptop) ---
+# The daily "bank it or lose it" collectors (leaguelogs, news) historically wrote parquet to
+# the local `snapshots/` tree. A hosted/diskless CI runner has no persistent disk, so the
+# raw-collection write/read is routed through an env-selected backend: `local` (the laptop —
+# unchanged, the default) or `supabase` (a durable Supabase Storage bucket, S3-compatible).
+# ONE seam, both environments — the same fetcher code writes to the bucket in CI and to local
+# `snapshots/` on a laptop. Only the two raw collector series are wired through it (see below);
+# every other read/write in this module keeps its direct local-path IO. `backend` is chosen
+# env-first (mirrors application/api/settings.py) so nothing changes unless SNAPSHOT_BACKEND is
+# set — which happens only in the collector CI job.
+
+def _snapshot_conf(name: str):
+    """Return env var `name` first, else `application.config.<name>`, else None."""
+    val = os.environ.get(name)
+    if val:
+        return val
+    try:
+        from application import config
+    except Exception:
+        return None
+    return getattr(config, name, None)
+
+
+def _require_conf(name: str) -> str:
+    val = _snapshot_conf(name)
+    if not val:
+        raise RuntimeError(
+            f"{name} is required for the 'supabase' snapshot backend; "
+            f"set it as an env var (CI secret) or in application/config.py."
+        )
+    return str(val)
+
+
+def snapshot_backend() -> str:
+    """The active snapshot backend: 'local' (default) or 'supabase'."""
+    return (_snapshot_conf("SNAPSHOT_BACKEND") or "local").lower()
+
+
+class _LocalSnapshotStore:
+    """The laptop / on-disk backend — the historical behavior, unchanged."""
+
+    def exists(self, path: Path) -> bool:
+        return path.exists()
+
+    def read_parquet(self, path: Path) -> pl.DataFrame:
+        return pl.read_parquet(path)
+
+    def write_parquet(self, df: pl.DataFrame, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        df.write_parquet(path)
+
+
+class _SupabaseSnapshotStore:
+    """Durable object-store backend for the diskless CI collectors (Supabase Storage, S3-compatible).
+
+    The runner's ephemeral disk is a *working copy*: an object is downloaded on first access
+    (priming the read-modify-write append), operated on locally exactly as the local backend does,
+    and re-uploaded after each write (preserving the collectors' per-item crash-resilience — a run
+    that dies mid-way has still banked what it wrote). The object key is the snapshot path relative
+    to `_SNAPSHOT_DIR`, so the on-disk hierarchy maps 1:1 to bucket keys. `boto3` is imported lazily
+    so a laptop on the local backend never needs it. (An S2 optimization is to flush once at end of
+    run instead of uploading after every write.)
+    """
+
+    def __init__(self):
+        import boto3  # lazy — only the CI backend pulls this in
+
+        self._bucket = _require_conf("SUPABASE_STORAGE_BUCKET")
+        endpoint = _snapshot_conf("SUPABASE_S3_ENDPOINT")
+        if not endpoint:
+            endpoint = _require_conf("SUPABASE_URL").rstrip("/") + "/storage/v1/s3"
+        self._s3 = boto3.client(
+            "s3",
+            endpoint_url=endpoint,
+            aws_access_key_id=_require_conf("SUPABASE_S3_ACCESS_KEY_ID"),
+            aws_secret_access_key=_require_conf("SUPABASE_S3_SECRET_ACCESS_KEY"),
+            region_name=_snapshot_conf("SUPABASE_S3_REGION") or "us-east-1",
+        )
+
+    def _key(self, path: Path) -> str:
+        return str(Path(path).relative_to(_SNAPSHOT_DIR))
+
+    def _download(self, path: Path) -> bool:
+        """Fetch the object into the local working copy. True iff it exists remotely."""
+        from botocore.exceptions import ClientError
+
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self._s3.download_file(self._bucket, self._key(path), str(path))
+            return True
+        except ClientError as err:
+            code = err.response.get("Error", {}).get("Code")
+            if code in ("404", "NoSuchKey", "NoSuchBucket"):
+                return False
+            raise
+
+    def exists(self, path: Path) -> bool:
+        if path.exists():
+            return True
+        return self._download(path)  # prime the working copy on a hit
+
+    def read_parquet(self, path: Path) -> pl.DataFrame:
+        if not path.exists():
+            self._download(path)
+        return pl.read_parquet(path)
+
+    def write_parquet(self, df: pl.DataFrame, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        df.write_parquet(path)
+        self._s3.upload_file(str(path), self._bucket, self._key(path))
+
+
+_STORE = None
+
+
+def _store():
+    """The active snapshot store (lazy singleton — never constructs boto3 on the local backend)."""
+    global _STORE
+    if _STORE is None:
+        _STORE = _SupabaseSnapshotStore() if snapshot_backend() == "supabase" else _LocalSnapshotStore()
+    return _STORE
 
 
 # --- Player ID Map ---
@@ -571,11 +695,11 @@ def _leaguelogs_market_path() -> Path:
 
 def read_leaguelogs_market() -> pl.DataFrame:
     """Read the full LeagueLogs market-value snapshot history (all dates, all profiles)."""
-    return pl.read_parquet(_leaguelogs_market_path())
+    return _store().read_parquet(_leaguelogs_market_path())
 
 
 def leaguelogs_market_exists() -> bool:
-    return _leaguelogs_market_path().exists()
+    return _store().exists(_leaguelogs_market_path())
 
 
 def write_leaguelogs_market_snapshot(df: pl.DataFrame, snapshot_date) -> None:
@@ -586,12 +710,12 @@ def write_leaguelogs_market_snapshot(df: pl.DataFrame, snapshot_date) -> None:
     same-day re-run replaces the day rather than duplicating it. History for other
     dates is never touched — it cannot be re-fetched, so it is preserved.
     """
+    store = _store()
     path = _leaguelogs_market_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        existing = pl.read_parquet(path).filter(pl.col("snapshot_date") != snapshot_date)
+    if store.exists(path):
+        existing = store.read_parquet(path).filter(pl.col("snapshot_date") != snapshot_date)
         df = pl.concat([existing, df])
-    df.write_parquet(path)
+    store.write_parquet(df, path)
 
 
 # --- Player News (news collector, DECISION_READS.md §2 aggregation half) ---
@@ -663,19 +787,19 @@ def write_team_news_raw(df: pl.DataFrame) -> None:
     already on disk is dropped, so re-polling a feed never duplicates — the store grows only by new
     articles. Concat is diagonal so a later schema tweak doesn't break the append.
     """
+    store = _store()
     path = _team_news_raw_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
     df = df.unique(subset="article_id", keep="first")
-    if path.exists():
-        existing = pl.read_parquet(path)
+    if store.exists(path):
+        existing = store.read_parquet(path)
         df = df.filter(~pl.col("article_id").is_in(existing["article_id"]))
         df = pl.concat([existing, df], how="diagonal")
-    df.write_parquet(path)
+    store.write_parquet(df, path)
 
 
 def read_team_news_raw(team: str | None = None, season: int | None = None) -> pl.DataFrame:
     """Read the collected raw team articles, optionally filtered to one team and/or season."""
-    df = pl.read_parquet(_team_news_raw_path())
+    df = _store().read_parquet(_team_news_raw_path())
     if team is not None:
         df = df.filter(pl.col("team") == team)
     if season is not None:
@@ -684,7 +808,7 @@ def read_team_news_raw(team: str | None = None, season: int | None = None) -> pl
 
 
 def team_news_raw_exists() -> bool:
-    return _team_news_raw_path().exists()
+    return _store().exists(_team_news_raw_path())
 
 
 def prune_team_news_raw_content(cutoff_date: str, *, dry_run: bool = False) -> dict:
@@ -703,10 +827,11 @@ def prune_team_news_raw_content(cutoff_date: str, *, dry_run: bool = False) -> d
     """
     empty = {"total": 0, "eligible": 0, "to_null": 0, "chars_freed": 0,
              "oldest": None, "cutoff": cutoff_date, "written": False}
+    store = _store()
     path = _team_news_raw_path()
-    if not path.exists():
+    if not store.exists(path):
         return empty
-    df = pl.read_parquet(path)
+    df = store.read_parquet(path)
     if df.is_empty():
         return empty
     day = pl.col("published_at").str.slice(0, 10)
@@ -727,7 +852,7 @@ def prune_team_news_raw_content(cutoff_date: str, *, dry_run: bool = False) -> d
     pruned = df.with_columns(
         pl.when(old).then(pl.lit(None, dtype=pl.Utf8)).otherwise(pl.col("content")).alias("content")
     )
-    pruned.write_parquet(path)
+    store.write_parquet(pruned, path)
     report["written"] = True
     return report
 

@@ -35,6 +35,17 @@ The daily collectors run on **the owner's laptop via macOS launchd**. Over the a
 series can't be backfilled, every off day is unrecoverable. The cache also **doesn't record a fetch
 timestamp** — a `metadata.json` sidecar is needed before in-season use.
 
-**Fix (V1 P1):** move the daily collectors off the laptop to a hosted scheduler (GitHub Actions is the lead),
-add the timestamp sidecar, and prove ≥95% coverage. This is also a pilot go/no-go gate and gates the live
-market read (P2) and the live AI outlook (P4).
+**Fix (V1 P1):**
+
+- **S1 — built + locally verified.** An env-selected storage backend in `data_layer` (`SNAPSHOT_BACKEND`:
+  `local` for the laptop, `supabase` for CI) lets the *same* collectors write to a durable **Supabase Storage**
+  bucket (S3-compatible, via `boto3`) on a diskless runner; a **GitHub Actions** workflow
+  (`.github/workflows/collectors.yml`) runs the two collectors through the `run.py` dispatcher on independent
+  daily crons. Neither collector needs auth (open LeagueLogs API + public RSS) — the *only* secret is the
+  storage-scoped S3 credential. **Go-live is gated on creating the bucket + setting the CI secrets + proving one
+  hosted run**; the laptop `launchd` jobs retire only after that (no gap) — cutover runbook in
+  `application/data/fetchers/scheduler/README.md`.
+- **S2 — remaining.** The `metadata.json` fetch-timestamp sidecar, retry/backoff, a daily coverage alert, and a
+  2-week soak to prove **≥95%** coverage.
+
+This is a pilot go/no-go gate and gates the live market read (P2) and the live AI outlook (P4).
