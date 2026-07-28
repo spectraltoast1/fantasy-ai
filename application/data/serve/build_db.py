@@ -25,6 +25,12 @@ Three modes (run from the repo root with the data venv, application/venv):
     application/venv/bin/python -m application.data.serve.build_db --load
         Apply schema.sql (DROP + CREATE) then COPY every present (slice, dataset) in. Idempotent.
 
+    application/venv/bin/python -m application.data.serve.build_db --reload-league <league_id>
+        Per-league SCOPED RELOAD (the in-season incremental path): in one transaction, DELETE that
+        league's rows across the 13 data tables and re-COPY its slice — every other league untouched.
+        Advances one league to a new as_of_week without a whole-DB DROP+CREATE. --load stays the
+        fallback + the byte-parity oracle's baseline (see serve/check_scoped_reload.py).
+
     application/venv/bin/python -m application.data.serve.build_db --verify
         Assert per-table row counts == the sum over slices that have the dataset, and print
         per-table distinct-league_id counts (panel gating) + an is_mine parity spot-check.
@@ -280,8 +286,10 @@ def _run_sql_script(cur, sql: str) -> None:
             cur.execute(stmt)
 
 
-def _copy_slice(conn, table: str, df: pl.DataFrame, lid: str, season: int) -> int:
+def _copy_slice_tx(conn, table: str, df: pl.DataFrame, lid: str, season: int) -> int:
     """COPY one slice's dataframe into `table`, stamping league_id (+ season if absent). Returns rows.
+    Does NOT commit — the caller owns the transaction (the full load commits per slice; the per-league
+    scoped reload batches all deletes+copies into a single commit).
 
     If the parquet already carries a league_id column (schedule, B1), assert it equals the slice and
     drop it so the table has exactly one league_id.
@@ -306,8 +314,14 @@ def _copy_slice(conn, table: str, df: pl.DataFrame, lid: str, season: int) -> in
                         v = Jsonb(v) if v is not None else None
                     values.append(v)
                 cp.write_row(values)
-    conn.commit()
     return df.height
+
+
+def _copy_slice(conn, table: str, df: pl.DataFrame, lid: str, season: int) -> int:
+    """COPY one slice and commit — the full-load path (one commit per slice, unchanged from before)."""
+    n = _copy_slice_tx(conn, table, df, lid, season)
+    conn.commit()
+    return n
 
 
 def _copy_plain(conn, table: str, df: pl.DataFrame) -> int:
@@ -340,6 +354,67 @@ def reload_manifest() -> None:
                                   for c in df.columns])
         conn.commit()
     print(f"reloaded {_MANIFEST_TABLE} ({df.height} rows) — catalog-only; the 31 data slices untouched")
+
+
+def _tables_present(conn) -> None:
+    """Guard: the 13 data tables must already exist. A scoped reload REUSES the emitted union-superset
+    schema and never DROP/CREATEs — a per-league CREATE would narrow the union (e.g. drop the division
+    columns other leagues need). If a table is missing, the DB was never fully loaded — run --load first."""
+    names = [ds.table for ds in DATASETS]
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'public' AND table_name = ANY(%s)", (names,))
+        have = {r[0] for r in cur.fetchall()}
+    missing = [t for t in names if t not in have]
+    if missing:
+        raise SystemExit(f"tables missing {missing} — run --load (full DROP+CREATE) first.")
+
+
+def load_league(conn, lid: str, *, verify_schema: bool = True) -> dict[str, int]:
+    """Per-league SCOPED RELOAD — the incremental, in-season alternative to the whole-DB DROP+CREATE
+    ``load()``. In ONE transaction: DELETE this league's rows from the 13 data tables, then re-COPY its
+    present (slice, dataset) parquets; a single commit at the end. Every OTHER league — and the
+    ``demo_manifest`` catalog — is left untouched. This is how a league advances to a new week (a fresh
+    ``as_of_week`` slice) without rebuilding the DB.
+
+    Atomicity (modeled on ``reload_manifest``): all DELETEs + COPYs share one transaction / one commit, so
+    a concurrent API reader never sees the league half-deleted (it sees the pre- or post-state, never a
+    gap). Never DROP/CREATE — reuses the existing union-superset schema; ``_tables_present`` guards that it
+    exists. Returns per-table rows copied.
+    """
+    if verify_schema:
+        _tables_present(conn)
+    # A redraft league_id is unique per season, so this is normally one (season, scoring_key) slice; if a
+    # league_id ever spanned seasons the DELETE (by league_id) clears all and every slice is re-COPYd.
+    slices = [(s, sk) for l, s, sk in _slices() if l == lid]
+    if not slices:
+        raise SystemExit(f"league {lid} is not a demo_manifest slice — nothing to reload (cataloging a "
+                         "brand-new league is onboarding/P5, not the scoped reload).")
+    counts: dict[str, int] = defaultdict(int)
+    with conn.cursor() as cur:
+        for ds in DATASETS:
+            cur.execute(f'DELETE FROM "{ds.table}" WHERE league_id = %s', (lid,))
+    for season, sk in slices:
+        for ds in DATASETS:
+            p = ds.path(season, lid, sk)
+            if not p.exists():
+                continue   # skip-if-absent, exactly like load()
+            counts[ds.table] += _copy_slice_tx(conn, ds.table, pl.read_parquet(p), lid, season)
+    conn.commit()   # single atomic commit for the whole league
+    return dict(counts)
+
+
+def reload_league(lid: str) -> None:
+    """Scoped reload of one league (owns its connection, like ``reload_manifest``)."""
+    with psycopg.connect(database_url()) as conn:
+        counts = load_league(conn, lid)
+    total = sum(counts.values())
+    print(f"reloaded league {lid} — {total} rows across {len(counts)} table(s); "
+          f"every other league + demo_manifest untouched")
+    for ds in DATASETS:
+        if counts.get(ds.table):
+            print(f"  {ds.table:22s} {counts[ds.table]:>6d} rows")
 
 
 def load() -> None:
@@ -444,10 +519,13 @@ def main() -> None:
     ap.add_argument("--load", action="store_true", help="apply schema.sql and load all slices")
     ap.add_argument("--reload-manifest", action="store_true",
                     help="refresh ONLY the demo_manifest catalog table (TRUNCATE+COPY; data slices untouched)")
+    ap.add_argument("--reload-league", metavar="LID", default=None,
+                    help="per-league SCOPED RELOAD: delete + re-COPY one league in one transaction "
+                         "(incremental; every other league + demo_manifest untouched)")
     ap.add_argument("--verify", action="store_true", help="assert row counts + print league counts + parity")
     args = ap.parse_args()
-    if not (args.emit or args.dry_run or args.load or args.reload_manifest or args.verify):
-        ap.error("nothing to do — pass --emit, --dry-run, --load, --reload-manifest and/or --verify")
+    if not (args.emit or args.dry_run or args.load or args.reload_manifest or args.reload_league or args.verify):
+        ap.error("nothing to do — pass --emit, --dry-run, --load, --reload-manifest, --reload-league and/or --verify")
     if args.emit:
         emit()
     if args.dry_run:
@@ -456,6 +534,8 @@ def main() -> None:
         load()
     if args.reload_manifest:
         reload_manifest()
+    if args.reload_league:
+        reload_league(args.reload_league)
     if args.verify:
         verify()
 
