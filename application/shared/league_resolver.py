@@ -9,7 +9,7 @@ Public API:
 import polars as pl
 import requests
 
-from application import config
+from application.api import settings
 from application.data import data_layer
 
 
@@ -31,9 +31,12 @@ def resolve_league_id(year: int) -> str:
 
 
 def _resolve_via_api(year: int) -> str:
-    """Look up the user's Sleeper leagues and return the one matching config.SLEEPER_LEAGUE_ID."""
-    username = config.SLEEPER_USERNAME
-    target_id = config.SLEEPER_LEAGUE_ID
+    """Look up the user's Sleeper leagues and return the one matching the configured league id.
+
+    Username + target id resolve env-first (MY_USERNAME / LEAGUE_ID) with a config.py fallback via the
+    guarded ``settings`` seam, so this imports + runs where config.py is absent (CI / the Fly image)."""
+    username = settings.my_username()
+    target_id = settings.league_id()
 
     print(f"Resolving Sleeper league for user '{username}' ({year})...")
 

@@ -55,6 +55,11 @@ env:
   SUPABASE_S3_SECRET_ACCESS_KEY: ${{ secrets.SUPABASE_S3_SECRET_ACCESS_KEY }}
   SUPABASE_S3_REGION: ${{ secrets.SUPABASE_S3_REGION }}
   DATABASE_URL: ${{ secrets.DATABASE_URL }}   # the Supabase Postgres URL — a REPO secret, not a Fly secret
+  # Non-secret identifiers the league resolver needs where config.py is absent (CI checkout has none).
+  # NOT secrets — the is_mine Sleeper handle + league id (also in demo_manifest/docs). Change here to
+  # target a different league.
+  MY_USERNAME: spectraltoast1
+  LEAGUE_ID: "1182101676608823296"
 
 jobs:
   refresh:
