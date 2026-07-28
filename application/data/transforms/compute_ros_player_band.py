@@ -270,7 +270,12 @@ def compute(season: int, scoring_key: str | None = None) -> pl.DataFrame:
     # De-bias recent-form anchor (S7): realized weekly points on the centre's scoring basis — the SAME
     # scoring-scoped series production_vor uses, so the de-biased ros_center matches it. Consumed only when
     # FORM_ANCHOR_W>0 (the shipped 0.0 short-circuits to the borrowed centre — value-identical).
-    realized_pts = _realized_weekly_pts(season, _resolve_scoring(season, scoring_key))
+    # A forward season (no games yet) has no nfl_stats; the read would FileNotFoundError. Skip it →
+    # realized_pts=None → recent_form=None → identity, exactly the shipped FORM_ANCHOR_W=0.0 behaviour.
+    realized_pts = (
+        _realized_weekly_pts(season, _resolve_scoring(season, scoring_key))
+        if data_layer._nfl_stats_path(season).exists() else None
+    )
 
     all_rows = []
     for n in range(1, max_proj_week + 1):

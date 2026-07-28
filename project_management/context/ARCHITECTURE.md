@@ -69,8 +69,11 @@ unscoped catalog read.
 leagues can still score ~10% of player-weeks differently (bonuses / INT / first-down points). *Realized*
 points arrive pre-scored from Sleeper (`sleeper_points`); the *projected* center is scored at the consumption
 layer by the dispatcher (`transforms/_scoring.py`), so one set of projections serves any league.
-Scoring-scoped substrate (`projection_consensus`, `ros_player_band`) is shared per key. → *see appendix:
-scoring-mechanism.*
+Scoring-scoped substrate (`projection_consensus`, `ros_player_band`) is shared per key. A **forward
+(preseason) season** with no actuals yet sources its positional residual prior from residuals **pooled over
+prior seasons** (`compute_projection_consensus._pooled_residuals`) — every player takes the `<2-residual`
+fallback, so the band is the honest, wide, position-typical prior until games sharpen it; gated by
+`check_forward_substrate`. → *see appendix: scoring-mechanism.*
 
 ## Multi-league / multi-user (current state)
 
