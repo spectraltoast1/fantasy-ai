@@ -691,7 +691,12 @@ def write_join_nfl_sleeper_weekly(df: pl.DataFrame, season: int, week: int, *, l
         existing = pl.read_parquet(path).filter(
             ~((pl.col("season") == season) & (pl.col("week") == week))
         )
-        df = pl.concat([existing, df])
+        # Align columns across the append (how="diagonal") rather than a strict vertical concat: an
+        # in-season incremental advance may add a week under a slightly evolved schema (e.g. the
+        # corpus-era is_mine season carries an `is_two_way` flag the live join doesn't emit). Diagonal
+        # unions the columns, filling a column absent from one side with null, so the loader stays
+        # additive instead of crashing on drift; dtypes stay strict, so a genuine type change still surfaces.
+        df = pl.concat([existing, df], how="diagonal")
     df.write_parquet(path)
 
 
