@@ -13,8 +13,12 @@
 - A deployed, mobile-responsive React SPA on **FastAPI + Supabase Postgres** (Fly.io, same-origin). Five
   surfaces: **Players, Teams, League, Matchups, Manager Dossier**.
 - **Multi-league, no auth.** A **league + season selector** switches across the **12 demo lineages**; the
-  owner's league (2025, **frozen at Week 4** — a season *replay*) is the default, and the "you" highlight
-  follows the selected league. A week selector re-scopes every surface.
+  owner's league (2025) is the default, and the "you" highlight follows the selected league. A week
+  selector re-scopes every surface.
+- **The app can now advance week by week (P2/S2).** The loader has a **per-league scoped reload** and a
+  **weekly-refresh orchestrator** advances one league to the current week without rebuilding the DB —
+  proven on prod by advancing the owner's 2025 league Week 4 → 5 (the un-freeze). Ready for live 2026 at
+  kickoff. → *see below + `sessions/v1/P2-Go_Live_2026/`.*
 - Fully migrated off in-browser DuckDB-WASM (Stage A complete); the client is now a thin API client.
 
 ## The engine
@@ -60,13 +64,17 @@
 **V1** = a working, **invite-gated self-serve** product for **Sleeper PPR / half-PPR redraft** (1QB and
 superflex), running on **live 2026 data**, ready for the invited cohort by **Week 1**. Seven projects
 (P0 finish multi-league → P6 launch hardening); critical-path spine P0 → P2 → P5 — **P0 done; now in P2
-(go-live on 2026).** **P2/S1 done:** the **2026 preseason substrate is built offline** for ppr+half under
-the honest constants (forward positional-prior band — wide/position-typical, sharpens as games land); a
-new forward-season path in `compute_projection_consensus` sources the prior from pooled 2020–2025 residuals,
-proven a no-op on history; `check_forward_substrate` green. A **near-drafts refresh** (same one command on
-the post-draft board) is planned to firm up the thin July ADP — *feature, not rework.* **Next: P2/S2** — the
-in-season weekly refresh + the DROP+CREATE→incremental loader (the riskiest V1 change), which un-freezes
-what users see. → `ROADMAP.md` + `projects/v1/BUILD_ORDER.md` + `sessions/v1/P2-Go_Live_2026/`.
+(go-live on 2026).** **P2/S1 done:** the 2026 preseason substrate is built offline for ppr+half under the
+honest constants (forward positional-prior band; `check_forward_substrate` green); a near-drafts refresh
+firms up the thin July ADP. **P2/S2 done (the un-freeze):** the loader gained a **per-league scoped reload**
+(`build_db.load_league` — delete+re-COPY one league in one transaction; others + the catalog untouched),
+proven **byte-parity-identical to a full reload** and atomic (`serve/check_scoped_reload.py`, green on
+prod); a **weekly-refresh orchestrator** (`serve/weekly_refresh.py`: fetch→join→spine→scoped-load, live +
+replay, idempotent) advances a league to the current week; proven on prod by advancing the owner's 2025
+league **Week 4 → 5** with a clean re-run no-op, ready for live 2026 at kickoff. A `weekly_refresh.yml`
+GitHub Actions cron ships the cadence — **needs a `DATABASE_URL` repo Actions secret to activate** (a repo
+secret, not a Fly secret). **Next: P2/S3** — surface the honest band in the UI + convert the market read to
+a live 2026 read. → `ROADMAP.md` + `projects/v1/BUILD_ORDER.md` + `sessions/v1/P2-Go_Live_2026/`.
 
 ## Deferred / parked (not blocking; each picked up in its project)
 

@@ -40,10 +40,16 @@ fetchers → cache/ + snapshots/ → join → derived transforms (parquet) → b
   authoritative left table).
 - **Derived transforms** (`transforms/` + `ai/`) compute the reads. Most are "tall" — one slice per
   `as_of_week` — so the app can replay any week. → *see appendix: engine-decision-reads.*
-- **Load** — `application/data/serve/build_db.py` loads the derived parquet into Postgres (a DROP+CREATE full
-  reload today).
-- **Key limitation:** the pipeline is **build-time and offline** — there is **no runtime / incremental
-  in-season refresh** path yet. Building one is a V1 project. → `projects/v1/` (P2).
+- **Load** — `application/data/serve/build_db.py` loads the derived parquet into Postgres. Two paths: a
+  whole-DB **DROP+CREATE `--load`** (the full rebuild + the parity oracle's baseline), and a **per-league
+  scoped reload** (`load_league` / `--reload-league`) — delete + re-COPY one league in a single transaction,
+  others + the `demo_manifest` catalog untouched, proven byte-parity-identical to the full load
+  (`serve/check_scoped_reload.py`). The scoped path is the in-season incremental unit.
+- **In-season refresh (P2/S2)** — `serve/weekly_refresh.py` advances one league to the current week:
+  fetch (Sleeper current state + weekly nfl_stats + projections) → `join_nfl_sleeper_weekly` → recompute the
+  spine → `build_db.load_league`. Idempotent; live (`--live`, from Sleeper `/state/nfl`) or replay (`--week`).
+  The serve seam (`reads._as_of_slice` → `max(as_of_week)` per league) then surfaces the new week with no app
+  change. Cadence: `.github/workflows/weekly_refresh.yml` (needs a `DATABASE_URL` repo secret to activate).
 
 ## The store (Postgres)
 

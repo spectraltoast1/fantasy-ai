@@ -1,0 +1,85 @@
+# Weekly in-season refresh — advance connected leagues to the current week (V1 · P2 · S2).
+#
+# The live cadence that un-freezes the app. Invokes the single-league orchestrator
+# `python -m application.data.serve.weekly_refresh` (fetch current Sleeper state + weekly nfl_stats +
+# Sleeper projections -> join -> recompute the spine -> per-league SCOPED RELOAD into Postgres). The
+# serve seam (reads._as_of_slice defaults to max(as_of_week) per league) then surfaces the new week with
+# no app/Fly change. The scoped reload is proven byte-parity-identical to a full reload for a league and
+# atomic (application/data/serve/check_scoped_reload.py), so advancing one league never disturbs another.
+#
+# This is a NEW cadence class, distinct from the daily collectors (collectors.yml): Sleeper is an
+# on-demand source, not a metered daily collector, and this job WRITES Postgres (not just the storage
+# bucket). It therefore needs, in addition to the SUPABASE_* storage secrets, a **DATABASE_URL** repo
+# Actions secret = the Supabase Postgres connection string (repo Settings -> Secrets -> Actions). That is
+# a REPO secret, NOT a Fly secret — Fly runs the API reader; this job is the writer, exactly like the
+# local loader. Until DATABASE_URL is set, the job fails fast at the load step (harmless — nothing else
+# is written). The proven run is the local one against prod; this wiring lets it run unattended.
+#
+# Idempotent + safe to double-fire: re-running a league that is already at the current week is a no-op
+# (the orchestrator skips fetch/join/spine when covered and the scoped reload when Postgres is current).
+# Preseason (leg=0, 2026 before Week 1) is a projections-only no-op — no games to advance to.
+#
+# Schedules are UTC. Tue + Wed midday runs land after Monday-night games and the multi-day stat
+# corrections settle (freshness vs stability); the Wed run is an idempotent catch-up for a missed/failed
+# Tue (the collectors' primary+catch-up reliability pattern).
+
+name: Weekly Refresh
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "live (current week from /state/nfl) or replay (needs season+week)"
+        type: choice
+        options: [live, replay]
+        default: live
+      league_id:
+        description: "league_id (blank = the is_mine default for the season)"
+        default: ""
+      season:
+        description: "season (replay only)"
+        default: ""
+      week:
+        description: "target week (replay only)"
+        default: ""
+  schedule:
+    - cron: "0 15 * * 2"   # Tue 15:00 UTC (~11:00 ET) — primary, after Mon-night + stat corrections
+    - cron: "0 15 * * 3"   # Wed 15:00 UTC — idempotent catch-up (no-op if Tue already advanced)
+
+env:
+  SNAPSHOT_BACKEND: supabase
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_S3_ENDPOINT: ${{ secrets.SUPABASE_S3_ENDPOINT }}
+  SUPABASE_STORAGE_BUCKET: ${{ secrets.SUPABASE_STORAGE_BUCKET }}
+  SUPABASE_S3_ACCESS_KEY_ID: ${{ secrets.SUPABASE_S3_ACCESS_KEY_ID }}
+  SUPABASE_S3_SECRET_ACCESS_KEY: ${{ secrets.SUPABASE_S3_SECRET_ACCESS_KEY }}
+  SUPABASE_S3_REGION: ${{ secrets.SUPABASE_S3_REGION }}
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}   # the Supabase Postgres URL — a REPO secret, not a Fly secret
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install deps (application/requirements.txt — includes numpy for the spine + psycopg for the load)
+        run: pip install -r application/requirements.txt
+      - name: Weekly refresh (advance connected leagues to the current week)
+        env:
+          MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'live' }}
+          LEAGUE: ${{ inputs.league_id }}
+          SEASON: ${{ inputs.season }}
+          WEEK: ${{ inputs.week }}
+        run: |
+          set -euo pipefail
+          if [ "$MODE" = "replay" ]; then
+            args="--season $SEASON --week $WEEK"
+            [ -n "$LEAGUE" ] && args="--league $LEAGUE $args"
+          else
+            args="--live"
+          fi
+          echo "running: weekly_refresh $args"
+          python -m application.data.serve.weekly_refresh $args
