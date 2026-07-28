@@ -186,6 +186,51 @@ def _residuals(consensus: pl.DataFrame, actual: pl.DataFrame) -> pl.DataFrame:
     )
 
 
+# First season with a bankable projections+actuals pair — the floor of the residual pool a
+# forward (no-actuals-yet) season borrows its positional prior from. Matches the substrate's
+# 2020 origin; anything earlier lacks the joined nfl_stats the residual needs.
+_POOL_FLOOR_SEASON = 2020
+
+
+def _read_actuals(season: int, profile, scoring, *, reader=data_layer) -> pl.DataFrame:
+    """League-scored realized points per (player, week) for `season` — the residual answer key.
+    Factored out (verbatim from the inline read compute() used to do) so the target-season read
+    and the pooled prior-season reads share one canonical expression."""
+    return (
+        reader.read_nfl_stats(season)
+        .select(
+            "sleeper_player_id", pl.col("week").cast(pl.Int64),
+            actual_points_expr(profile, scoring).alias("actual_ppr"),
+        )
+        .drop_nulls("sleeper_player_id")
+        .group_by("sleeper_player_id", "week")
+        .agg(pl.col("actual_ppr").first())
+    )
+
+
+def _pooled_residuals(profile, scoring, *, exclude_season: int, reader=data_layer) -> pl.DataFrame:
+    """Residuals (actual − consensus center) pooled over every prior season with both projections
+    and actuals — the forward-season fallback for the positional prior. A season not yet played
+    (no nfl_stats) has no residuals of its own; its band width leans entirely on the position's
+    realized boom/bust shape, learned here from the same [2020, exclude_season) history the engine
+    was calibrated on. Scoring-key-scoped: `profile`/`scoring` are the target's, so ppr residuals
+    (PPR points) and half residuals (half-PPR points) never cross. Equal-weighted — the same flat
+    std/skew the single-season prior takes, now over the concatenation of player-weeks."""
+    frames = []
+    for s in range(_POOL_FLOOR_SEASON, exclude_season):
+        if not (reader._nfl_stats_path(s).exists() and reader.projections_exist(s)):
+            continue
+        proj = reader.read_projections(s).with_columns(
+            projection_points_expr(profile, scoring).alias("proj_pts_league")
+        )
+        matched = _residuals(_consensus_frame(proj, "proj_pts_league"),
+                             _read_actuals(s, profile, scoring, reader=reader))
+        frames.append(matched.select("sleeper_player_id", "week", "position", "resid"))
+    if not frames:
+        raise RuntimeError(f"no prior season with actuals to pool a forward prior for {exclude_season}")
+    return pl.concat(frames)
+
+
 def compute(season: int, scoring: dict | None = None) -> pl.DataFrame:
     # Scoring dispatcher: the league's scoring_settings pick the projection + actual points, so
     # center/residuals are league-scored. Standard (ppr/half/std) selects the canned columns; custom
@@ -200,19 +245,31 @@ def compute(season: int, scoring: dict | None = None) -> pl.DataFrame:
     proj = data_layer.read_projections(season).with_columns(
         projection_points_expr(profile, scoring).alias("proj_pts_league")
     )
-    actual = (
-        data_layer.read_nfl_stats(season)
-        .select(
-            "sleeper_player_id", pl.col("week").cast(pl.Int64),
-            actual_points_expr(profile, scoring).alias("actual_ppr"),
-        )
-        .drop_nulls("sleeper_player_id")
-        .group_by("sleeper_player_id", "week")
-        .agg(pl.col("actual_ppr").first())
-    )
-
     consensus = _consensus_frame(proj, "proj_pts_league")
-    matched = _residuals(consensus, actual)
+
+    # A forward season (preseason, no games played) has no actuals to residual against — its
+    # nfl_stats parquet doesn't exist. `matched` (the per-player residual history) is then empty,
+    # so every player takes the < 2-residuals fallback and the whole band collapses to the
+    # positional prior — which is exactly the honest preseason band, PROVIDED that prior is sourced
+    # from prior-season history rather than the (empty) current join. Historical seasons are
+    # unchanged: has_actuals is True, prior_src IS matched (same object), so the output is identical.
+    has_actuals = data_layer._nfl_stats_path(season).exists()
+    if has_actuals:
+        matched = _residuals(consensus, _read_actuals(season, profile, scoring))
+    else:
+        matched = pl.DataFrame(schema={
+            "sleeper_player_id": pl.Utf8, "week": pl.Int64,
+            "position": pl.Utf8, "resid": pl.Float64,
+        })
+    # The source the POSITIONAL priors (std/skew) are computed from: this season's own residuals
+    # when it has actuals; otherwise the pooled prior-season residuals. Per-player history (below)
+    # always stays on `matched` — for a forward season that is empty by construction.
+    prior_src = matched if (has_actuals and not matched.is_empty()) \
+        else _pooled_residuals(profile, scoring, exclude_season=season)
+    if not has_actuals:
+        print(f"  [forward season {season}] no actuals — positional prior pooled from "
+              f"[{_POOL_FLOOR_SEASON}..{season - 1}] (residual rows={prior_src.height}); "
+              f"band = positional prior, per-player n_resid=0.")
 
     # Positional residual-std + residual-skew priors over the full pool (borrowed
     # substrate), + global fallbacks for any position that never matched (defensive; won't
@@ -220,12 +277,12 @@ def compute(season: int, scoring: dict | None = None) -> pl.DataFrame:
     # residual list so the prior matches the per-player estimate it shrinks toward.
     pos_resid_std = {
         r["position"]: float(r["s"])
-        for r in matched.group_by("position").agg(pl.col("resid").std(ddof=0).alias("s")).iter_rows(named=True)
+        for r in prior_src.group_by("position").agg(pl.col("resid").std(ddof=0).alias("s")).iter_rows(named=True)
         if r["s"] is not None
     }
-    global_resid_std = float(matched["resid"].std(ddof=0))
+    global_resid_std = float(prior_src["resid"].std(ddof=0))
     resid_by_pos: dict = {}
-    for r in matched.select("position", "resid").iter_rows(named=True):
+    for r in prior_src.select("position", "resid").iter_rows(named=True):
         resid_by_pos.setdefault(r["position"], []).append(float(r["resid"]))
     pos_resid_skew = {p: skewness(v) for p, v in resid_by_pos.items()}
     global_resid_skew = skewness([r for v in resid_by_pos.values() for r in v])
