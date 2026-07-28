@@ -71,10 +71,13 @@ firms up the thin July ADP. **P2/S2 done (the un-freeze):** the loader gained a 
 proven **byte-parity-identical to a full reload** and atomic (`serve/check_scoped_reload.py`, green on
 prod); a **weekly-refresh orchestrator** (`serve/weekly_refresh.py`: fetch→join→spine→scoped-load, live +
 replay, idempotent) advances a league to the current week; proven on prod by advancing the owner's 2025
-league **Week 4 → 5** with a clean re-run no-op, ready for live 2026 at kickoff. A `weekly_refresh.yml`
-GitHub Actions cron ships the cadence — **needs a `DATABASE_URL` repo Actions secret to activate** (a repo
-secret, not a Fly secret). **Next: P2/S3** — surface the honest band in the UI + convert the market read to
-a live 2026 read. → `ROADMAP.md` + `projects/v1/BUILD_ORDER.md` + `sessions/v1/P2-Go_Live_2026/`.
+league **Week 4 → 5** with a clean re-run no-op, ready for live 2026 at kickoff (the proven path is the
+loader run **locally against prod**). A `weekly_refresh.yml` GitHub Actions cron ships the cadence (the
+serve modules now import without `config.py` — env-first via `settings`, so CI works); the `DATABASE_URL`
+repo secret is set. **Open before cloud CI runs green: the derived store must live in the Supabase Storage
+bucket** (only the P1 daily collectors write there today) — else run the loader locally on a schedule.
+**Next: P2/S3** — surface the honest band in the UI + convert the market read to a live 2026 read.
+→ `ROADMAP.md` + `projects/v1/BUILD_ORDER.md` + `sessions/v1/P2-Go_Live_2026/`.
 
 ## Deferred / parked (not blocking; each picked up in its project)
 

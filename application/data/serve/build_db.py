@@ -51,10 +51,14 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from application.api.db import database_url
-from application.config import SLEEPER_LEAGUE_ID
+from application.api import settings
 from application.data import data_layer as dl
 
-LEAGUE_ID = str(SLEEPER_LEAGUE_ID)   # the is_mine live slice — the --emit / parity reference league
+# The is_mine live slice — the --emit / parity reference league. Resolved env-first (LEAGUE_ID) with a
+# config.py fallback via settings, so the loader imports where config.py is absent (CI / the Fly image —
+# values from env), mirroring db.database_url(). None only if neither is set → the reference-league paths
+# (--emit / the parity oracle) fail clearly; the per-league scoped reload takes an explicit id regardless.
+LEAGUE_ID = str(settings.league_id() or "")
 
 _HERE = Path(__file__).resolve().parent
 _REPO_ROOT = _HERE.parents[2]  # serve -> data -> application -> <repo root>
