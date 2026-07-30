@@ -436,6 +436,31 @@ CREATE INDEX IF NOT EXISTS "ix_projection_consensus_week" ON "projection_consens
 CREATE INDEX IF NOT EXISTS "ix_projection_consensus_sleeper_player_id" ON "projection_consensus" (sleeper_player_id);
 CREATE INDEX IF NOT EXISTS "ix_projection_consensus_league_id_season" ON "projection_consensus" (league_id, season);
 
+DROP TABLE IF EXISTS "ros_player_band" CASCADE;
+CREATE TABLE "ros_player_band" (
+    league_id TEXT,
+    season BIGINT,
+    as_of_week BIGINT,
+    sleeper_player_id TEXT,
+    position TEXT,
+    ros_center DOUBLE PRECISION,
+    ros_bull DOUBLE PRECISION,
+    ros_bear DOUBLE PRECISION,
+    ros_sigma DOUBLE PRECISION,
+    ros_cv DOUBLE PRECISION,
+    n_weeks BIGINT,
+    anchor_applied BOOLEAN,
+    adp_ecr DOUBLE PRECISION,
+    adp_best DOUBLE PRECISION,
+    adp_worst DOUBLE PRECISION,
+    anchor_floor DOUBLE PRECISION,
+    anchor_ceiling DOUBLE PRECISION,
+    in_calibrated_pool BOOLEAN
+);
+CREATE INDEX IF NOT EXISTS "ix_ros_player_band_as_of_week" ON "ros_player_band" (as_of_week);
+CREATE INDEX IF NOT EXISTS "ix_ros_player_band_sleeper_player_id" ON "ros_player_band" (sleeper_player_id);
+CREATE INDEX IF NOT EXISTS "ix_ros_player_band_league_id_season" ON "ros_player_band" (league_id, season);
+
 DROP TABLE IF EXISTS "schedule" CASCADE;
 CREATE TABLE "schedule" (
     league_id TEXT,

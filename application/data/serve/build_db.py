@@ -27,7 +27,7 @@ Three modes (run from the repo root with the data venv, application/venv):
 
     application/venv/bin/python -m application.data.serve.build_db --reload-league <league_id>
         Per-league SCOPED RELOAD (the in-season incremental path): in one transaction, DELETE that
-        league's rows across the 13 data tables and re-COPY its slice — every other league untouched.
+        league's rows across the 14 data tables and re-COPY its slice — every other league untouched.
         Advances one league to a new as_of_week without a whole-DB DROP+CREATE. --load stays the
         fallback + the byte-parity oracle's baseline (see serve/check_scoped_reload.py).
 
@@ -90,7 +90,42 @@ def _ros_ref_path() -> Path:
     return files[-1]
 
 
-# 12 league-keyed datasets + 1 scoring-keyed (projection_consensus). Order = load order.
+# --- the honest-band boundary (P2/S3b) --------------------------------------------------------
+# The ROS band is served ONLY where it was built under the live constants. 2020-2025 sit in the
+# FROZEN CORPUS at pre-8c CENTER_SHRINK=1.0 — the immutable out-of-sample certification baseline the
+# L2 predictions ledger was derived from — so those files are never loaded here and never rebuilt.
+# (Serving them would also contradict the card: production_vor.ros_value is honest at 0.8, so a stale
+# ros_center would render ~1.25x above the VOR beside it.) A future corpus re-backfill under a new
+# code_version — the annual pipeline's job, not a session's — is what lowers this constant.
+FIRST_HONEST_BAND_SEASON = 2026
+
+# A path that never exists: the "not served for this slice" signal every consumer already understands
+# — load()/load_league()'s skip-if-absent, verify()'s disk expectation, and --dry-run's plan all read
+# it the same way, so the boundary is stated once here instead of special-cased in each loop.
+_NOT_SERVED = _HERE / "__not_served__" / "frozen_corpus_band.parquet"
+
+
+def _honest_band_path(season: int, _lid, scoring_key) -> Path:
+    """The ros_player_band parquet for a slice — scoring-keyed (the league_id is ignored, exactly like
+    projection_consensus), and absent below FIRST_HONEST_BAND_SEASON so the frozen corpus never loads."""
+    if int(season) < FIRST_HONEST_BAND_SEASON:
+        return _NOT_SERVED
+    return dl._ros_player_band_path(season, scoring_key)
+
+
+def _band_ref_path() -> Path:
+    """The honest 2026 band parquet — --emit schema reference only (the _ros_ref_path precedent).
+
+    No demo slice keys 2026 yet, so no slice can supply this table's DDL; it comes from the file the
+    first live 2026 league will load. Emitting the table before any row exists is the point: the wire
+    is in place, and the panel lights up when a 2026 league is onboarded."""
+    p = dl._ros_player_band_path(FIRST_HONEST_BAND_SEASON, _ref()[2])
+    if not p.exists():
+        raise SystemExit(f"no {FIRST_HONEST_BAND_SEASON} ros_player_band for the schema reference: {p}")
+    return p
+
+
+# 12 league-keyed datasets + 2 scoring-keyed (projection_consensus, ros_player_band). Order = load order.
 DATASETS: list[Dataset] = [
     Dataset("season",            _lpath(dl._join_season_path), None),
     Dataset("teams",             _lpath(dl._sleeper_teams_path), None),
@@ -104,6 +139,7 @@ DATASETS: list[Dataset] = [
     Dataset("positional_depth",  _lpath(dl._positional_depth_path), None),
     Dataset("manager_dossiers",  _lpath(dl._manager_dossiers_path), None),
     Dataset("projection_consensus", lambda s, lid, sk: dl._projection_consensus_path(s, sk), None),
+    Dataset("ros_player_band",   _honest_band_path, _band_ref_path),
     Dataset("schedule",          _lpath(dl._schedule_path), None),
 ]
 
@@ -125,6 +161,7 @@ INDEXES: dict[str, list[tuple[str, ...]]] = {
     "positional_depth": [("as_of_week",), ("roster_id",), ("position",)],
     "manager_dossiers": [("roster_id",), ("league_id", "owner_id")],
     "projection_consensus": [("week",), ("sleeper_player_id",)],
+    "ros_player_band": [("as_of_week",), ("sleeper_player_id",)],
     "schedule": [("week",), ("matchup_id",), ("roster_id",)],
     _MANIFEST_TABLE: [("lineage_id",)],
 }
@@ -361,7 +398,7 @@ def reload_manifest() -> None:
 
 
 def _tables_present(conn) -> None:
-    """Guard: the 13 data tables must already exist. A scoped reload REUSES the emitted union-superset
+    """Guard: the 14 data tables must already exist. A scoped reload REUSES the emitted union-superset
     schema and never DROP/CREATEs — a per-league CREATE would narrow the union (e.g. drop the division
     columns other leagues need). If a table is missing, the DB was never fully loaded — run --load first."""
     names = [ds.table for ds in DATASETS]
@@ -377,7 +414,7 @@ def _tables_present(conn) -> None:
 
 def load_league(conn, lid: str, *, verify_schema: bool = True) -> dict[str, int]:
     """Per-league SCOPED RELOAD — the incremental, in-season alternative to the whole-DB DROP+CREATE
-    ``load()``. In ONE transaction: DELETE this league's rows from the 13 data tables, then re-COPY its
+    ``load()``. In ONE transaction: DELETE this league's rows from the 14 data tables, then re-COPY its
     present (slice, dataset) parquets; a single commit at the end. Every OTHER league — and the
     ``demo_manifest`` catalog — is left untouched. This is how a league advances to a new week (a fresh
     ``as_of_week`` slice) without rebuilding the DB.
