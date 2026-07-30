@@ -11,14 +11,15 @@ Upside/hype lives in the market but not in production, so the gap isolates the s
 Per design law 3 this borrows the market value (never builds one) and adds only the decision layer —
 the same anchoring + normalisation as Production VOR, reusing the shared pool engine.
 
-**The time-world caveat (honest, not hidden).** The app is frozen at 2025 week 4, but the LeagueLogs
-series only ever serves "now" and cannot be backdated — it is current (2026 offseason). So Market VOR
-is computed on the **frozen-2025 league rosters** priced at the **current 2026 market**. The read itself
-(market value over replacement, per roster) is clean. The Production−Market **gap** joins a 2025-season
-production number to a 2026-offseason market number — cross-time — so every gap row carries
-`is_cross_time` and the market season/date as first-class columns. Treat the gap as architecture / POC
-validation, NOT a live trade call, until the season rolls to 2026 and production is recomputed there.
-This mirrors the ros_synthesis `anchor_is_prior_season` precedent (STATUS "time-world mismatch").
+**The time-world, stated not hidden (`is_cross_time`).** The LeagueLogs series only ever serves "now"
+and cannot be backdated. So when this runs against a **past** league season, the gap joins that season's
+production to today's market — **cross-time**, an architecture/POC number and NOT a live trade call.
+Every row therefore carries `is_cross_time` (= `market_season != season`) plus the market season/date as
+first-class columns, and **the app gates the market panel OFF whenever the read is cross-time**
+(`api/reads._market_panel`) — the P2/S3 policy: never render a cross-time value as if it were live.
+Run this for a **current** season (2026 production × 2026 prices) and `is_cross_time` is false on every
+row, so the panel turns back on by itself — no flag to flip, the data states its own honesty. (Precedent:
+ros_synthesis's `anchor_is_prior_season`.)
 
   - market_value: the borrowed LeagueLogs `value` (0–100 overall-normalised) for the format-matched
     redraft profile. Borrowed, not built.
@@ -129,11 +130,12 @@ def _compute_snapshot(day: pl.DataFrame, roster: dict, season: int, snapshot_dat
 
 
 def _attach_gap(df: pl.DataFrame, season: int) -> pl.DataFrame:
-    """Join the frozen Production VOR slice (latest as_of_week) onto every market row and derive the
-    §4 trade gap. Cross-time by construction at the freeze (market season ≠ league season), so
-    `is_cross_time` + the market season/date ride as first-class columns — the market number is never
-    silently fused with the production number. Players with a market value but no production row get
-    `has_production_vor = False` and a null gap (law 2 — no fabricated number)."""
+    """Join the Production VOR slice (latest as_of_week) onto every market row and derive the §4 trade
+    gap. `is_cross_time` + the market season/date ride as first-class columns, so the market number is
+    never silently fused with the production number: against a past season it is TRUE (POC — the app
+    gates the panel off), against the current season it is FALSE on every row (a live read — the panel
+    renders). Players with a market value but no production row get `has_production_vor = False` and a
+    null gap (law 2 — no fabricated number)."""
     pv = data_layer.read_production_vor(season)  # default = latest as_of_week
     production_as_of = int(pv["as_of_week"][0]) if pv.height else None
     pv = pv.select(

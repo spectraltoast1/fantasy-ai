@@ -1,11 +1,17 @@
 """
 Check Market VOR — internal-consistency gate (DECISION_READS.md §4).
 
-Market VOR is priced on the **current** (2026 offseason) LeagueLogs market, but the app is frozen at
-2025 week 4 — there is NO future truth to grade the market against at the freeze. So this is an
-**internal-consistency** gate (like backtest_manager_features / check_ros_synthesis), not an answer-key
-backtest: it proves the read is algebraically sound, the pools are right, and the cross-time gap is
-flagged honestly — not that the market predicts anything (it can't be tested here).
+Market VOR is priced on the **current** LeagueLogs market. Against a past league season there is NO
+future truth to grade the market with, so this is an **internal-consistency** gate (like
+backtest_manager_features / check_ros_synthesis), not an answer-key backtest: it proves the read is
+algebraically sound, the pools are right, and the time-world is stated honestly — not that the market
+predicts anything (it can't be tested here).
+
+**Cross-time is a state, not an error.** A slice whose market season ≠ league season is a POC and the
+panel gates off (``api/reads._market_panel``); a same-season slice (2026 production × 2026 prices) is a
+live read and the panel turns on. This gate therefore checks that the flag *tells the truth about the
+data* rather than demanding one particular time-world — otherwise it would go red the day the read went
+live. Use ``--expect`` to pin the mode when you know which one you're gating.
 
 Verdicts (exit 0 iff all pass):
 
@@ -20,12 +26,15 @@ Verdicts (exit 0 iff all pass):
      those pools match what Production VOR uses for the same league (one shared engine).
   4. **Profile / coverage** — exactly one MARKET_PROFILE, no picks, rostered players only; the frozen
      roster's market coverage ≥ COVERAGE_MIN (missing players reported, not fatal).
-  5. **Gap honesty (the crux)** — every row is_cross_time at the freeze (market_season ≠ league season);
-     has_production_vor == (production_vor is not null); trade_gap is null iff no production row and
-     equals market_vor − production_vor otherwise. The market number is never silently fused across time.
+  5. **Gap honesty (the crux)** — every row's is_cross_time == (market_season ≠ league season), and the
+     slice is homogeneous (one time-world, never half-fused); has_production_vor == (production_vor is
+     not null); trade_gap is null iff no production row and equals market_vor − production_vor
+     otherwise. The market number is never silently fused across time.
 
 Usage:
     python3 -m application.data.transforms.check_market_vor --season 2025
+    python3 -m application.data.transforms.check_market_vor --season 2026 --expect contemporaneous
+    python3 -m application.data.transforms.check_market_vor --season 2025 --prove-bites
 """
 
 import argparse
@@ -41,6 +50,7 @@ from application.data.transforms.compute_production_vor import _pool_of
 
 COVERAGE_MIN = 0.95
 _KEY = ["season", "snapshot_date", "roster_id", "sleeper_player_id"]
+EXPECT_MODES = ("auto", "cross-time", "contemporaneous")
 
 
 def _fail(msg: str) -> None:
@@ -51,7 +61,54 @@ def _ok(msg: str) -> None:
     print(f"  ✓ {msg}")
 
 
-def check(season: int) -> bool:
+def _diagnose_staleness(df: pl.DataFrame, expected: pl.DataFrame) -> None:
+    """Name the usual cause of a recompute mismatch, because it is almost never an algebra bug.
+
+    Market VOR has **no cadence** — the weekly refresh rebuilds the spine (`compute_spine`), not this
+    read, and the collectors only bank the raw series. So the persisted parquet drifts from `compute()`
+    on two independent axes: the market series grows daily, and the league's `production_vor` advances a
+    week at a time. Print both so the next reader doesn't have to re-derive "height mismatch".
+    """
+    p_last, e_last = df["snapshot_date"].max(), expected["snapshot_date"].max()
+    if p_last != e_last:
+        print(f"     ↳ the market series moved on: persisted through {p_last}, raw now runs to {e_last}")
+    p_as_of = df["production_as_of"].unique().to_list()
+    e_as_of = expected["production_as_of"].unique().to_list()
+    if p_as_of != e_as_of:
+        print(f"     ↳ production advanced: persisted priced against as_of_week {p_as_of}, now {e_as_of}")
+    print("     ↳ nothing recomputes market_vor — re-run compute_market_vor to refresh the read.")
+
+
+def _time_world(df: pl.DataFrame, expect: str = "auto") -> bool:
+    """Verdict 5's time-world half — the flag must state what the data IS.
+
+    Deliberately NOT "every row is cross-time". Cross-time (market season ≠ league season) is the POC
+    state and gates the panel off; same-season is the live read and turns it on. Pinning the gate to one
+    of those would turn it red the day the read went live, so what's asserted is the invariant that
+    holds in both worlds: the flag matches the seasons on every row, and the slice states ONE time-world
+    (a half-fused frame is exactly the silent cross-time fusion the column exists to prevent).
+    """
+    ok = True
+    if df["is_cross_time"].null_count():
+        ok = False; _fail(f"time-world: {df['is_cross_time'].null_count()} rows state no time-world (null)")
+    lying = df.filter(pl.col("is_cross_time") != (pl.col("market_season") != pl.col("season")))
+    if lying.height:
+        ok = False; _fail(f"time-world: {lying.height} rows where is_cross_time ≠ (market_season ≠ season)")
+    modes = set(df["is_cross_time"].drop_nulls().unique().to_list())
+    if len(modes) > 1:
+        ok = False; _fail("time-world: slice is part cross-time, part contemporaneous — a fused frame")
+    actual = {frozenset({True}): "cross-time", frozenset({False}): "contemporaneous"}.get(
+        frozenset(modes), "mixed/empty"
+    )
+    if expect != "auto" and actual != expect:
+        ok = False; _fail(f"time-world: expected {expect}, the read is {actual}")
+    if ok:
+        panel = "panel gates OFF (POC, not a live call)" if actual == "cross-time" else "panel may render"
+        _ok(f"time-world: {actual} on every row — the flag states the truth; {panel}")
+    return ok
+
+
+def check(season: int, expect: str = "auto") -> bool:
     # Resolve the is_mine league the same way every read/write wrapper does (via `_active_league`), then
     # read the FULL tall parquet — the recompute-match compares every banked snapshot against compute(),
     # so we deliberately bypass `read_market_vor`'s latest-snapshot-only default. This fixes the L0-keying
@@ -73,6 +130,7 @@ def check(season: int) -> bool:
     except AssertionError as e:
         passed = False
         _fail(f"recompute mismatch: persisted parquet != compute() output\n     {str(e).splitlines()[0]}")
+        _diagnose_staleness(df, expected)
 
     # 2. VOR algebra, per (snapshot_date, pool). Reproduce market_vor from the stored waiver/top/value
     #    within a spread-aware tolerance — the stored columns are each rounded independently (value/
@@ -132,10 +190,8 @@ def check(season: int) -> bool:
     else:
         _ok(f"coverage: {covered}/{len(roster)} frozen-roster players priced ({cov:.1%})")
 
-    # 5. Gap honesty — cross-time flagged, gap never fused, nulls where no production row.
-    gap_ok = True
-    if not df["is_cross_time"].all():
-        gap_ok = False; _fail("gap honesty: some rows not is_cross_time (market season == league season at the freeze)")
+    # 5. Gap honesty — the time-world is stated truthfully, gap never fused, nulls where no production row.
+    gap_ok = _time_world(df, expect)
     if df.filter(pl.col("has_production_vor") != pl.col("production_vor").is_not_null()).height:
         gap_ok = False; _fail("gap honesty: has_production_vor disagrees with production_vor nullity")
     if df.filter((~pl.col("has_production_vor")) & pl.col("trade_gap").is_not_null()).height:
@@ -148,16 +204,57 @@ def check(season: int) -> bool:
         gap_ok = False; _fail(f"gap honesty: {fused.height} rows where trade_gap ≠ market_vor − production_vor")
     if gap_ok:
         n_gap = df.filter(pl.col("has_production_vor")).height
-        _ok(f"gap honesty: all cross-time flagged; {n_gap} gap rows = market_vor − production_vor; "
+        _ok(f"gap honesty: {n_gap} gap rows = market_vor − production_vor; "
             f"{df.height - n_gap} no-production rows null (law 2)")
     passed = passed and gap_ok
 
     return passed
 
 
-def main(season: int) -> None:
-    print(f"=== check_market_vor: season={season} ===")
-    ok = check(season)
+def prove_bites(season: int) -> bool:
+    """Show the time-world predicate has teeth: three corruptions that MUST be caught.
+
+    Also the contemporaneous proof. There is no 2026 league to compute against yet (`_active_league`
+    raises), so the same-season case is exercised by re-labelling the banked frame's market_season to
+    the league season — the exact shape a live 2026×2026 read produces — and demanding the gate call it
+    `contemporaneous` and pass. That's the claim S3 makes: the read is ready, not that it's live.
+    """
+    df = pl.read_parquet(data_layer._market_vor_path(season, data_layer._active_league(season)[0]))
+    all_ok = True
+
+    print("\n--- prove-bites: each of these MUST be caught (a ✓ below would be the bug) ---")
+    cases = [
+        ("a flipped flag (says contemporaneous, seasons disagree)",
+         df.with_columns(pl.when(pl.int_range(pl.len()) == 0).then(False)
+                           .otherwise(pl.col("is_cross_time")).alias("is_cross_time")), "auto"),
+        ("a half-fused frame (one row genuinely same-season, the rest cross-time)",
+         df.with_columns(
+             pl.when(pl.int_range(pl.len()) == 0).then(pl.col("season"))
+               .otherwise(pl.col("market_season")).alias("market_season"),
+             pl.when(pl.int_range(pl.len()) == 0).then(False)
+               .otherwise(pl.col("is_cross_time")).alias("is_cross_time")), "auto"),
+        ("a cross-time read gated as if it were live", df, "contemporaneous"),
+    ]
+    for label, frame, expect in cases:
+        print(f"  [{label}]")
+        if _time_world(frame, expect):
+            all_ok = False; print("     !! NOT CAUGHT — the predicate is toothless here")
+
+    print("\n--- prove-bites: the contemporaneous path (a same-season read must PASS) ---")
+    same_season = df.with_columns(
+        pl.col("season").alias("market_season"),
+        pl.lit(False).alias("is_cross_time"),
+    )
+    if not _time_world(same_season, "contemporaneous"):
+        all_ok = False; print("     !! a same-season read did NOT pass as contemporaneous")
+    return all_ok
+
+
+def main(season: int, expect: str = "auto", bites: bool = False) -> None:
+    print(f"=== check_market_vor: season={season} expect={expect} ===")
+    ok = check(season, expect)
+    if bites:
+        ok = prove_bites(season) and ok
     print("PASS" if ok else "FAIL")
     sys.exit(0 if ok else 1)
 
@@ -165,5 +262,9 @@ def main(season: int) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Internal-consistency gate for Market VOR.")
     parser.add_argument("--season", type=int, required=True)
+    parser.add_argument("--expect", choices=EXPECT_MODES, default="auto",
+                        help="pin the time-world: cross-time (POC, panel off) or contemporaneous (live)")
+    parser.add_argument("--prove-bites", action="store_true",
+                        help="show the time-world predicate catches corruptions + passes a same-season read")
     args = parser.parse_args()
-    main(args.season)
+    main(args.season, args.expect, args.prove_bites)
