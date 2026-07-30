@@ -3,16 +3,22 @@ import { loadTeamDetail } from './queries.js';
 import { TrendLine, DepthBar, WinProbBar } from './charts.jsx';
 import { POS_COLORS } from './posColors.js';
 import { IconShieldCheck } from './icons.jsx';
+import { marketOn } from './readiness.jsx';
 
 // Team detail (drill-down from the standings). Consumes the assembled object from
 // queries.loadTeamDetail: 4 stat blocks, the this-week matchup bar, positional depth per
 // QB/RB/WR/TE, and the roster (starters/bench) with a PROD/MKT VOR toggle + trend sparkline per
 // player. Pure renderer. The this-week bar drills into the full matchup detail (Matchups slice).
 
-export default function TeamDetail({ rosterId, asOfWeek, onOpenPlayer, onOpenDossier, onOpenMatchup }) {
+export default function TeamDetail({ rosterId, asOfWeek, panels, onOpenPlayer, onOpenDossier, onOpenMatchup }) {
   const [team, setTeam] = useState(null);
   const [err, setErr] = useState(null);
   const [metric, setMetric] = useState('prod'); // 'prod' | 'mkt'
+
+  // The MKT half of the toggle disappears where the market read is gated (cross-time / not computed);
+  // `shown` keeps the roster on PROD if the user was on MKT and switched to a gated league.
+  const showMkt = marketOn(panels);
+  const shown = showMkt ? metric : 'prod';
 
   useEffect(() => {
     let live = true;
@@ -114,12 +120,14 @@ export default function TeamDetail({ rosterId, asOfWeek, onOpenPlayer, onOpenDos
         <div className="td-roster-head">
           <div className="td-h3" style={{ margin: 0 }}>Roster</div>
           <div className="td-toggle">
-            <button className={metric === 'prod' ? 'active' : ''} onClick={() => setMetric('prod')}>PROD VOR</button>
-            <button className={metric === 'mkt' ? 'active' : ''} onClick={() => setMetric('mkt')}>MKT VOR</button>
+            <button className={shown === 'prod' ? 'active' : ''} onClick={() => setMetric('prod')}>PROD VOR</button>
+            {showMkt ? (
+              <button className={shown === 'mkt' ? 'active' : ''} onClick={() => setMetric('mkt')}>MKT VOR</button>
+            ) : null}
           </div>
         </div>
-        <RosterGroup title="Starters" players={team.roster.starters} metric={metric} onOpenPlayer={onOpenPlayer} />
-        <RosterGroup title="Bench" players={team.roster.bench} metric={metric} onOpenPlayer={onOpenPlayer} />
+        <RosterGroup title="Starters" players={team.roster.starters} metric={shown} onOpenPlayer={onOpenPlayer} />
+        <RosterGroup title="Bench" players={team.roster.bench} metric={shown} onOpenPlayer={onOpenPlayer} />
       </section>
     </div>
   );

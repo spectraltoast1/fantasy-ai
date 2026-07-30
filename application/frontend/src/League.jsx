@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { loadLeague, loadPositionalTalent, POS } from './queries.js';
 import { Sparkline } from './charts.jsx';
-import { Gate, REGIME } from './readiness.jsx';
+import { Gate, REGIME, MarketOff, marketOn } from './readiness.jsx';
 
 // League surface — "whole league at a glance". A full-width Your Race band over a
 // 3-column dashboard: Playoff Picture · Posture Map · Positional Talent. Pure renderer:
@@ -199,7 +199,7 @@ function PostureMap({ data, onOpenTeam }) {
 // Positional Talent — per position, teams ranked by the Market VOR they hold there (a
 // surplus is trade capital, a gap is a target). Self-contained (its own read): Market VOR
 // is the current market and does not replay with the week. Gated on the slice's `market`
-// panel — market VOR is computed only for the live slice, so it reads "not available" elsewhere.
+// panel — off where the read isn't computed, and off where it's cross-time (see MarketOff).
 // The Waiver Wire strip is deferred — it needs a free-agent pool entity (none in V1).
 function PositionalTalent({ panels, onOpenTeam }) {
   const [tal, setTal] = useState(null);
@@ -231,11 +231,8 @@ function PositionalTalent({ panels, onOpenTeam }) {
           </button>
         ))}
       </div>
-      {panels && panels.market === false ? (
-        <div className="ready-toosoon">
-          <span className="ready-toosoon-tag">Not available</span>
-          <span className="ready-toosoon-text">Market VOR isn’t available for this league.</span>
-        </div>
+      {!marketOn(panels) ? (
+        <MarketOff />
       ) : tal == null ? (
         <div className="gr-state">Loading…</div>
       ) : (

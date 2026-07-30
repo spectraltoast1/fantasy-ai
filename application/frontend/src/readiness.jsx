@@ -72,17 +72,37 @@ export function Gate({ regime, weeks, label, fallback, panel, panels, children }
 
 // The slot a panel shows when the catalog says it isn't available for the selected league (e.g.
 // market isn't computed outside the live slice). Honest "not here" rather than an empty chart.
-function PanelOff({ label, children }) {
+// `note` overrides the default sentence when a panel is off for a reason worth naming.
+export function PanelOff({ label, note, children }) {
   if (children) return <div className="ready-slot">{children}</div>;
   return (
     <div className="ready-toosoon">
       <span className="ready-toosoon-tag">Not available</span>
       <span className="ready-toosoon-text">
-        {label ?? 'This read'} isn’t available for this league.
+        {note ?? `${label ?? 'This read'} isn’t available for this league.`}
       </span>
     </div>
   );
 }
+
+// The market read's own off-slot, and the single home for why it's off — four surfaces show it
+// (Players, team detail, player card, positional talent), and they must say the same thing.
+//
+// The catalog turns `panels.market` off whenever the read is CROSS-TIME: the LeagueLogs market only
+// ever serves "now" and can't be backdated, so pricing a past season's rosters at today's market is a
+// POC, not a live trade call. The locked policy is never to render that as if it were live. When a
+// league's production and the market share a season the flag flips by itself and these panels return.
+export const MARKET_OFF_NOTE =
+  'The market read isn’t live for this league — today’s market prices a past season’s rosters, ' +
+  'so it’s held back rather than shown as a live call.';
+
+export function MarketOff({ label = 'Market VOR' }) {
+  return <PanelOff label={label} note={MARKET_OFF_NOTE} />;
+}
+
+// Whether the market surfaces may render for the active slice. Absent `panels` (a view that isn't
+// threaded one) means "don't know" -> render, preserving today's behaviour; only an explicit false gates.
+export const marketOn = (panels) => !(panels && panels.market === false);
 
 // The fallback slot a panel shows before it has enough data. Defaults to an honest
 // "not yet" message; a panel can pass custom `children` (e.g. preseason content) to
