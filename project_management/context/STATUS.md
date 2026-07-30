@@ -30,13 +30,25 @@
 - **Current honesty state:** production VOR ranks rest-of-season value well but runs the *level* high (trust
   the order, not the total); the band was re-tuned to ~0.86 coverage; playoff odds and true rank are honest;
   four reads still carry no confidence signal. → *see appendix: engine-trust, engine-decision-reads.*
-- **The honest band has no wire to the screen (S3 finding — the work is S3b, below).** The 8c dials
-  (`CENTER_SHRINK`, `BULL_Z`, `BEAR_Z`, `ANCHOR_W`) all govern the **ROS-horizon** band in `ros_player_band`,
-  which is **not in `build_db.DATASETS`**, has no Postgres table, and is selected by **no** endpoint. What the
-  UI calls a band — MatchupDetail "Score Range · 25–75" — is `projection_consensus.p25/p50/p75`, governed by
-  `BAND_Z` + `SKEW_GAIN`, which 8c deliberately **held**; and matchup μ/`proj` is `Σ center_ppr` read straight
-  from consensus, bypassing `CENTER_SHRINK`. So rebuilding the substrate alone would change nothing a user
-  sees. The front end does no band math of its own.
+- **The honest band is wired end-to-end, and dark until 2026 (P2/S3b).** `ros_player_band` is now a loaded
+  table, selected by `load_player_card` (pinned to `production_vor`'s week) and rendered as a **"Rest-of-season
+  range"** panel — bear / center / bull in points, with the ±σ spread as the confidence read (no label: the
+  width *is* the confidence, and the `ros_cv` that would have supplied one was measured INVERTED in S5 and
+  retired in 8c). It sits **beside** the AI `ros_synthesis` panel — a different object, not a replacement.
+  **It serves 0 rows today** and renders an honest absent-state: only seasons at or above
+  `build_db.FIRST_HONEST_BAND_SEASON` (2026) may be served, and no 2026 league exists yet. It lights up by
+  itself when one is onboarded.
+- **Why the 2020–2025 band stays stale — a deliberate boundary, not an omission.** That parquet does double
+  duty: it is also the frozen-corpus artifact the **immutable L2 predictions ledger** was derived from
+  (`check_predictions` rebuilds band claims from it and compares to the ledger; `frozen_era()` reverts
+  constants but not data). Rebuilding it at the honest constants would break the ledger's reproducibility, so
+  the frozen seasons keep the pre-8c band as the out-of-sample certification baseline and a corpus
+  re-backfill stays the **annual pipeline's** job. `FIRST_HONEST_BAND_SEASON` is the single place that line
+  lives — the loader guard and the weekly-refresh guard both read it.
+- **Still true of the weekly surfaces:** MatchupDetail's "Score Range · 25–75" is
+  `projection_consensus.p25/p50/p75` under `BAND_Z`/`SKEW_GAIN`, which 8c deliberately **held**, and matchup
+  μ/`proj` is `Σ center_ppr` straight from consensus, bypassing `CENTER_SHRINK`. Applying the shrink to the
+  weekly serve path is an unmeasured engine change, so it stays a tuner question under propose-only.
 
 ## What's real vs. proof-of-concept (current caveats)
 
@@ -87,24 +99,27 @@ repo secret is set. **Cloud pipeline execution is re-homed as a P5 prerequisite*
 local disk; running the refresh unattended needs a cross-cutting data-layer change — the same capability
 self-serve onboarding needs). **P2/S3 done:** the cross-time market is retired honestly — the panel gates on
 the read's own `is_cross_time` rather than a season constant, across all four market surfaces, and
-`compute_market_vor` is proven contemporaneous-ready. S3's band half was **cut on a finding**: the honest
-band has no serving path at all, so a rebuild would have been invisible (above) — it becomes **S3b**.
-**Next: P2/S3b** — surface the honest band (rebuild + build the wire), then **S4** early-season readiness.
-→ `ROADMAP.md` + `projects/v1/BUILD_ORDER.md` + `sessions/v1/P2-Go_Live_2026/`.
+`compute_market_vor` is proven contemporaneous-ready. **P2/S3b done:** the honest band is wired end-to-end
+(loader → API → the Rest-of-season range panel) and **dark** — 0 rows until a 2026 league exists, bounded by
+`FIRST_HONEST_BAND_SEASON` so the frozen corpus is never served or rebuilt (above); the weekly refresh now
+rebuilds the band alongside the spine, guarded on the same constant, so the `CENTER_SHRINK` drift can't
+re-open. **Next: P2/S4** — early-season readiness (Weeks 0–3 of a live 2026 league), which is also the
+session that first loads a 2026 league and so must **verify the ROS-range panel against real band data** as
+part of its own definition of done. → `ROADMAP.md` + `projects/v1/BUILD_ORDER.md` + `sessions/v1/P2-Go_Live_2026/`.
 
 ## Deferred / parked (not blocking; each picked up in its project)
 
-- **P2/S3b — surface the honest band (its own session; net-new loader + API + frontend, independent of P5).**
-  Three pieces, in order: (1) rebuild 2020–2025 under the honest constants (`build_substrate.py` — its
-  defaults are already `{ppr,half} × 2020-2025`); (2) load `ros_player_band` into Postgres **scoring-keyed**,
-  exactly as `projection_consensus` is loaded (`build_db.DATASETS` is the pattern), and select it in
-  `reads.load_player_card`; (3) render a deterministic **"Rest-of-season range"** (bear / center / bull +
-  `ros_cv` confidence). Note it does **not** fill the player card's existing empty state — that one is the AI
-  `ros_synthesis` read (P4), a different object — S3b **adds** a surface next to it.
-- **The `CENTER_SHRINK` store drift (fix with S3b).** `production_vor.ros_value` is exactly `0.8 ×` the
-  same-week `ros_player_band.ros_center`: production VOR reads the live `0.8`, the band store is stale at
-  pre-8c `1.0`. `weekly_refresh` → `compute_spine` rebuilds production_vor but never the band, so **every
-  refresh re-creates the drift.** (The 2026 substrate was built fresh at `0.8` and is not affected.)
+- **The ROS-range panel is unverified against real band data.** Everything around it is proven — the loader
+  guard, the parity oracle across 14 tables, the pinned select, the absent-state — but the populated panel was
+  only ever rendered from a synthetic payload stubbed into a local process. The session that loads the first
+  2026 league should treat verifying it as part of its own DoD.
+- **A corpus re-backfill would un-freeze 2020–2025** (annual pipeline, not a session): re-run the band under
+  the live constants, re-derive the ledger's band claims as a **new-`code_version` parallel population** (the
+  ledger is append-only-of-new and already supports this), then lower `FIRST_HONEST_BAND_SEASON`. Until then
+  the replay seasons legitimately show no ROS range. Two known pre-existing reds live in that same corpus
+  lane and are unrelated to serving: `check_predictions` (the is_mine **2024** slice is spined for the demo
+  but was never backfilled into the ledger) and `backtest_ros_player_band --season 2025` (it grades the
+  frozen pre-8c band, coverage 0.468 vs the 0.80 target).
 - **`market_vor` has no cadence.** Nothing recomputes it — not the weekly refresh (that rebuilds the spine),
   not the collectors — yet `load_league` re-publishes it on every scoped reload. It currently trails the raw
   series by ~2 weeks and is priced against `as_of_week` 4 while the league sits at 5, so `check_market_vor`'s

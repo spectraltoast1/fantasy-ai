@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { loadPlayerCard } from './queries.js';
-import { TrendLine, GradeBar } from './charts.jsx';
+import { TrendLine, GradeBar, RangeGauge } from './charts.jsx';
 import { MARKET_OFF_NOTE, marketOn } from './readiness.jsx';
 import { POS_COLORS } from './posColors.js';
 
@@ -107,6 +107,52 @@ export default function PlayerCard({ sleeperId, asOfWeek, panels }) {
           </>
         ) : (
           <div className="pc-empty">No opportunity signal for this player yet.</div>
+        )}
+      </section>
+
+      {/* Rest-of-season range — the DETERMINISTIC calibrated band (ros_player_band), in points. Sits
+          beside the AI outlook below and is a different object: this one is measured, always available
+          where the season's band is honest, and needs no news. Deliberately no confidence chip — the
+          width IS the confidence (law 2), and the percentage that would have supplied a label (ros_cv)
+          was measured inverted and retired. Skewed low on purpose: bear is centre − 2.5σ while bull is
+          only centre + 0.52σ, so the tick sitting high in the track is the honest shape, not a bug. */}
+      <section className="pc-section">
+        <div className="pc-h3">Rest-of-season range</div>
+        {card.rosRange ? (
+          <>
+            <div className="pc-axes">
+              <Axis label="Bear" value={fmt1(card.rosRange.bear)} sub="downside" />
+              <Axis label="Center" value={fmt1(card.rosRange.center)} sub="projected points" />
+              <Axis label="Bull" value={fmt1(card.rosRange.bull)} sub="upside" />
+            </div>
+            <div className="pc-range-bar">
+              {/* Domain starts at 0 because 0 is a real floor — a season's realised production can't be
+                  negative, and the bear is floored there. So the tick's height reads as "how much of the
+                  range is downside". */}
+              <RangeGauge
+                lo={card.rosRange.bear}
+                md={card.rosRange.center}
+                hi={card.rosRange.bull}
+                min={0}
+                max={card.rosRange.bull || 1}
+                height={14}
+              />
+            </div>
+            <p className="pc-companion">
+              ±<strong>{fmt1(card.rosRange.sigma)}</strong> pts over{' '}
+              <strong>{card.rosRange.weeks ?? '—'}</strong> remaining week
+              {card.rosRange.weeks === 1 ? '' : 's'} — the spread is the confidence: wider means less
+              certain.
+              {card.rosRange.calibrated === false ? (
+                <span className="pc-thin"> · outside the calibrated pool</span>
+              ) : null}
+            </p>
+          </>
+        ) : (
+          <div className="pc-empty">
+            No calibrated range for this season — it's served from the current engine build, and these
+            replay seasons are kept frozen at the constants they were certified under.
+          </div>
         )}
       </section>
 

@@ -341,6 +341,9 @@ body {
 .pc-conf-note { font-size: 12px; color: var(--muted); line-height: 1.4; }
 .pc-empty { color: var(--muted); font-size: 13px; line-height: 1.5; }
 
+/* Rest-of-season range — the gauge sits full-width under the bear/center/bull tiles. */
+.pc-range-bar { margin-top: 16px; min-width: 0; }
+
 /* Range gauge (shared primitive; consumed by Matchups later) */
 .range-gauge { position: relative; width: 100%; background: var(--surface-2); border-radius: var(--r-pill); }
 .range-gauge-band { position: absolute; top: 0; bottom: 0; border-radius: var(--r-pill); opacity: 0.5; }
