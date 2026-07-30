@@ -1228,8 +1228,10 @@ def read_production_vor(season: int, *, league_id=None, as_of_week=None) -> pl.D
 # borrowed market value, the pool waiver/top used to normalise it, the resulting market_vor, and the
 # joined Production VOR + trade_gap. TALL over `snapshot_date` (the market's own time axis — the analog
 # of Production VOR's as_of_week), so the un-backdatable market series is banked in derived form.
-# TIME-WORLD NOTE: the rosters are frozen-2025 but the market is current (2026 offseason) — every row
-# carries `is_cross_time` + `market_season`, so the gap is never silently fused across time.
+# TIME-WORLD NOTE: the market series only serves "now", so against a PAST league season the gap is
+# cross-time — every row carries `is_cross_time` + `market_season` so it is never silently fused, and
+# the app gates the market panel off whenever the flag is true (api/reads._market_panel). A current
+# season prices its own rosters: the flag goes false and the panel renders.
 
 
 def _market_vor_path(season: int, league_id) -> Path:

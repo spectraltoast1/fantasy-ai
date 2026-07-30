@@ -2,7 +2,7 @@
 
 **What this is:** Gridiron — a fantasy-football decision-support dashboard whose unit is the manager's
 *decision*, not the player. Live, single-league, on the server stack.
-**Live at:** https://fantasy-ai-api.fly.dev/ · **Updated:** 2026-07-28
+**Live at:** https://fantasy-ai-api.fly.dev/ · **Updated:** 2026-07-30
 **Read next:** `ARCHITECTURE.md` (how it's built) · `CODING_BIBLE.md` (rules for coding agents) ·
 `ROADMAP.md` (where it's going) · `projects/v1/` (the active build).
 
@@ -29,16 +29,25 @@
   market VOR, the ROS bull/bear/situation outlook, and manager dossiers.
 - **Current honesty state:** production VOR ranks rest-of-season value well but runs the *level* high (trust
   the order, not the total); the band was re-tuned to ~0.86 coverage; playoff odds and true rank are honest;
-  four reads still carry no confidence signal. **The honest band is live in the engine's constants but not
-  yet shown in the UI** — the front-end still renders the older band. Note the persisted 2020–2025 *substrate*
-  band is likewise stale at the pre-8c `CENTER_SHRINK=1.0` (never rebuilt after 8c shipped); **the new 2026
-  substrate is built fresh under the honest `0.8`**, so 2026 is honest from day one. → *see appendix:
-  engine-trust, engine-decision-reads.*
+  four reads still carry no confidence signal. → *see appendix: engine-trust, engine-decision-reads.*
+- **The honest band has no wire to the screen (S3 finding — the work is S3b, below).** The 8c dials
+  (`CENTER_SHRINK`, `BULL_Z`, `BEAR_Z`, `ANCHOR_W`) all govern the **ROS-horizon** band in `ros_player_band`,
+  which is **not in `build_db.DATASETS`**, has no Postgres table, and is selected by **no** endpoint. What the
+  UI calls a band — MatchupDetail "Score Range · 25–75" — is `projection_consensus.p25/p50/p75`, governed by
+  `BAND_Z` + `SKEW_GAIN`, which 8c deliberately **held**; and matchup μ/`proj` is `Σ center_ppr` read straight
+  from consensus, bypassing `CENTER_SHRINK`. So rebuilding the substrate alone would change nothing a user
+  sees. The front end does no band math of its own.
 
 ## What's real vs. proof-of-concept (current caveats)
 
 - **ROS bull/bear/situation shows an explicit "No rest-of-season outlook yet" empty state** — the read runs on
   live in-season news, which isn't wired yet; an honest empty state, not fabricated grades.
+- **The market read is gated off everywhere (P2/S3).** `market_vor` prices *today's* market against a *past*
+  season's rosters — `is_cross_time=true` — so all four market surfaces (Players MKT, team-detail MKT toggle,
+  player-card market trend + BUY/SELL lean, League positional talent) render an honest "not a live read"
+  state instead. The gate is the read's own flag, not a season constant: `panels.market` = the manifest's
+  structural flag AND `NOT is_cross_time`, so a contemporaneous league (2026 production × 2026 prices) turns
+  the panels back on by itself. `compute_market_vor` is proven contemporaneous-ready.
 - **Rostered-only** — no free-agent / waiver value yet.
 - **Data collection is hosted off-laptop and hardened (P1, ~done).** The two daily collectors run on **GitHub
   Actions → Supabase Storage** (S1, live), with fetch-timestamp sidecars, a same-day **catch-up retry**,
@@ -74,17 +83,41 @@ replay, idempotent) advances a league to the current week; proven on prod by adv
 league **Week 4 → 5** with a clean re-run no-op, ready for live 2026 at kickoff (the proven path is the
 loader run **locally against prod**). A `weekly_refresh.yml` GitHub Actions cron ships the cadence (the
 serve modules now import without `config.py` — env-first via `settings`, so CI works); the `DATABASE_URL`
-repo secret is set. **Open before cloud CI runs green: the derived store must live in the Supabase Storage
-bucket** (only the P1 daily collectors write there today) — else run the loader locally on a schedule.
-**Next: P2/S3** — surface the honest band in the UI + convert the market read to a live 2026 read.
+repo secret is set. **Cloud pipeline execution is re-homed as a P5 prerequisite** (the derived store lives on
+local disk; running the refresh unattended needs a cross-cutting data-layer change — the same capability
+self-serve onboarding needs). **P2/S3 done:** the cross-time market is retired honestly — the panel gates on
+the read's own `is_cross_time` rather than a season constant, across all four market surfaces, and
+`compute_market_vor` is proven contemporaneous-ready. S3's band half was **cut on a finding**: the honest
+band has no serving path at all, so a rebuild would have been invisible (above) — it becomes **S3b**.
+**Next: P2/S3b** — surface the honest band (rebuild + build the wire), then **S4** early-season readiness.
 → `ROADMAP.md` + `projects/v1/BUILD_ORDER.md` + `sessions/v1/P2-Go_Live_2026/`.
 
 ## Deferred / parked (not blocking; each picked up in its project)
 
+- **P2/S3b — surface the honest band (its own session; net-new loader + API + frontend, independent of P5).**
+  Three pieces, in order: (1) rebuild 2020–2025 under the honest constants (`build_substrate.py` — its
+  defaults are already `{ppr,half} × 2020-2025`); (2) load `ros_player_band` into Postgres **scoring-keyed**,
+  exactly as `projection_consensus` is loaded (`build_db.DATASETS` is the pattern), and select it in
+  `reads.load_player_card`; (3) render a deterministic **"Rest-of-season range"** (bear / center / bull +
+  `ros_cv` confidence). Note it does **not** fill the player card's existing empty state — that one is the AI
+  `ros_synthesis` read (P4), a different object — S3b **adds** a surface next to it.
+- **The `CENTER_SHRINK` store drift (fix with S3b).** `production_vor.ros_value` is exactly `0.8 ×` the
+  same-week `ros_player_band.ros_center`: production VOR reads the live `0.8`, the band store is stale at
+  pre-8c `1.0`. `weekly_refresh` → `compute_spine` rebuilds production_vor but never the band, so **every
+  refresh re-creates the drift.** (The 2026 substrate was built fresh at `0.8` and is not affected.)
+- **`market_vor` has no cadence.** Nothing recomputes it — not the weekly refresh (that rebuilds the spine),
+  not the collectors — yet `load_league` re-publishes it on every scoped reload. It currently trails the raw
+  series by ~2 weeks and is priced against `as_of_week` 4 while the league sits at 5, so `check_market_vor`'s
+  recompute-match verdict is red (it now says why). Fix when the live panel turns on.
+- **Three things bite when the live 2026 market panel turns on** (S4/later): `MARKET_PROFILE` is hardcoded to
+  `redraft-1qb-12t-ppr1` — deriving it from league shape is the fix for the parked **superflex QB-pool
+  latent** (the feed already banks `redraft-2qb-12t-ppr1` and `ppr0_5` daily); the API hardcodes
+  `max(snapshot_date)`, so the market won't replay with the week selector (cross-*week* replaces cross-*time*
+  as the time-world bug); and LeagueLogs requires **"Powered by LeagueLogs API"** attribution on any UI that
+  displays it — absent today, a launch blocker once the panel is ungated for real users.
 - **Silent-reads confidence** — give production VOR, player-signal direction, and playoff wins/seed a
   confidence signal (the current law-2 gap).
 - **`*_ppr` naming wart** — the `center_ppr` / `band_ppr` / … columns hold *league* points, not PPR; the
   rename is coupled to a frontend + schema change. → *see appendix: scoring-mechanism.*
-- **Superflex market-VOR QB-pool latent** — verify when the live market read lands.
 - **Post-V1 features** — other scoring formats, dynasty, other platforms, owner-keyed dossiers, annual
   re-tune → `projects/post-v1/`.

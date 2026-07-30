@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { loadPlayerCard } from './queries.js';
 import { TrendLine, GradeBar } from './charts.jsx';
+import { MARKET_OFF_NOTE, marketOn } from './readiness.jsx';
 import { POS_COLORS } from './posColors.js';
 
 // Player card (detail view). Consumes the assembled object from queries.loadPlayerCard;
@@ -13,6 +14,7 @@ const TRADE_COLOR = { BUY: 'var(--violet-light)', SELL: 'var(--ridingluck)', HOL
 export default function PlayerCard({ sleeperId, asOfWeek, panels }) {
   const [card, setCard] = useState(null);
   const [err, setErr] = useState(null);
+  const showMkt = marketOn(panels);
 
   useEffect(() => {
     let live = true;
@@ -43,7 +45,10 @@ export default function PlayerCard({ sleeperId, asOfWeek, panels }) {
         <span className={`pc-status ${card.onYours ? 'mine' : ''}`}>{card.status}</span>
       </header>
 
-      {/* Value·VOR — Production + Market trend + the trade lean. */}
+      {/* Value·VOR — Production, plus the Market trend + trade lean when the market read is live.
+          Both of those are the Production−Market gap wearing two coats, so they gate together: a
+          cross-time gap is a POC number, and a BUY/SELL call off one would be the least honest thing
+          on the card. Production stands alone — it's this league's own season, not the market's. */}
       <section className="pc-section">
         <div className="pc-h3">Value · VOR</div>
         <div className="pc-vor">
@@ -54,21 +59,27 @@ export default function PlayerCard({ sleeperId, asOfWeek, panels }) {
             deltaStr={card.prod.delta != null ? signed(card.prod.delta) : null}
             up={card.prod.up}
           />
-          <TrendLine
-            label="Market"
-            values={card.mkt.series}
-            valueStr={fmt(card.mkt.value)}
-            deltaStr={card.mkt.delta != null ? signed(card.mkt.delta) : null}
-            up={card.mkt.up}
-          />
-          {card.lean ? (
-            <div className="pc-trade">
-              <span className="pc-trade-call" style={{ color: TRADE_COLOR[card.lean.call] }}>
-                {card.lean.call}
-              </span>
-              <span className="pc-trade-why">{card.lean.why}</span>
-            </div>
-          ) : null}
+          {showMkt ? (
+            <>
+              <TrendLine
+                label="Market"
+                values={card.mkt.series}
+                valueStr={fmt(card.mkt.value)}
+                deltaStr={card.mkt.delta != null ? signed(card.mkt.delta) : null}
+                up={card.mkt.up}
+              />
+              {card.lean ? (
+                <div className="pc-trade">
+                  <span className="pc-trade-call" style={{ color: TRADE_COLOR[card.lean.call] }}>
+                    {card.lean.call}
+                  </span>
+                  <span className="pc-trade-why">{card.lean.why}</span>
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <div className="pc-empty">{MARKET_OFF_NOTE}</div>
+          )}
         </div>
       </section>
 

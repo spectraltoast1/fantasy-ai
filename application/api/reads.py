@@ -891,6 +891,27 @@ def load_matchup_detail(matchup_id, as_of_week=None, league_id=None, season=None
 # Catalog — the lineage -> seasons -> slice tree (Stage-B B3; the B5 switcher reads this).
 # ---------------------------------------------------------------------------
 
+def _market_panel(panels_market, cross_time_by: dict, league_id: str) -> bool:
+    """Whether the market panel may render for a slice — the manifest flag AND the read's honesty.
+
+    ``demo_manifest.panels_market`` is STRUCTURAL: "this slice has a market_vor read at all". It stays
+    that way on purpose — ``build_db._ref()`` picks its --emit schema reference via
+    ``is_mine & panels_market``, and ``compute_demo_slices`` existence-checks it, so flipping the
+    column would break the loader, not just the UI.
+
+    The honesty term is the read's own ``is_cross_time``: a cross-time slice priced this season's
+    roster with a DIFFERENT season's market (2025 production x 2026 prices), which is a POC, not a
+    live trade call. BUILD_ORDER's locked policy is "never show the old cross-time POC" — so the
+    panel gates OFF whenever the read is cross-time, and turns back on by itself when the read
+    becomes contemporaneous (production season == market season). A slice with the flag set but no
+    market_vor rows at all gates off too — a panel with nothing behind it is not a panel.
+    """
+    if not panels_market:
+        return False
+    cross_time = cross_time_by.get(league_id)
+    return cross_time is False
+
+
 def load_leagues() -> dict:
     """The demo catalog: every lineage grouped by its root ``lineage_id`` (a league_id string,
     NOT a slug), each with its seasons (desc), weeks available, pinned viewer, and panel flags.
@@ -898,8 +919,10 @@ def load_leagues() -> dict:
     The one deliberately UNSCOPED read — it spans every league, so it does NOT filter on
     ``settings.league_id()`` like the per-panel reads. ``weeks_available`` is derived at query
     time from the loaded ``season`` (the PLAYED weeks — the same source ``load_weeks`` uses — so a
-    frozen slice like is_mine 2025 reports [1..4], not the schedule's full forward [1..18]). Panels
-    + name + viewer mirror the manifest exactly (lorp ``viewer_roster_id`` is 8). Shape = the B3 contract.
+    frozen slice like is_mine 2025 reports [1..4], not the schedule's full forward [1..18]). Name +
+    viewer mirror the manifest exactly (lorp ``viewer_roster_id`` is 8). Shape = the B3 contract.
+
+    ``panels.market`` is the ONE flag not taken straight from the manifest — see ``_market_panel``.
     """
     with db.connect() as conn, conn.cursor() as cur:
         cur.execute(
@@ -914,6 +937,13 @@ def load_leagues() -> dict:
         )
         weeks_by = {(w["league_id"], int(w["season"])): [int(x) for x in w["weeks"]]
                     for w in cur.fetchall()}
+        # The honesty term for panels.market. NULL (a league whose rows all state nothing) counts as
+        # cross-time — unknown provenance gates OFF, it never gates on.
+        cur.execute(
+            "SELECT league_id, coalesce(bool_or(is_cross_time), true) AS cross_time "
+            "FROM market_vor GROUP BY league_id"
+        )
+        cross_time_by = {c["league_id"]: bool(c["cross_time"]) for c in cur.fetchall()}
 
     lineages: dict = {}
     order: list = []
@@ -935,7 +965,7 @@ def load_leagues() -> dict:
             "viewer_roster_id": (int(r["viewer_roster_id"])
                                  if r["viewer_roster_id"] is not None else None),
             "panels": {
-                "market": bool(r["panels_market"]),
+                "market": _market_panel(r["panels_market"], cross_time_by, r["league_id"]),
                 "manager": bool(r["panels_manager"]),
                 "ros_synthesis": bool(r["panels_ros"]),
             },

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { loadPlayers, POS } from './queries.js';
-import { Gate, REGIME } from './readiness.jsx';
+import { Gate, REGIME, marketOn } from './readiness.jsx';
 import { POS_COLORS } from './posColors.js';
 
 // Players surface — the VOR-anchored table. Anchored on Production VOR (default sort),
@@ -24,6 +24,13 @@ export default function Players({ asOfWeek, panels, onOpenPlayer }) {
   const [pos, setPos] = useState('ALL');
   const [sort, setSort] = useState('prod');
 
+  // MKT drops out entirely where the market read is gated (cross-time / not computed) — a column of
+  // numbers is a claim, so it goes rather than renders as if it were live. `sortKey` guards the case
+  // where the user was sorted on MKT and then switched to a gated league.
+  const showMkt = marketOn(panels);
+  const cols = showMkt ? SORT_COLS : SORT_COLS.filter(([k]) => k !== 'mkt');
+  const sortKey = !showMkt && sort === 'mkt' ? 'prod' : sort;
+
   useEffect(() => {
     let live = true;
     setRows(null);
@@ -38,7 +45,7 @@ export default function Players({ asOfWeek, panels, onOpenPlayer }) {
 
   const view = useMemo(() => {
     if (!rows) return [];
-    const key = SORT_KEYS[sort];
+    const key = SORT_KEYS[sortKey];
     const filtered = pos === 'ALL' ? rows : rows.filter((p) => p.pos === pos);
     const prod = (p) => (p.prodVor == null ? -Infinity : p.prodVor);
     return filtered.slice().sort((a, b) => {
@@ -50,7 +57,7 @@ export default function Players({ asOfWeek, panels, onOpenPlayer }) {
       if (bv == null) return -1;
       return bv - av || prod(b) - prod(a);
     });
-  }, [rows, pos, sort]);
+  }, [rows, pos, sortKey]);
 
   if (err) {
     return (
@@ -67,7 +74,8 @@ export default function Players({ asOfWeek, panels, onOpenPlayer }) {
         <h1>Players</h1>
         <div className="sub">
           Every rostered skill player, anchored on <strong>Production VOR</strong> over the
-          waiver line. <strong>MKT</strong> is the market's VOR. <strong>BULL / BEAR / SIT</strong>{' '}
+          waiver line.{showMkt ? <> <strong>MKT</strong> is the market's VOR.</> : null}{' '}
+          <strong>BULL / BEAR / SIT</strong>{' '}
           are the rest-of-season outlook{panels && panels.ros_synthesis === false ? ' — no read yet' : ''}.
         </div>
       </div>
@@ -100,14 +108,14 @@ export default function Players({ asOfWeek, panels, onOpenPlayer }) {
               <tr>
                 <th className="pl-l">POS</th>
                 <th className="pl-l">Player</th>
-                {SORT_COLS.map(([k, label]) => (
+                {cols.map(([k, label]) => (
                   <th
                     key={k}
-                    className={`pl-r sortable ${sort === k ? 'sorted' : ''}`}
+                    className={`pl-r sortable ${sortKey === k ? 'sorted' : ''}`}
                     onClick={() => setSort(k)}
                   >
                     {label}
-                    {sort === k ? <span className="pl-caret"> ▾</span> : null}
+                    {sortKey === k ? <span className="pl-caret"> ▾</span> : null}
                   </th>
                 ))}
               </tr>
@@ -127,11 +135,13 @@ export default function Players({ asOfWeek, panels, onOpenPlayer }) {
                       {p.isMe ? <span className="pl-you">YOU</span> : null}
                     </span>
                   </td>
-                  <td className={`pl-r mono ${sort === 'prod' ? 'hot' : ''}`}>{fmtVor(p.prodVor)}</td>
-                  <td className={`pl-r mono ${sort === 'mkt' ? 'hot' : ''}`}>{fmtVor(p.mktVor)}</td>
-                  <td className={`pl-r mono grade ${sort === 'bull' ? 'hot' : ''}`}>{fmtGrade(p.bull)}</td>
-                  <td className={`pl-r mono grade ${sort === 'bear' ? 'hot' : ''}`}>{fmtGrade(p.bear)}</td>
-                  <td className={`pl-r mono grade ${sort === 'sit' ? 'hot' : ''}`}>{fmtGrade(p.sit)}</td>
+                  <td className={`pl-r mono ${sortKey === 'prod' ? 'hot' : ''}`}>{fmtVor(p.prodVor)}</td>
+                  {showMkt ? (
+                    <td className={`pl-r mono ${sortKey === 'mkt' ? 'hot' : ''}`}>{fmtVor(p.mktVor)}</td>
+                  ) : null}
+                  <td className={`pl-r mono grade ${sortKey === 'bull' ? 'hot' : ''}`}>{fmtGrade(p.bull)}</td>
+                  <td className={`pl-r mono grade ${sortKey === 'bear' ? 'hot' : ''}`}>{fmtGrade(p.bear)}</td>
+                  <td className={`pl-r mono grade ${sortKey === 'sit' ? 'hot' : ''}`}>{fmtGrade(p.sit)}</td>
                 </tr>
               ))}
             </tbody>
