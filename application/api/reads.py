@@ -37,6 +37,21 @@ def _le_cutoff(n):
     return "TRUE" if n is None else "as_of_week <= %(n)s"
 
 
+def _as_of_pinned_to_production(n):
+    """One as-of slice from a tall table, pinned to ``production_vor``'s week rather than its own.
+
+    ``ros_player_band`` is NFL-global: it runs the whole projected season (as_of 1..17), while
+    ``production_vor`` stops at the league's played weeks. Letting the band take its own max() would
+    serve a week-17 row — nearly no schedule remaining, so a tiny centre — beside a week-5 VOR, and the
+    two numbers are supposed to be the same quantity. Pin to the league's clock instead.
+    (`ai/write_ros_synthesis._read_anchor` pins the same way, for the same reason.)
+    """
+    if n is None:
+        return ("as_of_week = (SELECT max(as_of_week) FROM production_vor "
+                "WHERE league_id = %(lid)s)")
+    return "as_of_week = %(n)s"
+
+
 def _params(n=None, lid=None, **extra):
     """Base bind dict every query shares: league id + optional as-of week + extras.
 
@@ -297,6 +312,11 @@ def load_player_card(sleeper_id, as_of_week=None, league_id=None, season=None,
             "FROM ros_synthesis WHERE league_id = %(lid)s AND sleeper_player_id = %(sid)s "
             "ORDER BY week DESC LIMIT 1"
         )
+        band_rows = q(
+            "SELECT ros_center, ros_bull, ros_bear, ros_sigma, n_weeks, in_calibrated_pool "
+            "FROM ros_player_band WHERE league_id = %(lid)s AND sleeper_player_id = %(sid)s "
+            "AND " + _as_of_pinned_to_production(as_of_week)
+        )
         team_rows = q("SELECT roster_id, team_name, owner_name FROM teams WHERE league_id = %(lid)s")
 
     ident = ident_rows[0] if ident_rows else None
@@ -318,6 +338,9 @@ def load_player_card(sleeper_id, as_of_week=None, league_id=None, season=None,
     # Value·VOR series (oldest -> newest) + value/delta.
     prod = calcs.series_read([float(r["vor"]) for r in prod_rows])
     mkt = calcs.series_read([float(r["market_vor"]) for r in mkt_rows])
+    # The requested (or latest) week's ROS points — prod_rows is ordered ascending under the same cutoff,
+    # so [-1] is the week `series_read` reports as `value`. Nullable column, hence calcs.num.
+    ros_points = calcs.num(prod_rows[-1]["ros_value"]) if prod_rows else None
 
     # Trade lean off the current Production-Market gap (cross-time today).
     last = mkt_rows[-1] if mkt_rows else None
@@ -375,6 +398,25 @@ def load_player_card(sleeper_id, as_of_week=None, league_id=None, season=None,
         else None
     )
 
+    # Rest-of-season range (ros_player_band) — the DETERMINISTIC band, a different object from the AI
+    # `ros` block above: calibrated points, always available where the season's band is honest, null on
+    # the frozen 2020-2025 seasons (build_db.FIRST_HONEST_BAND_SEASON keeps those out of the store).
+    # No confidence label: the band's WIDTH is its confidence (law 2), and the percentage `ros_cv` that
+    # would have supplied one was measured INVERTED in S5 and retired to an audit column in 8c.
+    b = band_rows[0] if band_rows else None
+    ros_range = (
+        {
+            "center": calcs.num(b["ros_center"]),
+            "bull": calcs.num(b["ros_bull"]),
+            "bear": calcs.num(b["ros_bear"]),
+            "sigma": calcs.num(b["ros_sigma"]),
+            "weeks": calcs.num(b["n_weeks"]),
+            "calibrated": bool(b["in_calibrated_pool"]),
+        }
+        if b
+        else None
+    )
+
     return {
         "sleeperId": sleeper_id,
         "name": ident["name"] if ident and ident["name"] is not None else sleeper_id,
@@ -382,11 +424,15 @@ def load_player_card(sleeper_id, as_of_week=None, league_id=None, season=None,
         "nflTeam": ident["nfl_team"] if ident else None,
         "status": status,
         "onYours": on_yours,
-        "prod": prod,
+        # rosPoints = production_vor.ros_value, the ROS points `vor` is the normalised form of. It is the
+        # SAME number as rosRange.center by construction — the band imports _ros_values rather than
+        # re-deriving it — so surfacing it makes that identity visible on the card, not just provable.
+        "prod": {**prod, "rosPoints": ros_points},
         "mkt": {**mkt, "crossTime": cross_time},
         "lean": lean,
         "opportunity": opportunity,
         "ros": ros,
+        "rosRange": ros_range,
     }
 
 
