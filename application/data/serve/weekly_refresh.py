@@ -34,7 +34,7 @@ from application.api import db
 from application.data import data_layer
 from application.data.fetchers import nfl_stats, sleeper
 from application.data.serve import build_db
-from application.data.transforms import join_nfl_sleeper_weekly
+from application.data.transforms import compute_ros_player_band, join_nfl_sleeper_weekly
 from application.data.corpus import compute_spine
 from application.shared import league_resolver
 
@@ -141,6 +141,22 @@ def refresh_league(lid: str | None = None, season: int | None = None, *,
             if data_layer._sleeper_matchups_path(season, wk, lid).exists():
                 join_nfl_sleeper_weekly.run(season, wk, league_id=lid)
                 act(f"joined week {wk} → season_{season}.parquet")
+
+    # 3a. BAND (the scoring-keyed substrate the spine's centre and the card's range share) ----------------
+    # production_vor advances every week but the band never did, which is how the store came to hold a
+    # ros_center at pre-8c 1.0 beside a ros_value at the honest 0.8. Rebuilding it here keeps the two in
+    # step: it is ~0.2s and a byte-identical no-op when nothing upstream moved (FORM_ANCHOR_W ships at 0,
+    # so recent_form is an identity), which is why it runs unconditionally rather than behind an
+    # existence check — ros_player_band_exists() is True for a STALE file, exactly the drift to catch.
+    #
+    # The season guard is the important line. Below FIRST_HONEST_BAND_SEASON the band belongs to the
+    # FROZEN CORPUS — the immutable baseline the L2 ledger was derived from — so a replay of an old
+    # season (`--week` against 2025) must never rewrite it.
+    if season >= build_db.FIRST_HONEST_BAND_SEASON:
+        compute_ros_player_band.run(season, scoring_key=scoring_key)
+        act(f"rebuilt ros_player_band ({scoring_key} {season}) under the live constants")
+    else:
+        act(f"season {season} < {build_db.FIRST_HONEST_BAND_SEASON} — frozen-corpus band left untouched")
 
     # 3. SPINE (recompute — the join is mutable, so on-disk spine reads are stale) -------------------------
     if _spine_covers(lid, season, target_week):

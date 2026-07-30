@@ -46,19 +46,29 @@ fetchers → cache/ + snapshots/ → join → derived transforms (parquet) → b
   others + the `demo_manifest` catalog untouched, proven byte-parity-identical to the full load
   (`serve/check_scoped_reload.py`). The scoped path is the in-season incremental unit.
 - **In-season refresh (P2/S2)** — `serve/weekly_refresh.py` advances one league to the current week:
-  fetch (Sleeper current state + weekly nfl_stats + projections) → `join_nfl_sleeper_weekly` → recompute the
-  spine → `build_db.load_league`. Idempotent; live (`--live`, from Sleeper `/state/nfl`) or replay (`--week`).
+  fetch (Sleeper current state + weekly nfl_stats + projections) → `join_nfl_sleeper_weekly` → rebuild the
+  scoring-keyed `ros_player_band` (P2/S3b — so it advances *with* `production_vor` instead of drifting behind
+  it; skipped below `FIRST_HONEST_BAND_SEASON`) → recompute the spine → `build_db.load_league`.
+  Idempotent; live (`--live`, from Sleeper `/state/nfl`) or replay (`--week`).
   The serve seam (`reads._as_of_slice` → `max(as_of_week)` per league) then surfaces the new week with no app
   change. Cadence: `.github/workflows/weekly_refresh.yml` (needs a `DATABASE_URL` repo secret to activate).
 
 ## The store (Postgres)
 
-**13 tables + a `demo_manifest` catalog**, every row keyed `league_id` / `season` and indexed on its filter
+**14 tables + a `demo_manifest` catalog**, every row keyed `league_id` / `season` and indexed on its filter
 columns: `season` (player×week), `teams`, `lineup_slots`, `league_settings`, `player_signal`,
 `production_vor`, `market_vor`, `ros_synthesis`, `bracket_odds`, `positional_depth`, `manager_dossiers`,
-`projection_consensus`, `schedule`. The engine-improvement **ledger** (predictions / outcomes / resolutions /
-scorecard) is deliberately **not** in the served store — it's the tuning/validation spine. → *see appendix:
-store-schema, engine-improvement-loop.*
+`projection_consensus`, `ros_player_band`, `schedule`. The last two are **scoring-keyed** — NFL-global
+substrate shared by every league on the same profile, stamped with each slice's `league_id` at COPY. The
+engine-improvement **ledger** (predictions / outcomes / resolutions / scorecard) is deliberately **not** in
+the served store — it's the tuning/validation spine. → *see appendix: store-schema, engine-improvement-loop.*
+
+**The honest-band boundary.** `ros_player_band` is served only from `build_db.FIRST_HONEST_BAND_SEASON`
+(2026) onward. Below it the band belongs to the **frozen corpus** — built at pre-8c `CENTER_SHRINK=1.0` and
+the artifact the immutable L2 ledger was derived from — so those files are never loaded and never rebuilt
+(`_honest_band_path` returns a deliberately-absent path; the weekly refresh guards on the same constant).
+The table therefore holds 0 rows until a 2026 league is onboarded. Lowering that constant is a corpus
+re-backfill — the annual pipeline's job.
 
 ## Read endpoints
 
