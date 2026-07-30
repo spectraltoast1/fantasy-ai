@@ -3,7 +3,7 @@
 **What this is:** the current technical design of fantasy-ai — the system **as it is today**. History lives
 in `sessions/` and `_deprecated/`; deep mechanism rationale lives in `context/appendices/`. The rules for
 *changing* code are in `CODING_BIBLE.md`.
-**Updated:** 2026-07-26
+**Updated:** 2026-07-30
 
 ---
 
@@ -68,6 +68,14 @@ store-schema, engine-improvement-loop.*
 surface. Every read takes an optional `?league_id=`(+`?season=`+`?viewer_roster_id=`) via the `slice_params`
 dependency, defaulting to the owner's league (a 404 guards an unknown `league_id`); `/api/leagues` is the one
 unscoped catalog read.
+
+**Panel gating.** `/api/leagues` carries a per-slice `panels` map the SPA gates on (`readiness.jsx`:
+`Gate`/`PanelOff`/`marketOn`). `manager` and `ros_synthesis` mirror `demo_manifest` directly. **`market` does
+not**: it is the manifest's *structural* flag (does this slice have a `market_vor` read at all — kept
+structural because `build_db._ref()` selects its schema-reference league by it) **AND the read's own
+`is_cross_time`** (`reads._market_panel`). A cross-time read prices today's market against a past season's
+rosters, so all four market surfaces gate off rather than render a POC as a live call; a contemporaneous
+league flips the flag and the panels return with no code change.
 
 ## Scoring
 
