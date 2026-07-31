@@ -95,15 +95,26 @@ def resolve_viewer(lid, viewer_roster_id=None):
 # ---------------------------------------------------------------------------
 
 def load_weeks(league_id=None, season=None, viewer_roster_id=None) -> dict:
-    """Weeks played + the default (latest). Mirrors loadWeeks (l.644).
-    (``viewer_roster_id`` accepted for a uniform slice signature; weeks have no "me" flag.)"""
+    """The league's weeks: every loaded one, which weeks actually have RESULTS, and the default (latest).
+
+    ``weeks`` is every week in the store — it drives the week selector, which should still offer a week
+    that has been loaded. ``played`` is the honest clock, and the two are NOT the same: a projections-only
+    week (preseason, or kickoff before the stats land) is joined into ``season`` with ``sleeper_points``
+    zero-FILLED rather than null, so counting loaded weeks reports "1 week of data" for a league that has
+    played nothing. Derive played-ness from the points themselves — a week counts only if somebody scored —
+    so preseason reads as 0 weeks no matter what has been joined.
+
+    (``viewer_roster_id`` accepted for a uniform slice signature; weeks have no "me" flag.)
+    """
     lid = league_id or settings.league_id()
     rows = db.fetch_all(
-        "SELECT DISTINCT week FROM season WHERE league_id = %(lid)s ORDER BY week",
+        "SELECT week, max(coalesce(roster_total_points, 0)) AS pts FROM season "
+        "WHERE league_id = %(lid)s GROUP BY week ORDER BY week",
         _params(lid=lid),
     )
     weeks = [int(r["week"]) for r in rows]
-    return {"weeks": weeks, "latest": weeks[-1] if weeks else None}
+    played = [int(r["week"]) for r in rows if float(r["pts"] or 0) > 0]
+    return {"weeks": weeks, "played": played, "latest": weeks[-1] if weeks else None}
 
 
 def load_league_meta(as_of_week=None, league_id=None, season=None, viewer_roster_id=None) -> dict:

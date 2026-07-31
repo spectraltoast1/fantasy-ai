@@ -8,7 +8,7 @@ import { Gate, REGIME, MarketOff, marketOn } from './readiness.jsx';
 // everything comes assembled from loadLeague (which reuses loadStandings — one source for
 // records/odds/posture across Teams and League). Rows/dots drill to Team detail.
 
-export default function League({ asOfWeek, panels, onOpenTeam }) {
+export default function League({ asOfWeek, weeks, panels, onOpenTeam }) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
 
@@ -46,7 +46,7 @@ export default function League({ asOfWeek, panels, onOpenTeam }) {
       {data == null ? (
         <div className="gr-state">Loading league…</div>
       ) : (
-        <Gate regime={REGIME.POINT_IN_TIME} weeks={asOfWeek ?? 0} label="League">
+        <Gate regime={REGIME.POINT_IN_TIME} weeks={weeks} label="League">
           <YourRace data={data} onOpenTeam={onOpenTeam} />
           <div className="lg-dash">
             <PlayoffPicture data={data} onOpenTeam={onOpenTeam} />

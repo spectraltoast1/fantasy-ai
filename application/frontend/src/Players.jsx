@@ -18,7 +18,7 @@ const SORT_COLS = [
 ];
 const POS_FILTERS = ['ALL', ...POS];
 
-export default function Players({ asOfWeek, panels, onOpenPlayer }) {
+export default function Players({ asOfWeek, weeks, panels, onOpenPlayer }) {
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState(null);
   const [pos, setPos] = useState('ALL');
@@ -102,7 +102,7 @@ export default function Players({ asOfWeek, panels, onOpenPlayer }) {
       {rows == null ? (
         <div className="gr-state">Loading players…</div>
       ) : (
-        <Gate regime={REGIME.POINT_IN_TIME} weeks={asOfWeek ?? 0} label="Player VOR">
+        <Gate regime={REGIME.POINT_IN_TIME} weeks={weeks} label="Player VOR">
           <table className="pl-table">
             <thead>
               <tr>

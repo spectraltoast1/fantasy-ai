@@ -10,6 +10,7 @@ import Dossier from './Dossier.jsx';
 import League from './League.jsx';
 import Matchups from './Matchups.jsx';
 import MatchupDetail from './MatchupDetail.jsx';
+import { weeksOfData } from './readiness.jsx';
 
 // Gridiron app shell. Owns the global state the whole app reads:
 //   tab      — the active surface (league / matchups / teams / players)
@@ -45,6 +46,7 @@ export default function App() {
   const [stack, setStack] = useState([]);
   const detail = stack.length ? stack[stack.length - 1] : null;
   const [weekList, setWeekList] = useState(null);
+  const [playedWeeks, setPlayedWeeks] = useState(null);   // weeks with RESULTS — the honest-depth clock
   const [asOfWeek, setAsOfWeek] = useState(null);
   const [league, setLeague] = useState(null);
   const [leagues, setLeagues] = useState(null);   // the /api/leagues catalog (lineages → seasons)
@@ -61,8 +63,9 @@ export default function App() {
     setSlice(next);
     setStack([]);
     return loadWeeks()
-      .then(({ weeks, latest }) => {
+      .then(({ weeks, played, latest }) => {
         setWeekList(weeks);
+        setPlayedWeeks(played ?? []);
         setAsOfWeek(latest);
       })
       .catch((e) => console.error('Could not load weeks', e))
@@ -140,6 +143,7 @@ export default function App() {
             detail={detail}
             depth={stack.length}
             asOfWeek={asOfWeek}
+            weeks={weeksOfData(playedWeeks, asOfWeek)}
             slice={slice}
             onOpenPlayer={openPlayer}
             onOpenTeam={openTeam}
@@ -156,8 +160,9 @@ export default function App() {
 // Routes tab/detail to a surface; all four surfaces render real data. The view is keyed on the
 // slice too, so switching leagues/seasons remounts the surface → it reloads against the new slice.
 // Detail views render centered behind a "‹ Back" affordance. `panels` = the slice's catalog panel
-// map (market/manager/ros_synthesis), threaded to the surfaces for gating.
-function Surface({ tab, detail, depth, asOfWeek, slice, onOpenPlayer, onOpenTeam, onOpenDossier, onOpenMatchup, onBack }) {
+// map (market/manager/ros_synthesis), threaded to the surfaces for gating. `weeks` = weeks of real
+// RESULTS as of the viewed week (readiness.weeksOfData) — the one depth clock every surface reads.
+function Surface({ tab, detail, depth, asOfWeek, weeks, slice, onOpenPlayer, onOpenTeam, onOpenDossier, onOpenMatchup, onBack }) {
   const panels = slice?.panels;
   const viewKey = slice.leagueId + ':' + tab + ':' + depth + (detail ? ':' + detail.type + ':' + detail.id : '');
 
@@ -165,13 +170,13 @@ function Surface({ tab, detail, depth, asOfWeek, slice, onOpenPlayer, onOpenTeam
   if (detail?.type === 'player') {
     content = (
       <DetailShell onBack={onBack}>
-        <PlayerCard sleeperId={detail.id} asOfWeek={asOfWeek} panels={panels} />
+        <PlayerCard sleeperId={detail.id} asOfWeek={asOfWeek} weeks={weeks} panels={panels} />
       </DetailShell>
     );
   } else if (detail?.type === 'team') {
     content = (
       <DetailShell onBack={onBack}>
-        <TeamDetail rosterId={detail.id} asOfWeek={asOfWeek} panels={panels} onOpenPlayer={onOpenPlayer} onOpenDossier={onOpenDossier} onOpenMatchup={onOpenMatchup} />
+        <TeamDetail rosterId={detail.id} asOfWeek={asOfWeek} weeks={weeks} panels={panels} onOpenPlayer={onOpenPlayer} onOpenDossier={onOpenDossier} onOpenMatchup={onOpenMatchup} />
       </DetailShell>
     );
   } else if (detail?.type === 'dossier') {
@@ -183,17 +188,17 @@ function Surface({ tab, detail, depth, asOfWeek, slice, onOpenPlayer, onOpenTeam
   } else if (detail?.type === 'matchup') {
     content = (
       <DetailShell onBack={onBack}>
-        <MatchupDetail matchupId={detail.id} asOfWeek={asOfWeek} />
+        <MatchupDetail matchupId={detail.id} asOfWeek={asOfWeek} weeks={weeks} />
       </DetailShell>
     );
   } else if (tab === 'players') {
-    content = <Players asOfWeek={asOfWeek} panels={panels} onOpenPlayer={onOpenPlayer} />;
+    content = <Players asOfWeek={asOfWeek} weeks={weeks} panels={panels} onOpenPlayer={onOpenPlayer} />;
   } else if (tab === 'teams') {
-    content = <Teams asOfWeek={asOfWeek} onOpenTeam={onOpenTeam} />;
+    content = <Teams asOfWeek={asOfWeek} weeks={weeks} onOpenTeam={onOpenTeam} />;
   } else if (tab === 'league') {
-    content = <League asOfWeek={asOfWeek} panels={panels} onOpenTeam={onOpenTeam} />;
+    content = <League asOfWeek={asOfWeek} weeks={weeks} panels={panels} onOpenTeam={onOpenTeam} />;
   } else if (tab === 'matchups') {
-    content = <Matchups asOfWeek={asOfWeek} onOpenMatchup={onOpenMatchup} />;
+    content = <Matchups asOfWeek={asOfWeek} weeks={weeks} onOpenMatchup={onOpenMatchup} />;
   } else {
     content = <Placeholder tab={tab} />;
   }

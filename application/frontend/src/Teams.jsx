@@ -8,7 +8,7 @@ import { Gate, REGIME } from './readiness.jsx';
 // playoff-odds trendline. Pure renderer: everything comes assembled from loadStandings;
 // row click drills into Team detail. Mirrors Players.jsx structure/classes.
 
-export default function Teams({ asOfWeek, onOpenTeam }) {
+export default function Teams({ asOfWeek, weeks, onOpenTeam }) {
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState(null);
 
@@ -48,7 +48,7 @@ export default function Teams({ asOfWeek, onOpenTeam }) {
       {rows == null ? (
         <div className="gr-state">Loading standings…</div>
       ) : (
-        <Gate regime={REGIME.POINT_IN_TIME} weeks={asOfWeek ?? 0} label="Standings">
+        <Gate regime={REGIME.POINT_IN_TIME} weeks={weeks} label="Standings">
           <table className="tm-table">
             <thead>
               <tr>
