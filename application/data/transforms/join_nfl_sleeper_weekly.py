@@ -36,7 +36,13 @@ SKILL_POSITIONS = {"QB", "RB", "WR", "TE"}
 # sharing one instance is safe; frozen inputs (pinned registry) don't change within a run.
 @lru_cache(maxsize=8)
 def _nfl_stats_cached(season: int) -> pl.DataFrame:
-    return data_layer.read_nfl_stats(season)
+    """The season's realized stats — empty-but-typed when the season has none yet.
+
+    The zero-fill below already covers a player missing from a week; this covers the whole SEASON missing
+    (a forward season, or kickoff week before nflreadpy publishes). Every rostered player is then unmatched
+    and gets zero-filled, which is exactly the projections-only advance weekly_refresh documents — instead
+    of a FileNotFoundError."""
+    return data_layer.read_nfl_stats_or_empty(season)
 
 
 @lru_cache(maxsize=1)

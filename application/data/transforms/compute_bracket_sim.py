@@ -353,7 +353,9 @@ def compute(season: int, *, league_id=None, scoring_key=None) -> pl.DataFrame:
     matchups = data_layer.read_season_matchups(season, through_week=reg_season_end, league_id=league_id)
     div_map = _division_map(season, league_id=league_id)  # None for a no-division league → flat seeding (unchanged)
     seed = _sim_seed(season, league_id)  # league-stable: base SEED for is_mine, hashed per corpus league
-    max_roster_week = int(season_df["week"].max())
+    # Read the roster clock BEFORE `int()` — on a league with no joined week `max()` is None and the cast
+    # raises a cryptic TypeError, beating the named diagnosis below to the punch. 0 falls into it properly.
+    max_roster_week = int(season_df["week"].max() or 0)
 
     # A named diagnosis (standing instruction 6), not a cryptic empty-frame crash. reg_season_end<2 or a
     # single-week join means the raw harvest is degenerate — e.g. playoff_week_start unset=0 ⇒ reg_end=-1,

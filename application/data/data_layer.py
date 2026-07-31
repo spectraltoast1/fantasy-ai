@@ -466,6 +466,22 @@ def read_nfl_stats(season: int) -> pl.DataFrame:
     return pl.read_parquet(_nfl_stats_path(season))
 
 
+def read_nfl_stats_or_empty(season: int) -> pl.DataFrame:
+    """The season's realized stats, or a correctly-TYPED empty frame when the season has none yet.
+
+    A forward season has no parquet at all — preseason, and again at kickoff week before nflreadpy
+    publishes. Callers that must keep running on projections-only (the join's zero-fill, the player-signal
+    positional baseline) need an empty frame carrying the REAL column set: a schema-less one breaks the
+    left-join and every downstream filter. So borrow the schema from the newest season that does exist and
+    return it with no rows — "there are no results yet", stated in the shape the pipeline already speaks.
+    """
+    path = _nfl_stats_path(season)
+    if path.exists():
+        return pl.read_parquet(path)
+    banked = sorted((_SNAPSHOT_DIR / "nflreadpy").glob("nfl_stats_*.parquet"))
+    return pl.read_parquet(banked[-1], n_rows=0) if banked else pl.DataFrame()
+
+
 # --- Preseason ADP (FantasyPros consensus, historical) ---
 # The preseason-limits source for the §2 ROS bull/bear anchor (DECISION_READS.md §2). One tall
 # file, `season` a COLUMN (the projections "source-as-a-column" idiom) so the historical

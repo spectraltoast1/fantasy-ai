@@ -61,6 +61,17 @@ from application.data.transforms._constants import CENTER_SHRINK, FORM_ANCHOR_W 
 
 SKILL_POSITIONS = ["QB", "RB", "WR", "TE"]
 
+# The output column set + dtypes, declared so a league with nothing to compute yet (preseason: rosters but
+# no joined week) returns a correctly-TYPED empty frame instead of a schema-less one. Mirrors the row dict
+# built in `_compute_as_of`; a typed empty frame keeps every downstream read/sort working on the honest
+# "no rows yet" case rather than raising a ColumnNotFoundError.
+_SCHEMA: dict = {
+    "season": pl.Int64, "as_of_week": pl.Int64, "roster_id": pl.Int64,
+    "sleeper_player_id": pl.Utf8, "position": pl.Utf8, "pool": pl.Utf8,
+    "ros_value": pl.Float64, "n_weeks": pl.Int64, "waiver_line": pl.Float64,
+    "pool_top": pl.Float64, "vor": pl.Float64, "is_two_way": pl.Boolean,
+}
+
 
 def recent_ppg_expr(as_of) -> pl.Expr:
     """The canonical 'recent form' term — mean(pts | wk ≤ as_of), leak-safe. This is the `recent` half of the
@@ -300,16 +311,30 @@ def compute(season: int, *, league_id=None, scoring_key=None) -> pl.DataFrame:
                    if "is_two_way" in season_df.columns else frozenset())
     # De-bias recent-form anchor (S7): realized weekly points on the centre's own scoring basis. Consumed
     # only when FORM_ANCHOR_W>0 (the shipped 0.0 short-circuits to the borrowed centre — value-identical).
-    realized_pts = _realized_weekly_pts(season, _resolve_scoring(season, scoring_key))
+    # A forward season (no games yet) has no nfl_stats; the read would FileNotFoundError. Skip it →
+    # realized_pts=None → recent_form=None → identity, the same guard compute_ros_player_band already uses.
+    realized_pts = (
+        _realized_weekly_pts(season, _resolve_scoring(season, scoring_key))
+        if data_layer._nfl_stats_path(season).exists() else None
+    )
 
     max_proj_week = int(consensus["week"].max())
-    max_roster_week = int(season_df["week"].max())  # roster data frozen here (season join)
+    # `or 0` before the cast: on a league with no joined week `max()` is None and `int(None)` raises a
+    # cryptic TypeError. 0 falls into the named diagnosis below instead (the compute_bracket_sim idiom).
+    max_roster_week = int(season_df["week"].max() or 0)  # roster data frozen here (season join)
+    if max_roster_week < 1:
+        raise RuntimeError(
+            f"no joined week for season={season} league={league_id} — nothing to compute as-of. A league "
+            "with rosters but zero joined weeks is preseason (the weekly refresh stops before the spine); "
+            "a joined-but-empty one is a degenerate harvest.")
 
     all_rows = []
     for n in range(1, max_roster_week + 1):
         all_rows.extend(_compute_as_of(consensus, season_df, n, max_proj_week, season,
                                        pool_of=pool_of, two_way_ids=two_way_ids,
                                        realized_pts=realized_pts))
+    if not all_rows:
+        return pl.DataFrame(schema=_SCHEMA)
 
     # sleeper_player_id is the unique tie-break: within a (as_of_week, roster_id) many players share a
     # rounded vor, so a sort on vor alone is parallelism-dependent (the 1.7 lesson). One row per
