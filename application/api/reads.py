@@ -95,15 +95,26 @@ def resolve_viewer(lid, viewer_roster_id=None):
 # ---------------------------------------------------------------------------
 
 def load_weeks(league_id=None, season=None, viewer_roster_id=None) -> dict:
-    """Weeks played + the default (latest). Mirrors loadWeeks (l.644).
-    (``viewer_roster_id`` accepted for a uniform slice signature; weeks have no "me" flag.)"""
+    """The league's weeks: every loaded one, which weeks actually have RESULTS, and the default (latest).
+
+    ``weeks`` is every week in the store — it drives the week selector, which should still offer a week
+    that has been loaded. ``played`` is the honest clock, and the two are NOT the same: a projections-only
+    week (preseason, or kickoff before the stats land) is joined into ``season`` with ``sleeper_points``
+    zero-FILLED rather than null, so counting loaded weeks reports "1 week of data" for a league that has
+    played nothing. Derive played-ness from the points themselves — a week counts only if somebody scored —
+    so preseason reads as 0 weeks no matter what has been joined.
+
+    (``viewer_roster_id`` accepted for a uniform slice signature; weeks have no "me" flag.)
+    """
     lid = league_id or settings.league_id()
     rows = db.fetch_all(
-        "SELECT DISTINCT week FROM season WHERE league_id = %(lid)s ORDER BY week",
+        "SELECT week, max(coalesce(roster_total_points, 0)) AS pts FROM season "
+        "WHERE league_id = %(lid)s GROUP BY week ORDER BY week",
         _params(lid=lid),
     )
     weeks = [int(r["week"]) for r in rows]
-    return {"weeks": weeks, "latest": weeks[-1] if weeks else None}
+    played = [int(r["week"]) for r in rows if float(r["pts"] or 0) > 0]
+    return {"weeks": weeks, "played": played, "latest": weeks[-1] if weeks else None}
 
 
 def load_league_meta(as_of_week=None, league_id=None, season=None, viewer_roster_id=None) -> dict:
@@ -357,23 +368,36 @@ def load_player_card(sleeper_id, as_of_week=None, league_id=None, season=None,
         lean["gap"] = gap
         lean["crossTime"] = cross_time
 
-    # Opportunity axes (player_signal).
+    # Opportunity axes (player_signal). Two fields are withheld on a thin sample rather than stated —
+    # law 2's "a missing signal is reported as null, never fabricated". The threshold isn't invented here:
+    # `low_sample` is the engine's own (games < MIN_GAMES or no opportunity).
+    #   * trustDir — `_direction` returns the string "steady" at n < 2, which is indistinguishable from a
+    #     genuine flat trend and is the one player_signal field with no null option of its own. It is also
+    #     in NO_CONFIDENCE_FAMILIES, so nothing downstream flags it.
+    #   * regressionRisk — the one player_signal confidence the trust report grades honest, BUT it computes
+    #     to 0.0 with no realized points, and under strength "neg" that reads as MAXIMUM confidence. Serving
+    #     it early would state the opposite of the truth, so it is withheld exactly where it inverts.
+    # `games` ships unconditionally: the sample size is a fact, and stating N is the honest alternative to
+    # asserting a confidence the engine has never measured.
     s = sig_rows[0] if sig_rows else None
+    thin = bool(s["low_sample"]) if s else False
     opportunity = (
         {
             "qualityRate": calcs.num(s["quality_rate"]),
             "effRatio": calcs.num(s["eff_ratio"]),
             "volumePct": calcs.num(s["opp_pct"]),
             "oppG": calcs.num(s["opp_g"]),
-            "trustDir": s["direction"] if s["direction"] is not None else None,
+            "trustDir": (s["direction"] if s["direction"] is not None else None) if not thin else None,
             "reliability": calcs.num(s["reliability"]),
             "pointCorr": calcs.num(s["point_correlation"]),
+            "regressionRisk": calcs.num(s["regression_risk"]) if not thin else None,
+            "games": calcs.num(s["games"]),
             "luck": calcs.num(s["luck"]),
             "recentPpg": calcs.num(s["recent_ppg"]),
             "expectedPpg": calcs.num(s["expected_ppg"]),
             "read": s["read"] if s["read"] is not None else None,
             "security": s["security"] if s["security"] is not None else None,
-            "lowSample": bool(s["low_sample"]),
+            "lowSample": thin,
         }
         if s
         else None

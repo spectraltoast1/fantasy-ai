@@ -3,7 +3,7 @@
 **What this is:** the current technical design of fantasy-ai — the system **as it is today**. History lives
 in `sessions/` and `_deprecated/`; deep mechanism rationale lives in `context/appendices/`. The rules for
 *changing* code are in `CODING_BIBLE.md`.
-**Updated:** 2026-07-30
+**Updated:** 2026-07-31
 
 ---
 
@@ -78,6 +78,12 @@ re-backfill — the annual pipeline's job.
 surface. Every read takes an optional `?league_id=`(+`?season=`+`?viewer_roster_id=`) via the `slice_params`
 dependency, defaulting to the owner's league (a 404 guards an unknown `league_id`); `/api/leagues` is the one
 unscoped catalog read.
+
+**Two gates, two questions.** `readiness.jsx` answers *"is there enough data yet"* (`Gate` + the `BANDS`
+ladder, keyed to **`weeksOfData`** — weeks with real RESULTS as of the viewed week, from `/api/weeks`'s
+`played`; loaded-but-unplayed weeks don't count, which is what preseason looks like). `marketOn` /
+`MarketOff` / `PanelOff` answer *"is this read meaningful for this league"* — catalog gating, per-element
+because it hides a column or half a toggle. `Gate` no longer carries a catalog arm; no call site ever used it.
 
 **Panel gating.** `/api/leagues` carries a per-slice `panels` map the SPA gates on (`readiness.jsx`:
 `Gate`/`PanelOff`/`marketOn`). `manager` and `ros_synthesis` mirror `demo_manifest` directly. **`market` does

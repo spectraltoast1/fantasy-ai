@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { loadPlayerCard } from './queries.js';
 import { TrendLine, GradeBar, RangeGauge } from './charts.jsx';
-import { MARKET_OFF_NOTE, marketOn } from './readiness.jsx';
+import { MARKET_OFF_NOTE, marketOn, hasShape } from './readiness.jsx';
 import { POS_COLORS } from './posColors.js';
 
 // Player card (detail view). Consumes the assembled object from queries.loadPlayerCard;
@@ -11,7 +11,11 @@ import { POS_COLORS } from './posColors.js';
 
 const TRADE_COLOR = { BUY: 'var(--violet-light)', SELL: 'var(--ridingluck)', HOLD: 'var(--muted)' };
 
-export default function PlayerCard({ sleeperId, asOfWeek, panels }) {
+// player_signal's categorical `read`, in words. The engine emits `too_early` on a thin sample, which is
+// exactly the early-season case — leaking the raw enum there reads as a bug rather than as a state.
+const READ_LABEL = { too_early: 'too early to read', spike: 'spiking', sticky: 'sticky', mixed: 'mixed' };
+
+export default function PlayerCard({ sleeperId, asOfWeek, weeks, panels }) {
   const [card, setCard] = useState(null);
   const [err, setErr] = useState(null);
   const showMkt = marketOn(panels);
@@ -101,8 +105,13 @@ export default function PlayerCard({ sleeperId, asOfWeek, panels }) {
             <p className="pc-companion">
               Scoring <strong>{fmt1(card.opportunity.recentPpg)}</strong>/g vs{' '}
               <strong>{fmt1(card.opportunity.expectedPpg)}</strong>/g the profile expects
-              {card.opportunity.read ? <> — <span className="pc-read">{card.opportunity.read}</span></> : null}
-              {card.opportunity.lowSample ? <span className="pc-thin"> · thin sample</span> : null}
+              {card.opportunity.read ? <> — <span className="pc-read">{READ_LABEL[card.opportunity.read] ?? card.opportunity.read}</span></> : null}
+              {card.opportunity.games != null ? (
+                <span className="pc-thin">
+                  {' · '}{card.opportunity.games} game{card.opportunity.games === 1 ? '' : 's'}
+                  {card.opportunity.lowSample ? ' — too thin to read a trend' : ''}
+                </span>
+              ) : null}
             </p>
           </>
         ) : (
@@ -145,6 +154,9 @@ export default function PlayerCard({ sleeperId, asOfWeek, panels }) {
               certain.
               {card.rosRange.calibrated === false ? (
                 <span className="pc-thin"> · outside the calibrated pool</span>
+              ) : null}
+              {!hasShape(weeks) ? (
+                <span className="pc-thin"> · early season: leaning on the positional baseline</span>
               ) : null}
             </p>
           </>

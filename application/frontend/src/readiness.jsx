@@ -7,9 +7,10 @@ import React from 'react';
 // because they're one cohesive concern (presentational, not data access — so it
 // stays out of queries.js).
 //
-// We are frozen at week 4, so every panel reads "ready" today. The point is the seam:
-// the bands below + the fallback slot exist NOW, so a live season degrades gracefully
-// and preseason/qualitative content can drop into the "too early" slot with no rework.
+// Every panel keys off ONE clock: `weeksOfData` below. It counts weeks that actually
+// have results, not weeks that happen to be loaded — those diverge exactly when it
+// matters, because a projections-only week is joined with zero-filled points and would
+// otherwise report "1 week of data" for a league that has played nothing.
 
 export const REGIME = {
   // ready at roster lock — about who's on the team, not accumulated performance
@@ -20,10 +21,26 @@ export const REGIME = {
   TREND: 'trend',
 };
 
+/**
+ * The one "how early are we" number: how many weeks of REAL RESULTS this league has,
+ * as of the week being viewed. Every surface keys off this rather than inventing its
+ * own threshold, and nothing keys off the selected week ordinal — travelling back to
+ * Week 1 of a finished season is genuinely a 1-week-of-data view, which is what makes
+ * the replay a faithful rehearsal of live Week 1.
+ *
+ * `played` comes from the server (weeks where somebody actually scored). Absent it we
+ * return 0 rather than guessing: unknown depth is shallow depth, never deep.
+ */
+export function weeksOfData(played, asOfWeek) {
+  if (!Array.isArray(played)) return 0;
+  const cut = Number.isFinite(asOfWeek) ? asOfWeek : Infinity;
+  return played.filter((w) => w <= cut).length;
+}
+
 // Weeks of data at which each regime starts being usable (`building`) and becomes
 // fully trustworthy (`ready`). Below `building` it's "too early" and the panel hands
 // off to its fallback slot. Deliberately conservative on trend — a half-life-2wk
-// slope over one or two games is noise. These are the league's weeks-elapsed clock,
+// slope over one or two games is noise. These are the league's weeks-of-results clock,
 // not per-player games (the player signal does its own per-player sample gating).
 const BANDS = {
   [REGIME.STRUCTURAL]: { building: 0, ready: 0 },
@@ -45,19 +62,27 @@ export function assessReadiness(regime, weeks) {
 }
 
 /**
- * Wrap a panel's content. Two gates, in order:
- *   1. Catalog gate (Stage-B B5) — when `panel` is given and the active slice's `panels` map marks
- *      it off (`panels[panel] === false`), the panel isn't meaningful for THIS league, so render the
- *      "not for this league" slot (a custom `fallback` if given, else a default note). Optional and
- *      backward-compatible: callers that pass no `panel` skip it entirely.
- *   2. Readiness gate — when the data is too thin for the panel's regime, render the "too early"
- *      fallback slot; when usable-but-early, render with a subtle low-confidence note.
- * Catalog = "is this panel meaningful for this slice"; readiness = "is there enough data yet".
+ * Is there enough season SHAPE to read a trend/luck claim? Posture ("Riding luck") and the clinch
+ * magic number aren't point estimates that merely firm up — they compare a standing to an all-play
+ * record, so on one game the comparison is between two numbers that don't mean anything yet, and at
+ * zero games all-play is 0/0 coerced to 0, which makes "Riding luck" fall out of nothing.
+ *
+ * Same BANDS as everything else, so the threshold has one home. Withholding these is the exception
+ * to "show it and flag it": a wide band is honest, but a categorical label off no sample is a claim.
  */
-export function Gate({ regime, weeks, label, fallback, panel, panels, children }) {
-  if (panel && panels && panels[panel] === false) {
-    return <PanelOff label={label}>{fallback}</PanelOff>;
-  }
+export const hasShape = (weeks) => assessReadiness(REGIME.TREND, weeks).state !== 'tooEarly';
+
+/**
+ * Wrap a panel's content in the READINESS gate: too thin for its regime → the "too early" fallback
+ * slot; usable-but-early → the content with a subtle low-confidence note above it.
+ *
+ * Readiness only. Catalog gating ("is this read meaningful for THIS league") lives in `marketOn` +
+ * `MarketOff`/`PanelOff`, because it turns out to be per-ELEMENT, not per-block — it hides a table
+ * column, one half of a toggle, a sparkline — which a wrap-children component can't express. `Gate`
+ * used to carry a `panel`/`panels` arm for it; no call site ever passed them (S3's commit message
+ * claimed otherwise and was wrong), so it's removed rather than left as a third idiom.
+ */
+export function Gate({ regime, weeks, label, fallback, children }) {
   const r = assessReadiness(regime, weeks);
   if (r.state === 'tooEarly') {
     return <TooEarly label={label} weeks={r.weeks} needed={r.needed}>{fallback}</TooEarly>;

@@ -351,7 +351,9 @@ def positional_mean_ppo(season: int, weeks) -> dict:
     peeking past N.
     """
     pool = (
-        data_layer.read_nfl_stats(season)
+        # Empty-but-typed on a season with no results yet — the baseline is then simply unmeasurable, which
+        # the per-position fallback below already handles; a forward season must not raise here.
+        data_layer.read_nfl_stats_or_empty(season)
         .filter(pl.col("position").is_in(SKILL_POSITIONS) & pl.col("week").is_in(weeks))
         .with_columns(
             opportunity_expr().alias("opp"),
@@ -523,7 +525,12 @@ def compute(season: int, *, league_id=None) -> pl.DataFrame:
     # Materialize one tall snapshot per as-of week N = 1..maxweek: the dashboard exactly
     # as it would have read through week N, every player recomputed on weeks ≤ N. Current
     # (latest) behavior is the N = maxweek slice. Cheap to materialize all weeks.
-    max_week = int(full["week"].max())
+    # `or 0` before the cast — see compute_production_vor: `max()` is None on an empty join and `int(None)`
+    # raises a TypeError that says nothing about the actual state.
+    max_week = int(full["week"].max() or 0)
+    if max_week < 1:
+        raise RuntimeError(
+            f"no joined week for season={season} league={league_id} — no player-weeks to characterise.")
     all_rows = []
     for n in range(1, max_week + 1):
         sub = full.filter(pl.col("week") <= n)

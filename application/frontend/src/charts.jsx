@@ -6,8 +6,14 @@ import React from 'react';
 
 // A minimal trend polyline. `values` is a numeric series (oldest → newest).
 export function Sparkline({ values, width = 92, height = 28, color = 'var(--violet)', strokeWidth = 1.6 }) {
+  // A trend needs two points. One week of a live season lands here, and an empty box reads as broken
+  // rather than as early — so say which it is. (Honestly uncertain, not blank.)
   if (!values || values.length < 2) {
-    return <svg width={width} height={height} className="spark" aria-hidden="true" />;
+    return (
+      <span className="spark-thin" style={{ width, height }} title="A trend needs at least two weeks">
+        one week
+      </span>
+    );
   }
   const min = Math.min(...values);
   const max = Math.max(...values);
