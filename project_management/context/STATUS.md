@@ -12,9 +12,11 @@
 
 - A deployed, mobile-responsive React SPA on **FastAPI + Supabase Postgres** (Fly.io, same-origin). Five
   surfaces: **Players, Teams, League, Matchups, Manager Dossier**.
-- **Multi-league, no auth.** A **league + season selector** switches across the **12 demo lineages**; the
-  owner's league (2025) is the default, and the "you" highlight follows the selected league. A week
-  selector re-scopes every surface.
+- **Multi-league, no auth.** All **31 demo league-seasons (12 lineages)** are in the production DB and every
+  read is parameterized on `league_id`(+`season`+`viewer_roster_id`), defaulting to the owner's league with
+  byte-identical parity when omitted. League + season + week selectors re-scope every surface, and the "you"
+  highlight follows the selected league. Verified across all 31 slices × sample weeks, 0 bugs.
+  → *`sessions/v1/P0-Multi_League/` + `sessions/v1/SESSION_B6_VERIFICATION_REPORT.md`.*
 - **The app can now advance week by week (P2/S2).** The loader has a **per-league scoped reload** and a
   **weekly-refresh orchestrator** advances one league to the current week without rebuilding the DB —
   proven on prod by advancing the owner's 2025 league Week 4 → 5 (the un-freeze). Ready for live 2026 at
@@ -73,49 +75,35 @@
   left is the **rolling two-week soak proving ≥95%** coverage — **P1 closes when it clears.** → *see appendix:
   data-collection.*
 
-## Stage B — COMPLETE (multi-league)
-
-- **Multi-league is live, visible, and verified end-to-end.** All 31 demo league-seasons (12 lineages) are in
-  the production DB (`schedule` league-scoped, `GET /api/leagues` catalog); every read is parameterized on
-  `league_id`(+`season`+`viewer_roster_id`), defaulting to the owner's league (byte-identical parity when
-  omitted); and the SPA has **league + season + week selectors** with per-league "you" identity and honest
-  per-slice panel gating (Market VOR only where computed = lorp-2025; the ROS "no outlook yet" empty state
-  everywhere; dossiers rich / "no intel" / "no dossier" per data).
-- **B6 swept all 31 slices × sample weeks: 31/31 PASS** on renders + console/network, identity
-  (`viewer_roster_id`), panel gating, and week-bounds; parity held; **0 bugs**, two minor observations logged
-  (completed-season team-detail PLAYOFF % "—" vs standings 100%; graceful no-"YOUR MATCHUP"-pin at an upcoming
-  playoff-bye week). → *full coverage matrix + the two proof screenshots: `sessions/v1/SESSION_B6_VERIFICATION_REPORT.md`.*
-
 ## The active roadmap
 
 **V1** = a working, **invite-gated self-serve** product for **Sleeper PPR / half-PPR redraft** (1QB and
-superflex), running on **live 2026 data**, ready for the invited cohort by **Week 1**. Seven projects
-(P0 finish multi-league → P6 launch hardening); critical-path spine P0 → P2 → P5 — **P0 done; now in P2
-(go-live on 2026).** **P2/S1 done:** the 2026 preseason substrate is built offline for ppr+half under the
-honest constants (forward positional-prior band; `check_forward_substrate` green); a near-drafts refresh
-firms up the thin July ADP. **P2/S2 done (the un-freeze):** the loader gained a **per-league scoped reload**
-(`build_db.load_league` — delete+re-COPY one league in one transaction; others + the catalog untouched),
-proven **byte-parity-identical to a full reload** and atomic (`serve/check_scoped_reload.py`, green on
-prod); a **weekly-refresh orchestrator** (`serve/weekly_refresh.py`: fetch→join→spine→scoped-load, live +
-replay, idempotent) advances a league to the current week; proven on prod by advancing the owner's 2025
-league **Week 4 → 5** with a clean re-run no-op, ready for live 2026 at kickoff (the proven path is the
-loader run **locally against prod**). A `weekly_refresh.yml` GitHub Actions cron ships the cadence (the
-serve modules now import without `config.py` — env-first via `settings`, so CI works); the `DATABASE_URL`
-repo secret is set. **Cloud pipeline execution is re-homed as a P5 prerequisite** (the derived store lives on
-local disk; running the refresh unattended needs a cross-cutting data-layer change — the same capability
-self-serve onboarding needs). **P2/S3 done:** the cross-time market is retired honestly — the panel gates on
-the read's own `is_cross_time` rather than a season constant, across all four market surfaces, and
-`compute_market_vor` is proven contemporaneous-ready. **P2/S3b done:** the honest band is wired end-to-end
-(loader → API → the Rest-of-season range panel) and **dark** — 0 rows until a 2026 league exists, bounded by
-`FIRST_HONEST_BAND_SEASON` so the frozen corpus is never served or rebuilt (above); the weekly refresh now
-rebuilds the band alongside the spine, guarded on the same constant, so the `CENTER_SHRINK` drift can't
-re-open. **P2/S4a done:** the early-season window is honest — one results-based depth clock, claims withheld
-where the sample can't carry them, and the 0-actuals path no longer crashes (three unguarded `nfl_stats`
-reads meant kickoff week 2026 would have raised before any of this mattered). **Next: load the first real
-2026 league** at Will's draft (~late Aug) — a manual admin load, not P5 — which data-proves S2's refresh,
-S3b's band panel and S4a's regimes at once, and **must verify the ROS-range panel against real band data**
-as part of its own done. Then **S4b** (market turn-on) post-launch.
-→ `ROADMAP.md` + `projects/v1/BUILD_ORDER.md` + `sessions/v1/P2-Go_Live_2026/`.
+superflex), running on **live 2026 data**, ready for the invited cohort by **Week 1** (Thu 10 Sept 2026).
+Seven projects (P0 finish multi-league → P6 launch hardening); critical-path spine P0 → P2 → P5.
+
+**P0–P2 done.** P2 delivered the un-freeze end to end: the 2026 preseason substrate (ppr+half, honest
+constants, `check_forward_substrate` green), the per-league scoped loader + weekly-refresh orchestrator,
+the honestly-retired cross-time market, the wired-but-dark ROS band, and the honest early-season window.
+→ `sessions/v1/P2-Go_Live_2026/`.
+
+**P5 (accounts + invite-gated self-serve onboarding) is the active block** — 7 sessions, S0–S6, the
+critical-path long pole. Everything but S6 is buildable against the 2025 replay now, so the preseason
+runway is for building and Gate A is for verifying. **P5/S0 done — the cold-league latency spike, and it
+reshaped the connect UX:** a never-before-seen league goes from nothing to loadable in **10.3s** full-season
+/ **~3.8s** at a Week-1 shape, but the Manager Dossier's cross-league fan-out adds **80s and 248 Sleeper
+calls** — 8× everything else. So the connect flow is **staged**: the four fast surfaces on a spinner in
+~10s, the dossier behind its own progress state. The chain is **network-bound, not compute-bound** (only
+the spine is CPU-bound, at 0.6s), so the S3 worker is **1 GB `shared-cpu-1x` + a 1 GB volume, ~$7/month
+flat to 200 leagues** — buy RAM, not CPU. Shared-substrate reuse is **proven** (133 watched files
+byte-identical across two cold runs; a fresh 2026 ppr+half build is 0.42s). The harness
+(`serve/bench_cold_league.py`) is committed so **S3 re-runs it unchanged on the worker** and the two
+numbers compare directly. → `sessions/v1/P5-Self_Serve/SESSION_P5_S0_REPORT.md`.
+
+**Next: P5/S1** (Supabase Auth + user model + the invite gate). Two things still queue behind calendar
+gates, neither blocking P5: **loading the first real 2026 league** at Will's draft (~late Aug) — a manual
+admin load, not P5 — which data-proves S2's refresh, S3b's band panel and S4a's regimes at once and **must
+verify the ROS-range panel against real band data**; and **S4b** (market turn-on) post-launch.
+→ `ROADMAP.md` + `projects/v1/BUILD_ORDER.md` + `projects/v1/P5_ACCOUNTS_SELF_SERVE_ONBOARDING.md`.
 
 ## Deferred / parked (not blocking; each picked up in its project)
 
@@ -147,6 +135,11 @@ as part of its own done. Then **S4b** (market turn-on) post-launch.
   confidence tier, because asserting an unmeasured confidence is exactly how `ros_cv` shipped inverted.
   Note `bracket_odds.proj_wins` reaches **no client** today, so "playoff wins" has no surface to carry a
   signal until it does.
+- **`weekly_refresh._resolve_scoring_key` would silently mis-score a stranger's league** (found in P5/S0).
+  A league absent from `demo_manifest` falls back to `data_layer._active_league(season)[1]` — *the owner's*
+  scoring key. Every user's league is absent from the catalog until the connect flow catalogs it, so this
+  sits on P5's live path. Fix = derive from the league's own settings (`_keys.scoring_key_from_settings`,
+  which is what the S0 harness does). Harmless today (nothing but demo slices refresh); **P5/S4 owns it.**
 - **`_derive_matchup_result` mints a phantom W/L on a tie.** It ranks a matchup by
   `sort_by(roster_total_points, descending).first()` with **no tie branch**, so both a 0-0 unplayed matchup
   and a genuine real-life tie produce a W and an L decided by sort order. `compute_bracket_sim` handles the
