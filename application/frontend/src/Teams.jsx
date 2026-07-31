@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { loadStandings } from './queries.js';
 import { Sparkline } from './charts.jsx';
-import { Gate, REGIME } from './readiness.jsx';
+import { Gate, REGIME, hasShape } from './readiness.jsx';
 
 // Teams surface — the standings table. Ranked by playoff odds, each row carries the real
 // record, the all-play "true record", a posture chip (the shared §5 derivation), and the
@@ -9,6 +9,7 @@ import { Gate, REGIME } from './readiness.jsx';
 // row click drills into Team detail. Mirrors Players.jsx structure/classes.
 
 export default function Teams({ asOfWeek, weeks, onOpenTeam }) {
+  const shape = hasShape(weeks);
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState(null);
 
@@ -75,7 +76,7 @@ export default function Teams({ asOfWeek, weeks, onOpenTeam }) {
                   <td className="tm-r mono">{t.wins}-{t.losses}</td>
                   <td className="tm-r mono tm-true">{t.allPlayW}-{t.allPlayL}</td>
                   <td className="tm-l">
-                    {t.posture ? (
+                    {shape && t.posture ? (
                       <span
                         className="tm-posture"
                         style={{ color: t.posture.tone, background: chipBg(t.posture.tone) }}

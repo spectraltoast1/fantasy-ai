@@ -368,23 +368,36 @@ def load_player_card(sleeper_id, as_of_week=None, league_id=None, season=None,
         lean["gap"] = gap
         lean["crossTime"] = cross_time
 
-    # Opportunity axes (player_signal).
+    # Opportunity axes (player_signal). Two fields are withheld on a thin sample rather than stated —
+    # law 2's "a missing signal is reported as null, never fabricated". The threshold isn't invented here:
+    # `low_sample` is the engine's own (games < MIN_GAMES or no opportunity).
+    #   * trustDir — `_direction` returns the string "steady" at n < 2, which is indistinguishable from a
+    #     genuine flat trend and is the one player_signal field with no null option of its own. It is also
+    #     in NO_CONFIDENCE_FAMILIES, so nothing downstream flags it.
+    #   * regressionRisk — the one player_signal confidence the trust report grades honest, BUT it computes
+    #     to 0.0 with no realized points, and under strength "neg" that reads as MAXIMUM confidence. Serving
+    #     it early would state the opposite of the truth, so it is withheld exactly where it inverts.
+    # `games` ships unconditionally: the sample size is a fact, and stating N is the honest alternative to
+    # asserting a confidence the engine has never measured.
     s = sig_rows[0] if sig_rows else None
+    thin = bool(s["low_sample"]) if s else False
     opportunity = (
         {
             "qualityRate": calcs.num(s["quality_rate"]),
             "effRatio": calcs.num(s["eff_ratio"]),
             "volumePct": calcs.num(s["opp_pct"]),
             "oppG": calcs.num(s["opp_g"]),
-            "trustDir": s["direction"] if s["direction"] is not None else None,
+            "trustDir": (s["direction"] if s["direction"] is not None else None) if not thin else None,
             "reliability": calcs.num(s["reliability"]),
             "pointCorr": calcs.num(s["point_correlation"]),
+            "regressionRisk": calcs.num(s["regression_risk"]) if not thin else None,
+            "games": calcs.num(s["games"]),
             "luck": calcs.num(s["luck"]),
             "recentPpg": calcs.num(s["recent_ppg"]),
             "expectedPpg": calcs.num(s["expected_ppg"]),
             "read": s["read"] if s["read"] is not None else None,
             "security": s["security"] if s["security"] is not None else None,
-            "lowSample": bool(s["low_sample"]),
+            "lowSample": thin,
         }
         if s
         else None

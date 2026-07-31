@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { loadLeague, loadPositionalTalent, POS } from './queries.js';
 import { Sparkline } from './charts.jsx';
-import { Gate, REGIME, MarketOff, marketOn } from './readiness.jsx';
+import { Gate, REGIME, MarketOff, marketOn, hasShape } from './readiness.jsx';
 
 // League surface — "whole league at a glance". A full-width Your Race band over a
 // 3-column dashboard: Playoff Picture · Posture Map · Positional Talent. Pure renderer:
@@ -47,10 +47,10 @@ export default function League({ asOfWeek, weeks, panels, onOpenTeam }) {
         <div className="gr-state">Loading league…</div>
       ) : (
         <Gate regime={REGIME.POINT_IN_TIME} weeks={weeks} label="League">
-          <YourRace data={data} onOpenTeam={onOpenTeam} />
+          <YourRace data={data} weeks={weeks} onOpenTeam={onOpenTeam} />
           <div className="lg-dash">
-            <PlayoffPicture data={data} onOpenTeam={onOpenTeam} />
-            <PostureMap data={data} onOpenTeam={onOpenTeam} />
+            <PlayoffPicture data={data} weeks={weeks} onOpenTeam={onOpenTeam} />
+            <PostureMap data={data} weeks={weeks} onOpenTeam={onOpenTeam} />
             <PositionalTalent panels={panels} onOpenTeam={onOpenTeam} />
           </div>
         </Gate>
@@ -62,7 +62,8 @@ export default function League({ asOfWeek, weeks, panels, onOpenTeam }) {
 // Your Race — the manager's POV band: playoff chance + posture, seed & cut, magic number.
 // The this-week head-to-head + win% is deferred to the Matchups slice (its win prob is a
 // bracket-sim per-matchup read that isn't surfaced yet) — an honest note, not a fake bar.
-function YourRace({ data, onOpenTeam }) {
+function YourRace({ data, weeks, onOpenTeam }) {
+  const shape = hasShape(weeks);
   const me = data.me;
   if (!me) return null;
   return (
@@ -71,7 +72,7 @@ function YourRace({ data, onOpenTeam }) {
         <div className="lg-race-label gr-label">Your Race</div>
         <div className="lg-race-big">
           <span className="lg-race-pct mono">{me.playoffPct != null ? `${Math.round(me.playoffPct)}%` : '—'}</span>
-          {me.posture ? (
+          {shape && me.posture ? (
             <span className="lg-race-posture" style={{ color: me.posture.tone, background: chipBg(me.posture.tone) }}>
               {me.posture.label}
             </span>
@@ -85,7 +86,7 @@ function YourRace({ data, onOpenTeam }) {
       <div className="lg-race-seed">
         <div className="lg-race-seedn">Seed {me.seed ?? '—'} of {data.nTeams}</div>
         <div className="lg-race-cut mono">top {data.playoffCut ?? '—'} advance</div>
-        <div className="lg-race-magic mono">{magicLine(me.magicWins, me.remainingGames) ?? '—'}</div>
+        <div className="lg-race-magic mono">{(shape ? magicLine(me.magicWins, me.remainingGames) : null) ?? '—'}</div>
       </div>
 
       <div className="lg-race-div" />
@@ -105,7 +106,8 @@ function YourRace({ data, onOpenTeam }) {
 // Playoff Picture — the 10 teams ranked by playoff odds (loadStandings already returns
 // them in that order), with a magic-number subline, the weekly odds trendline, and a
 // PLAYOFF LINE drawn after the real cut (seed = playoffCut).
-function PlayoffPicture({ data, onOpenTeam }) {
+function PlayoffPicture({ data, weeks, onOpenTeam }) {
+  const shape = hasShape(weeks);
   const { standings, playoffCut } = data;
   return (
     <div className="lg-panel">
@@ -126,7 +128,7 @@ function PlayoffPicture({ data, onOpenTeam }) {
                 {t.name}
                 {t.isMe ? <span className="pl-you">YOU</span> : null}
               </span>
-              <span className="lg-pp-magic mono">{magicLine(t.magicWins, t.remainingGames) ?? ''}</span>
+              <span className="lg-pp-magic mono">{(shape ? magicLine(t.magicWins, t.remainingGames) : null) ?? ''}</span>
             </div>
             <div className="lg-pp-odds">
               <Sparkline values={t.oddsSeries} color={t.posture ? t.posture.tone : 'var(--violet)'} width={54} height={16} />
@@ -151,7 +153,7 @@ function PlayoffPicture({ data, onOpenTeam }) {
 // diagonal is the "on pace" line: above it a roster performs above its standing (buy),
 // below it a roster is standing above its performance (sell). One dot per team, colored by
 // the same posture read as the standings; a dot drills to Team detail.
-function PostureMap({ data, onOpenTeam }) {
+function PostureMap({ data, weeks, onOpenTeam }) {
   const dots = data.standings.filter((t) => t.playoffPct != null && t.posture);
   return (
     <div className="lg-panel">
@@ -159,6 +161,10 @@ function PostureMap({ data, onOpenTeam }) {
         <span className="lg-panel-title">Posture Map</span>
         <span className="lg-panel-note">playoff odds × true record</span>
       </div>
+      {/* The whole panel is one TREND claim — it reads a standing AGAINST an all-play record, so with no
+          season shape there is nothing to plot and the caption below would assert a read we aren't showing.
+          Gate the plot and its caption together rather than drawing an empty chart. */}
+      <Gate regime={REGIME.TREND} weeks={weeks} label="The posture map">
       <div className="lg-map-well">
         <svg className="lg-map-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
           <polygon points="9,9 91,9 9,91" fill="color-mix(in srgb, var(--unlucky) 6%, transparent)" />
@@ -192,6 +198,7 @@ function PostureMap({ data, onOpenTeam }) {
         than it should (buy), <span style={{ color: 'var(--ridingluck)' }}>bottom-right</span> wins more
         than it should (sell).
       </p>
+      </Gate>
     </div>
   );
 }

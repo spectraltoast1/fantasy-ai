@@ -62,6 +62,17 @@ export function assessReadiness(regime, weeks) {
 }
 
 /**
+ * Is there enough season SHAPE to read a trend/luck claim? Posture ("Riding luck") and the clinch
+ * magic number aren't point estimates that merely firm up — they compare a standing to an all-play
+ * record, so on one game the comparison is between two numbers that don't mean anything yet, and at
+ * zero games all-play is 0/0 coerced to 0, which makes "Riding luck" fall out of nothing.
+ *
+ * Same BANDS as everything else, so the threshold has one home. Withholding these is the exception
+ * to "show it and flag it": a wide band is honest, but a categorical label off no sample is a claim.
+ */
+export const hasShape = (weeks) => assessReadiness(REGIME.TREND, weeks).state !== 'tooEarly';
+
+/**
  * Wrap a panel's content in the READINESS gate: too thin for its regime → the "too early" fallback
  * slot; usable-but-early → the content with a subtle low-confidence note above it.
  *

@@ -2,7 +2,7 @@
 
 **What this is:** Gridiron — a fantasy-football decision-support dashboard whose unit is the manager's
 *decision*, not the player. Live, single-league, on the server stack.
-**Live at:** https://fantasy-ai-api.fly.dev/ · **Updated:** 2026-07-30
+**Live at:** https://fantasy-ai-api.fly.dev/ · **Updated:** 2026-07-31
 **Read next:** `ARCHITECTURE.md` (how it's built) · `CODING_BIBLE.md` (rules for coding agents) ·
 `ROADMAP.md` (where it's going) · `projects/v1/` (the active build).
 
@@ -30,6 +30,12 @@
 - **Current honesty state:** production VOR ranks rest-of-season value well but runs the *level* high (trust
   the order, not the total); the band was re-tuned to ~0.86 coverage; playoff odds and true rank are honest;
   four reads still carry no confidence signal. → *see appendix: engine-trust, engine-decision-reads.*
+- **The thin-data window is honest (P2/S4a).** Every surface keys off **one** depth clock — weeks with real
+  RESULTS, not weeks merely loaded, because a projections-only week joins with zero-filled points and would
+  otherwise report "1 week of data" for a league that has played nothing. Below three weeks the app states
+  the sample and **withholds the claims the sample can't support**: no posture chip, no clinch magic number,
+  no posture map, no trend direction — while the numbers themselves (playoff %, VOR, bands) still show,
+  flagged. Reachable today: pick Week 1 on the demo. Nothing changes at ≥3 weeks.
 - **The honest band is wired end-to-end, and dark until 2026 (P2/S3b).** `ros_player_band` is now a loaded
   table, selected by `load_player_card` (pinned to `production_vor`'s week) and rendered as a **"Rest-of-season
   range"** panel — bear / center / bull in points, with the ±σ spread as the confidence read (no label: the
@@ -103,9 +109,13 @@ the read's own `is_cross_time` rather than a season constant, across all four ma
 (loader → API → the Rest-of-season range panel) and **dark** — 0 rows until a 2026 league exists, bounded by
 `FIRST_HONEST_BAND_SEASON` so the frozen corpus is never served or rebuilt (above); the weekly refresh now
 rebuilds the band alongside the spine, guarded on the same constant, so the `CENTER_SHRINK` drift can't
-re-open. **Next: P2/S4** — early-season readiness (Weeks 0–3 of a live 2026 league), which is also the
-session that first loads a 2026 league and so must **verify the ROS-range panel against real band data** as
-part of its own definition of done. → `ROADMAP.md` + `projects/v1/BUILD_ORDER.md` + `sessions/v1/P2-Go_Live_2026/`.
+re-open. **P2/S4a done:** the early-season window is honest — one results-based depth clock, claims withheld
+where the sample can't carry them, and the 0-actuals path no longer crashes (three unguarded `nfl_stats`
+reads meant kickoff week 2026 would have raised before any of this mattered). **Next: load the first real
+2026 league** at Will's draft (~late Aug) — a manual admin load, not P5 — which data-proves S2's refresh,
+S3b's band panel and S4a's regimes at once, and **must verify the ROS-range panel against real band data**
+as part of its own done. Then **S4b** (market turn-on) post-launch.
+→ `ROADMAP.md` + `projects/v1/BUILD_ORDER.md` + `sessions/v1/P2-Go_Live_2026/`.
 
 ## Deferred / parked (not blocking; each picked up in its project)
 
@@ -130,8 +140,23 @@ part of its own definition of done. → `ROADMAP.md` + `projects/v1/BUILD_ORDER.
   `max(snapshot_date)`, so the market won't replay with the week selector (cross-*week* replaces cross-*time*
   as the time-world bug); and LeagueLogs requires **"Powered by LeagueLogs API"** attribution on any UI that
   displays it — absent today, a launch blocker once the panel is ungated for real users.
-- **Silent-reads confidence** — give production VOR, player-signal direction, and playoff wins/seed a
-  confidence signal (the current law-2 gap).
+- **Silent-reads confidence (the ENGINE half — post-V1).** A *native, measured* confidence column on
+  `production_vor` / `player_signal` direction / `bracket_odds` wins+seed, proven monotone-honest against
+  `CONF_MONO_MARGIN` and moved from `NO_CONFIDENCE_FAMILIES` into `CONF_SIGNALS`. S4a shipped the display
+  half instead (state the sample, withhold what it can't support) — deliberately **not** a derived
+  confidence tier, because asserting an unmeasured confidence is exactly how `ros_cv` shipped inverted.
+  Note `bracket_odds.proj_wins` reaches **no client** today, so "playoff wins" has no surface to carry a
+  signal until it does.
+- **`_derive_matchup_result` mints a phantom W/L on a tie.** It ranks a matchup by
+  `sort_by(roster_total_points, descending).first()` with **no tie branch**, so both a 0-0 unplayed matchup
+  and a genuine real-life tie produce a W and an L decided by sort order. `compute_bracket_sim` handles the
+  same case correctly (0.5 each), so the served record and `bracket_odds.current_wins` disagree by
+  construction. Changes measured data and only takes effect on a re-join → its own bounded session with a
+  parity check, worth doing before the season runs deep. (S4a's depth clock reads points, not W/L, so it is
+  already immune.)
+- **`matchup_win_probs` returns 50/50 whenever both σ are 0**, regardless of μ — a 30-point projected gap
+  included. Pinned by `check_projections`, and it disagrees with the sim's own `_win_prob`, which returns
+  1.0/0.0 there. Only reachable on a week with no projections at all.
 - **`*_ppr` naming wart** — the `center_ppr` / `band_ppr` / … columns hold *league* points, not PPR; the
   rename is coupled to a frontend + schema change. → *see appendix: scoring-mechanism.*
 - **Post-V1 features** — other scoring formats, dynasty, other platforms, owner-keyed dossiers, annual

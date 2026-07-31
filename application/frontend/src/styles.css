@@ -341,6 +341,13 @@ body {
 .pc-conf-note { font-size: 12px; color: var(--muted); line-height: 1.4; }
 .pc-empty { color: var(--muted); font-size: 13px; line-height: 1.5; }
 
+/* A trend with too few weeks to draw — says "early", where an empty box would read as "broken". */
+.spark-thin {
+  display: inline-flex; align-items: center; justify-content: center;
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.04em;
+  color: var(--muted-2); border: 1px dashed var(--border-2); border-radius: 6px;
+}
+
 /* Rest-of-season range — the gauge sits full-width under the bear/center/bull tiles. */
 .pc-range-bar { margin-top: 16px; min-width: 0; }
 
