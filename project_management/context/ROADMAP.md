@@ -1,6 +1,6 @@
 # ROADMAP — Highest-Level View
 
-**Updated:** 2026-07-26 · The master arc + the index of every project. For current state see `STATUS.md`;
+**Updated:** 2026-07-31 · The master arc + the index of every project. For current state see `STATUS.md`;
 for what each project entails, open its folder under `projects/`.
 
 ---
@@ -13,7 +13,9 @@ for what each project entails, open its folder under `projects/`.
    Postgres on Fly; the app is a real, deployed website. → `sessions/v1/`.
 3. **V1 — the active work.** Turn the single-league, frozen-2025 replay into a working, **invite-gated
    self-serve** product for **Sleeper PPR/half redraft** (1QB + superflex), on **live 2026 data**, ready for
-   the invited cohort by **Week 1**. → `projects/v1/`.
+   the invited cohort by **Week 1** (Thu Sept 10, 2026). → `projects/v1/`.
+   The go-live spine (P0–P2) is complete; **P5 (accounts + self-serve onboarding) is the active block.** For
+   live state see `STATUS.md`; to pick up as PM see `sessions/v1/PM_SESSION_STARTUP.md`.
 4. **Post-V1 — next improvements.** Once V1 ships, the remaining work is formats, platforms, and refinements
    — not core functionality. → `projects/post-v1/`.
 
@@ -25,7 +27,7 @@ for what each project entails, open its folder under `projects/`.
 short: **P0** finish multi-league · **P1** reliable off-laptop collection · **P2** go live on the 2026 season
 · **P3** waiver / free-agent value · **P4** live AI outlook · **P5** accounts + invite-gated self-serve
 onboarding · **P6** launch hardening + instrumentation. Critical-path spine is **P0 → P2 → P5**, with P1 as
-an early parallel prerequisite; P3/P4 are the deferrable flex.
+an early parallel prerequisite; P3/P4 are the deferrable flex. **(P0–P2 done; P5 is next — see `STATUS.md`.)**
 
 ### `projects/post-v1/` — the next-improvements backlog
 
@@ -42,7 +44,9 @@ session history is in `sessions/engine/`. → `projects/engine/ROADMAP.md`.
 ## How the docs are organized
 
 - **`context/`** — load-first SOT: `STATUS`, `ARCHITECTURE`, `CODING_BIBLE`, `PRODUCT`, this `ROADMAP`,
-  `SESSION_GUIDE`, and `appendices/` (deep rationale, pulled in only when a task needs it).
+  `SESSION_GUIDE`, `SEASON_CALENDAR` (the yearly cadence), and `appendices/` (deep rationale, per task).
+- **PM handoff:** `sessions/v1/PM_SESSION_STARTUP.md` — start here to pick up as PM (supersedes the engine-era
+  `sessions/engine/PM_SESSION_STARTUP.md`).
 - **`projects/`** — one folder per project (roadmaps + briefs only).
 - **`sessions/`** — reference-only session records, organized by project.
 - **`_deprecated/`** — gitignored old-state, preserved for history.

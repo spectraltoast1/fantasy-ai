@@ -17,12 +17,21 @@ The architecture was built so this is a **bolt-on, not a rewrite** — but the b
 
 - **Auth was deferred on purpose.** Postgres/Supabase was chosen specifically so **Supabase Auth** can be
   added later without a second store move. Today there is no user model, no session, no login.
-- **Data isolation is coarse today.** The Postgres tables have **RLS enabled but no policies**, and the app
-  connects as an **owner role that bypasses RLS** — fine for one public league, unacceptable once real users
-  each have their own leagues.
+- **Data isolation is coarse today, but external exposure is closed.** RLS is **enabled deny-by-default on
+  all public tables and the unused Data API is disabled**, so the DB is no longer openly
+  reachable. The app still connects as an **owner role that bypasses RLS**, so this is defense-in-depth, not
+  per-user isolation — **that's P5's job, enforced in the API layer** (not a large RLS-policy build, since the
+  owner role bypasses RLS anyway): every read must be scoped to the authenticated user. Fine for one public
+  league; unacceptable once real users each have their own.
 - **Adding a league is currently an engineer task** (run fetchers + transforms + loader). The registry
   (`leagues.parquet`) already carries **`onboarded_at` + `pilot_cohort`** hooks that are unused — they exist
   for exactly this.
+- **On-demand ingestion needs cloud execution — a P5 prerequisite (discovered in P2/S2).** The derived store
+  lives on local disk; running the P2 pipeline for a user's league on a stateless cloud runner needs the store
+  reachable there (P1's bucket backend covers only the 2 daily collectors). **Decision (Will): a small Fly
+  worker holding the store on a volume**, reusing the pipeline — cheaper + lower-upkeep than a full serverless
+  refactor. Run Code's short latency spike first, then build it at/near the start of P5. *(RLS/security posture
+  in the next bullet is a separate open thread — confirm the live state with Will.)*
 - **Viewer-as-data is ready after P0/B5** (`viewer_roster_id`), so "you" resolves per league without a
   hardcode.
 

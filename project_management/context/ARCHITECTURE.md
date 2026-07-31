@@ -112,9 +112,10 @@ fallback, so the band is the honest, wide, position-typical prior until games sh
 - **Viewer identity** — `viewer_roster_id` (per league, from the catalog) is the "you" seam; a request with no
   `viewer_roster_id` falls back to `MY_USERNAME`'s roster (the default). The `MY_USERNAME` Fly secret stays as
   that default resolver.
-- **Multi-user / auth** — none today: single-tenant, one owner-role Postgres connection, RLS enabled with no
-  policies. Postgres was chosen so **Supabase Auth** is a later bolt-on. Adding it is a V1 project. →
-  `projects/v1/` (P5).
+- **Multi-user / auth** — none today: single-tenant, one owner-role Postgres connection that bypasses RLS.
+  RLS is deny-by-default on every public table and the unused Data API is disabled, so the DB isn't externally
+  reachable — defense-in-depth, not authz. Per-user isolation is the API's job in P5; Postgres was chosen so
+  **Supabase Auth** is a later bolt-on. → `projects/v1/` (P5).
 
 ## Scope & rules
 

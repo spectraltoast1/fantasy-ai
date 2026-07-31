@@ -1,6 +1,6 @@
 # V1 Build Order — Usable 2026 Product for Sleeper PPR / Half-PPR
 
-**Created:** 2026-07-26 · **Owner:** Will (product) + PM/thinking-partner session · **Status:** Proposed build order, pending Will's sign-off.
+**Created:** 2026-07-26 · **Owner:** Will (product) + PM/thinking-partner session · **Status:** Accepted + executed — **P0–P2 done; P5 active** (the long pole). Live state in `context/STATUS.md`.
 
 **Companion docs:** the project briefs `P0`–`P6` (this folder); the post-V1 backlog (`../post-v1/`); `context/STATUS.md` (current state) and `context/ROADMAP.md` (master roadmap + doc organization).
 
