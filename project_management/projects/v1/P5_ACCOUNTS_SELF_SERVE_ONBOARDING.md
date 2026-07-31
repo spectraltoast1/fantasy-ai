@@ -1,6 +1,6 @@
 # Project 5 — Accounts + Invite-Gated Self-Serve Onboarding
 
-**Created:** 2026-07-26 · **Status:** Not started · **Track:** Critical spine — **the biggest single block** · **Depends on:** P0 (keyed reads + viewer-as-data), P2 (the ingestion pipeline it automates) · **Est:** 6–9 sessions
+**Created:** 2026-07-26 · **Updated:** 2026-07-31 — session map rewritten S0–S6; the stale "write the RLS policies" row corrected; the store-ownership rule and the viewer-identity change added · **Status:** Active — S0 next · **Track:** Critical spine — **the biggest single block** · **Depends on:** P0 (keyed reads + viewer-as-data), P2 (the ingestion pipeline it automates) · **Est:** 7 sessions · **Session docs:** `sessions/v1/P5-Self_Serve/`
 
 > **What this project does:** turn the app from "one hardcoded league, no login" into "**an invited user logs
 > in, connects their own Sleeper league, and gets a live dashboard.**" This is the capability that makes
@@ -30,10 +30,23 @@ The architecture was built so this is a **bolt-on, not a rewrite** — but the b
   lives on local disk; running the P2 pipeline for a user's league on a stateless cloud runner needs the store
   reachable there (P1's bucket backend covers only the 2 daily collectors). **Decision (Will): a small Fly
   worker holding the store on a volume**, reusing the pipeline — cheaper + lower-upkeep than a full serverless
-  refactor. Run Code's short latency spike first, then build it at/near the start of P5. *(RLS/security posture
-  in the next bullet is a separate open thread — confirm the live state with Will.)*
+  refactor. Run Code's short latency spike first (**S0**), then build it (**S3**). **Fly volumes attach to
+  exactly one Machine and are locked to that physical host** — no multi-attach, no moving — so the worker is a
+  **stateful singleton**, not a pool. That is the right shape for an invited cohort, and it means the worker
+  must be a **separate Fly app** from the API (don't entangle the API's scale-to-zero with a multi-minute job).
+- **The store-ownership rule (Will, 2026-07-31) — one-directional, decide it before S3.** Once a cloud worker
+  writes derived data, two stores can diverge. The cut follows the directory layout that already exists:
+  the **laptop owns** `derived/ledger` (145 MB — the certification spine, never leaves) and `derived/scoring`
+  (16 MB — the shared scoring-keyed substrate, authored locally and pushed up); the **worker owns**
+  `derived/league` and the joins, and **never sends anything back**. The volume is therefore a
+  **reconstructible cache, not precious data** — lose the host, re-seed it. Postgres stays the served truth.
+  ~245 MB is what actually has to live on the volume.
 - **Viewer-as-data is ready after P0/B5** (`viewer_roster_id`), so "you" resolves per league without a
-  hardcode.
+  hardcode — **but it is a property of a *league* today**, read off the `/api/leagues` catalog. With real
+  users it must become a property of ***user × league***, because two people in the same league need different
+  "you" highlights. Related: `/api/leagues` is the **one unscoped read** and currently hands every caller all
+  31 demo slices. Both are real, uncosted work inside S1–S2 — they were missing from this brief's original
+  session map.
 
 - **This is the boundary the migration doc drew.** `MULTI_LEAGUE_STORE_MIGRATION.md` explicitly scoped *"auth + the import UX out of scope"* and built the seeded demo instead — **P5 is that deferred project, picking up exactly at that line.** `../post-v1/owner-keyed-dossiers.md` is the natural refinement once a user has multiple leagues.
 
@@ -45,26 +58,53 @@ safely, on demand, and show them the result behind a login."** That's why P2 mus
 
 ## Session map
 
+**Rewritten 2026-07-31.** The original four-row map is superseded. Two things changed: the old S2 told a
+session to *"write the RLS policies"* — wrong layer, since the app's owner role **bypasses** RLS, so per-user
+isolation is **API-layer** work; and the old S3 welded three separable jobs (the cloud worker, the job queue,
+the connect UX) into one session. **Everything except S6 is buildable and provable today against the 2025
+replay** — the constraint on this project is calendar-gated *proof*, not build time, so build it all now and
+let Gate A (Will's draft, ~late Aug) be a verification batch rather than a build.
+
 | Session | Goal | Scope | Definition of done |
 |---|---|---|---|
-| **S1 — Auth + user model** | Users can log in (invite-gated) | Wire **Supabase Auth**; a `users` table; sessions; login/signup UI; the invite mechanism (allow-list or invite codes) | An invited person can sign up and log in; a non-invited person cannot |
-| **S2 — Ownership + data isolation (RLS)** | Users see only their leagues | A user→league ownership model; **write the RLS policies** so the served tables scope to the requesting user; stop the app relying on the RLS-bypassing owner role for user-facing reads | A logged-in user sees only their leagues + appropriate shared/global data; a direct attempt to read another user's league is denied |
-| **S3 — Connect-your-league ingestion** | A user brings their own league | A "connect your Sleeper league" flow (enter username / league_id) that triggers the **P2 pipeline** for that league **asynchronously**, registers it (`onboarded_at`, cohort, owner), and shows progress; resolve the user's `viewer_roster_id` in that league | A user connects a fresh PPR/half redraft league and, after ingestion, sees a correct live dashboard with "you" highlighted |
-| **S4 — Scope validation + graceful rejection + robustness** | Safe on leagues you didn't hand-pick | Validate the connected league is **in scope** (redraft, ppr/half, 1QB/SF, scoreable); **decline out-of-scope** leagues (dynasty, un-scoreable custom, exotic shapes) with a clear "not supported yet" message; handle the reception-tier caveat copy; sanity-check the SF market/QB-pool read | In-scope leagues onboard cleanly; out-of-scope leagues are declined honestly, not broken; a variety of real invited leagues render correctly |
+| **S0 — Latency spike** | Know what "connect" actually costs | Time a **brand-new** league end to end (not a re-run — the pipeline's per-step gates make a repeat look artificially fast); report the per-step split (fetch / join / spine / load); confirm the 2026 ppr+half substrate is genuinely shared so per-league work excludes it | A number, a per-step breakdown, and a sizing recommendation. It decides spinner-vs-email in S4 and the machine size in S3 |
+| **S1 — Auth + user model + invite gate** | The app knows who is asking | Wire **Supabase Auth** (magic link); a minimal `app_users` profile; token verification via the project's **JWKS** endpoint (asymmetric, not the legacy shared HS256 secret); public signup **off** so the gate lives in the platform, not app code | An invited person signs in; an uninvited address **cannot obtain a session**, demonstrated; `/api/me` 401s on missing/forged/expired; every existing read stays byte-parity identical → `sessions/v1/P5-Self_Serve/SESSION_P5_S1_AUTH_AND_INVITE.md` |
+| **S2 — Ownership + API-layer isolation** | Users see only their leagues | A user→league ownership model; **scope every read to the authenticated caller in the API layer** (NOT an RLS-policy build — the owner role bypasses RLS); scope `/api/leagues`; move viewer identity from a *league* property to a ***user × league*** property | A logged-in user sees only their leagues plus the public demo; a direct request for another user's `league_id` is **denied, demonstrated**. **The security session — do not let a fast cadence compress it; isolation bugs are silent** |
+| **S3 — The Fly worker + the store boundary** | The laptop stops being infrastructure | Stand up a **separate Fly app** + volume; seed it per the one-directional store-ownership rule above (write it as an ADR first); run the **existing pipeline unchanged** there, replay league → prod Postgres. No queue yet — a manually triggered run | The full pipeline completes on the worker for a replay league and lands in Postgres, byte-parity with a local run. Will can power off his laptop and it still works |
+| **S4 — The job queue + connect flow** | A user can ask for their league | A Postgres `jobs` table (no new infra — you already have transactional Postgres and the job count is in the dozens); worker leases one job at a time; states `queued → validating → fetching → building → loading → ready \| rejected \| failed`; the connect endpoint + a progress screen | A league already in the demo slate is onboarded through the **real** flow end to end, with progress visible and a clean re-submit |
+| **S5 — Preflight scope validation + honest rejection** | Safe on leagues you didn't hand-pick | A ~1-second Sleeper settings read **before** anything is enqueued: redraft vs dynasty/keeper, reception tier, roster shape (1QB/SF, skill positions), scoreability. Decline out-of-scope with clear copy; the reception-tier caveat copy | In-scope leagues enqueue; dynasty/exotic/custom are declined honestly **without ever starting a job**; tested against the demo lineages + real league ids |
+| **S6 — End-to-end + failure drills** | It fails loudly, not silently | Real shapes × weeks; deliberately kill a job mid-run, time out Sleeper, double-submit, submit a league twice from two users | Every drill either recovers cleanly or dead-letters with a notification — **never a half-built league that looks complete**. The only session that wants Gate A |
 
-## Decisions to settle (surface to Will)
+## Decisions — settled 2026-07-31
 
-- **Sync vs async ingestion.** The P2 fetch→transform→load chain takes minutes — it can't block a request.
-  **Recommend async** (a job queue + a "we're building your league…" progress state). This is the biggest UX
-  decision and it shapes S3.
-- **Per-user on-demand loading vs the DROP+CREATE loader.** The current full-reload loader **cannot** be used
-  per user. This project **requires P2's incremental/per-league load** — confirm that dependency is done
-  before S3.
-- **Identity mapping** — Sleeper username → app user; one user, many leagues; what happens when two users are
-  in the same league (shared league data, per-user viewer).
-- **Invite model** — allow-list vs invite codes vs manual approval.
-- **RLS depth** — full row-level policies vs an app-layer scoping layer in front of the owner connection.
-  (RLS is the more secure long-term answer; weigh time-to-ship.)
+- **Async ingestion — SETTLED.** The chain takes minutes and can't block a request: a job queue plus a "we're
+  building your league…" progress state. S0 decides whether the wait is a spinner or an email.
+- **True self-serve, not concierge — SETTLED (Will).** A cheaper path was proposed — ship the request UX and
+  drain the queue by hand for the first few weeks — and **declined**: the cadence is several sessions a day,
+  so the full build fits. Do not re-litigate it.
+- **Sign-in = magic link — SETTLED (Will).** No password storage, no reset flow; possession of the invited
+  inbox is the credential.
+- **Logged-out visitors keep a public demo — SETTLED (Will).** This gives S2 a security rule that fits in one
+  sentence: *demo slices are world-readable; user slices require their owner.* Far easier to get right and to
+  test than "everything is private except a carve-out." **Open sub-decisions:** trim the demo to **one league
+  frozen at a mid-season week** (not today's 31 slices), and how to handle the demo's honestly-empty panels
+  → see Risks.
+- **Per-user on-demand loading — SETTLED.** P2/S2 shipped `build_db.load_league` (delete + re-COPY one league
+  in one transaction, byte-parity-proven against a full load, idempotent). The DROP+CREATE loader is not used
+  per user. **This is the single biggest de-risking in P5 and it is already done.**
+- **RLS depth — SETTLED.** Not an RLS-policy build. The app connects as an owner role that bypasses RLS, so
+  RLS is defense-in-depth; authorization is enforced in the API layer, per read, on every request.
+
+**Still open:**
+
+- **Identity mapping** — Sleeper username → app user; one user with many leagues; and the *user × league*
+  viewer change described in Context. S2 must settle this.
+- **The invite mechanism, given there is no invite list (Will, 2026-07-31).** Sharing is word-of-mouth. Three
+  shapes: (a) **admin-invite** — a person asks Will, Will runs one command; word-of-mouth still works, the
+  mouth just routes through him, and nobody can consume pipeline compute without his knowledge;
+  (b) **invite codes** — self-serve with a code, but a code can be forwarded; (c) **open signup** — drops the
+  gate entirely and exposes the single worker to unbounded jobs. **(a) recommended at this cohort size**, with
+  (b) as the natural upgrade when being in the loop stops being cheap.
 
 ## Risks / notes
 
@@ -73,19 +113,38 @@ safely, on demand, and show them the result behind a login."** That's why P2 mus
 - **Ingestion latency + cost per new league** — each connect runs the full pipeline (and, if P4 is on, an AI
   batch). Bound it; consider pre-warming shared substrate (ppr/half 2026 is shared across leagues, so only
   the league-specific spine runs per user).
-- **RLS correctness is a security surface** — get isolation right; a leak here is a real-user data exposure,
-  not a demo bug.
+- **Isolation correctness is a security surface** — a leak here is real-user data exposure, not a demo bug.
+  It's also the one failure mode with **no feedback signal**: a broken ingestion job fails loudly, a broken
+  scope rule fails silently and the first alarm is a user seeing someone else's league. S2 gets an explicit
+  adversarial pass before merge, not just a green run.
 - **The pipeline was built for batch, not per-user on-demand** — making it safely callable per league
   (isolation, idempotency, failure handling) is real work, partly inherited from P2's incremental load.
 - **Abuse / rate limits** — an invited-only launch bounds this, but the connect endpoint hits Sleeper's API
   per request; add basic rate limiting.
+- **The demo's empty panels are real product gaps, not cosmetic ones — don't fabricate over them.** Will wants
+  the public demo to look complete. Two of its holes (the ROS AI outlook; the gated market read) are honest
+  empty states standing in for capabilities that genuinely don't exist yet, and a third (the ROS band panel)
+  **lights up by itself at Gate A**. Filling them with synthetic data would make the demo promise things a new
+  user discovers are missing within five minutes — the exact dishonesty this engine's north star forbids, and
+  it also puts fabricated rows in the same tables as real ones. The honest version: **choose the demo league
+  and week so the panels that are real look their best**, label the rest as coming, and let Gate A close two
+  of the holes for free. A clearly-labelled synthetic *sample* league is a legitimate alternative — but it
+  must be visibly a sample, and isolated from real slices.
+- **Metric legibility has no home in the roadmap — and it is Will's most-repeated user feedback.** People
+  don't intuitively understand what the numbers mean or what to do with them. Every V1 project is about making
+  the numbers *right*; none is about making them *legible*. That is a genuine gap in `BUILD_ORDER.md`, and it
+  bears directly on the north star: a wide, honest band that a user can't read isn't honesty, it's noise.
+  Needs its own scoped work (in-app explainers / a "how to read this" layer), sized separately — **do not let
+  it get smuggled into a P5 session**.
 
 ## Critical files
 
-Supabase Auth config; new `users` + league-ownership tables + **RLS policies**; a new onboarding API +
-async ingestion orchestrator (wraps the P2 pipeline per league); `shared/league_registry.py` /
-`leagues.parquet` (`onboarded_at`/cohort/owner); `data/data_layer.py` (per-user scoping); frontend auth +
-"connect league" UI; `App.jsx` (auth state + the user's league list).
+Supabase Auth config; new `app_users` + league-ownership tables (**not** an RLS-policy build — API-layer
+scoping); a new onboarding API + async ingestion orchestrator (wraps the P2 pipeline per league);
+`shared/league_registry.py` / `leagues.parquet` (`onboarded_at`/cohort/owner); `application/api/routes.py`
+(the `slice_params` dependency — the natural chokepoint for per-user scoping) + `reads.py`;
+`data/data_layer.py`; `frontend/src/queries.js` (`apiGet` — the one place a token attaches);
+`App.jsx` (auth state + the user's league list).
 
 ## Definition of done (project)
 
