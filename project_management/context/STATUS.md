@@ -46,13 +46,10 @@
   **It serves 0 rows today** and renders an honest absent-state: only seasons at or above
   `build_db.FIRST_HONEST_BAND_SEASON` (2026) may be served, and no 2026 league exists yet. It lights up by
   itself when one is onboarded.
-- **Why the 2020–2025 band stays stale — a deliberate boundary, not an omission.** That parquet does double
-  duty: it is also the frozen-corpus artifact the **immutable L2 predictions ledger** was derived from
-  (`check_predictions` rebuilds band claims from it and compares to the ledger; `frozen_era()` reverts
-  constants but not data). Rebuilding it at the honest constants would break the ledger's reproducibility, so
-  the frozen seasons keep the pre-8c band as the out-of-sample certification baseline and a corpus
-  re-backfill stays the **annual pipeline's** job. `FIRST_HONEST_BAND_SEASON` is the single place that line
-  lives — the loader guard and the weekly-refresh guard both read it.
+- **Why the 2020–2025 band stays stale — a deliberate boundary, not an omission.** That parquet is also the
+  frozen-corpus artifact the **immutable L2 ledger** was derived from, so rebuilding it at the honest
+  constants would break the ledger's reproducibility; a corpus re-backfill is the **annual pipeline's** job.
+  → *ARCHITECTURE, "The honest-band boundary".*
 - **Still true of the weekly surfaces:** MatchupDetail's "Score Range · 25–75" is
   `projection_consensus.p25/p50/p75` under `BAND_Z`/`SKEW_GAIN`, which 8c deliberately **held**, and matchup
   μ/`proj` is `Σ center_ppr` straight from consensus, bypassing `CENTER_SHRINK`. Applying the shrink to the
@@ -88,21 +85,32 @@ the honestly-retired cross-time market, the wired-but-dark ROS band, and the hon
 
 **P5 (accounts + invite-gated self-serve onboarding) is the active block** — 7 sessions, S0–S6, the
 critical-path long pole. Everything but S6 is buildable against the 2025 replay now, so the preseason
-runway is for building and Gate A is for verifying. **P5/S0 done — the cold-league latency spike, and it
-reshaped the connect UX:** a never-before-seen league goes from nothing to loadable in **10.3s** full-season
-/ **~3.8s** at a Week-1 shape, but the Manager Dossier's cross-league fan-out adds **80s and 248 Sleeper
-calls** — 8× everything else. So the connect flow is **staged**: the four fast surfaces on a spinner in
-~10s, the dossier behind its own progress state. The chain is **network-bound, not compute-bound** (only
-the spine is CPU-bound, at 0.6s), so the S3 worker is **1 GB `shared-cpu-1x` + a 1 GB volume, ~$7/month
-flat to 200 leagues** — buy RAM, not CPU. Shared-substrate reuse is **proven** (133 watched files
-byte-identical across two cold runs; a fresh 2026 ppr+half build is 0.42s). The harness
-(`serve/bench_cold_league.py`) is committed so **S3 re-runs it unchanged on the worker** and the two
-numbers compare directly. → `sessions/v1/P5-Self_Serve/SESSION_P5_S0_REPORT.md`.
+runway is for building and Gate A is for verifying.
 
-**Next: P5/S1** (Supabase Auth + user model + the invite gate). Two things still queue behind calendar
-gates, neither blocking P5: **loading the first real 2026 league** at Will's draft (~late Aug) — a manual
-admin load, not P5 — which data-proves S2's refresh, S3b's band panel and S4a's regimes at once and **must
-verify the ROS-range panel against real band data**; and **S4b** (market turn-on) post-launch.
+**P5/S0 done — the cold-league latency spike, and it reshaped the connect UX.** A cold league is loadable in
+a **measured 8.4–10.3s**, but the Manager Dossier's cross-league fan-out adds **80s / 248 Sleeper calls**,
+and its own source calls that a once-per-season job. So connect is **staged**: the four fast surfaces on a
+spinner, manager profiling as a separate deferred job class. Network-bound, not compute-bound → the S3
+worker is **1 GB `shared-cpu-1x` + a 1 GB volume, ~$7/mo flat to 200 leagues** (that's *worker* cost; the
+per-league cost that scales is metered per token). Shared-substrate reuse proven.
+`serve/bench_cold_league.py` is committed so **S3 re-runs it unchanged on the worker**.
+→ `sessions/v1/P5-Self_Serve/SESSION_P5_S0_REPORT.md` + its audit.
+
+**P5/S1 done — the app has a front door, and it is live.** Supabase Auth, **magic link**, invite-only:
+account creation is gated at the *project*, so there is no app-code check to bypass and no invite-list
+table; `scripts/invite.py` is the one way in. The API verifies access tokens (ES256) against the project's
+JWKS and exposes **`/api/me`** — the *only* gated endpoint. Every other read stays open by design:
+authentication without scoping is a half-gate, so closing and scoping the reads is **S2**, one change with
+one proof. Proven live: an uninvited address is refused two independent ways, `/api/me` 401s on
+missing/garbage/forged/expired (the forged token carried the project's real `kid`, so the live JWKS was
+fetched to reject it) and 503s when the verifier is unreachable, and **all 12 reads are byte-identical**
+to their pre-session payloads. → `sessions/v1/P5-Self_Serve/SESSION_P5_S1_REPORT.md`.
+
+**Next: P5/S2** (ownership + API-layer per-user isolation — the security session; do not let a fast cadence
+compress it, since isolation bugs fail silently). Two things still queue behind calendar gates, neither
+blocking P5: **loading the first real 2026 league** at Will's draft (~late Aug) — a manual admin load, not
+P5 — which data-proves S2's refresh, S3b's band panel and S4a's regimes at once and **must verify the
+ROS-range panel against real band data**; and **S4b** (market turn-on) post-launch.
 → `ROADMAP.md` + `projects/v1/BUILD_ORDER.md` + `projects/v1/P5_ACCOUNTS_SELF_SERVE_ONBOARDING.md`.
 
 ## Deferred / parked (not blocking; each picked up in its project)
@@ -135,6 +143,11 @@ verify the ROS-range panel against real band data**; and **S4b** (market turn-on
   confidence tier, because asserting an unmeasured confidence is exactly how `ros_cv` shipped inverted.
   Note `bracket_odds.proj_wins` reaches **no client** today, so "playoff wins" has no surface to carry a
   signal until it does.
+- **`ros_player_band` has RLS disabled** while the other 13 served tables have it enabled (found in P5/S1) —
+  RLS was turned on by hand, then a later `--emit`/`--load` recreated that table without it. Zero practical
+  exposure today (the owner role bypasses RLS and the Data API is off), but it shows the general failure:
+  **any out-of-band property on a `schema.sql` table is destroyed by the next full load.** The durable fix is
+  to make `--emit` emit the `ALTER TABLE … ENABLE ROW LEVEL SECURITY` lines; **S2 owns it.**
 - **`weekly_refresh._resolve_scoring_key` would silently mis-score a stranger's league** (found in P5/S0).
   A league absent from `demo_manifest` falls back to `data_layer._active_league(season)[1]` — *the owner's*
   scoring key. Every user's league is absent from the catalog until the connect flow catalogs it, so this

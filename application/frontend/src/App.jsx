@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { loadWeeks, loadLeagueMeta, loadLeagues, setActiveSlice } from './queries.js';
+import { loadWeeks, loadLeagueMeta, loadLeagues, setActiveSlice, setAuthToken } from './queries.js';
+import { supabase } from './supabase.js';
+import SignIn from './SignIn.jsx';
 import { TAB_ICONS, IconChevronLeft } from './icons.jsx';
 import Placeholder from './Placeholder.jsx';
 import Players from './Players.jsx';
@@ -52,6 +54,8 @@ export default function App() {
   const [leagues, setLeagues] = useState(null);   // the /api/leagues catalog (lineages → seasons)
   const [slice, setSlice] = useState(null);       // active { lineageId, leagueId, season, viewerRosterId, name, panels }
   const [switching, setSwitching] = useState(false);
+  const [session, setSession] = useState(null);   // the Supabase session (P5/S1), null = signed out
+  const [signInOpen, setSignInOpen] = useState(false);
 
   // Apply a slice: publish it to queries.js SYNCHRONOUSLY (so the reloads below scope to it),
   // clear the drill-down, then reload the new slice's weeks and snap the week to its latest.
@@ -71,6 +75,30 @@ export default function App() {
       .catch((e) => console.error('Could not load weeks', e))
       .finally(() => setSwitching(false));
   };
+
+  // Auth (P5/S1). Publish the token to queries.js on EVERY auth event, not just sign-in:
+  // onAuthStateChange also fires for TOKEN_REFRESHED, and a token that stops being republished
+  // there silently starts failing about an hour after sign-in. Publishing is synchronous and
+  // happens before any dependent reload, mirroring applySlice's ordering rule above.
+  // This effect deliberately does NOT gate the catalog load below — the public demo stays
+  // browsable signed out, so signing in ADDS your leagues (S2) rather than unlocking the app.
+  // `supabase` is null when the build has no Supabase config: sign-in is then unavailable and
+  // says so, while the demo carries on. Auth breaking must not break the app around it.
+  useEffect(() => {
+    if (!supabase) return;
+    supabase.auth.getSession().then(({ data }) => {
+      setAuthToken(data.session?.access_token);
+      setSession(data.session ?? null);
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
+      setAuthToken(next?.access_token);
+      setSession(next ?? null);
+      if (next) setSignInOpen(false);
+    });
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  const signOut = () => supabase?.auth.signOut();
 
   // Startup: load the catalog, then default to the is_mine lineage's latest season (the catalog
   // lists is_mine first). Setting this default slice explicitly is parity-safe — its league_id +
@@ -133,7 +161,11 @@ export default function App() {
         lineage={currentLineage}
         onLeague={switchLeague}
         onSeason={switchSeason}
+        session={session}
+        onSignIn={() => setSignInOpen(true)}
+        onSignOut={signOut}
       />
+      {signInOpen && <SignIn onClose={() => setSignInOpen(false)} />}
       <main className="gr-main">
         {!slice || switching ? (
           <div className="gr-view"><div className="gr-state">Loading…</div></div>
@@ -222,7 +254,8 @@ function DetailShell({ onBack, children }) {
   );
 }
 
-function TopBar({ tab, onTab, weeks, asOfWeek, onWeek, league, leagues, slice, lineage, onLeague, onSeason }) {
+function TopBar({ tab, onTab, weeks, asOfWeek, onWeek, league, leagues, slice, lineage, onLeague,
+                  onSeason, session, onSignIn, onSignOut }) {
   return (
     <header className="gr-topbar">
       <div className="gr-brand">
@@ -255,10 +288,35 @@ function TopBar({ tab, onTab, weeks, asOfWeek, onWeek, league, leagues, slice, l
         <WeekSwitcher weeks={weeks} value={asOfWeek} onChange={onWeek} />
       </div>
 
-      <div className="gr-avatar" title={league?.myOwner ?? 'You'}>
-        {(league?.myOwner ?? 'Y').slice(0, 1).toUpperCase()}
-      </div>
+      <Account session={session} league={league} onSignIn={onSignIn} onSignOut={onSignOut} />
     </header>
+  );
+}
+
+// The top-right identity slot (P5/S1). Signed OUT it is exactly what it has always been — the
+// avatar derived from the demo league's owner — plus a way in; the logged-out view is
+// unchanged by design. Signed IN the avatar becomes the REAL account rather than the demo
+// league's owner, because two identity widgets side by side, one of them fictional, is worse
+// than either alone.
+function Account({ session, league, onSignIn, onSignOut }) {
+  const email = session?.user?.email;
+  if (!email) {
+    return (
+      <div className="gr-account">
+        <button className="gr-signin-btn" onClick={onSignIn}>Sign in</button>
+        <div className="gr-avatar" title={league?.myOwner ?? 'You'}>
+          {(league?.myOwner ?? 'Y').slice(0, 1).toUpperCase()}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="gr-account">
+      <button className="gr-signout-btn" onClick={onSignOut}>Sign out</button>
+      <div className="gr-avatar gr-avatar-auth" title={email}>
+        {email.slice(0, 1).toUpperCase()}
+      </div>
+    </div>
   );
 }
 

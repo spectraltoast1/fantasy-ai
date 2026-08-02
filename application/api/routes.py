@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from application.api import reads
+from application.api import auth, db, reads
 
 router = APIRouter(prefix="/api")
 
@@ -30,6 +30,30 @@ def slice_params(league_id: str | None = None, season: int | None = None,
     if league_id is not None and not reads.slice_exists(league_id):
         raise HTTPException(status_code=404, detail=f"unknown league_id {league_id}")
     return {"league_id": league_id, "season": season, "viewer_roster_id": viewer_roster_id}
+
+
+_UPSERT_APP_USER = """
+INSERT INTO public.app_users (id, email) VALUES (%(id)s, %(email)s)
+ON CONFLICT (id) DO NOTHING
+"""
+
+
+@router.get("/me")
+def me(user: dict = Depends(auth.current_user)) -> dict:
+    """The authenticated caller's identity — the one endpoint S1 gates.
+
+    Every OTHER read stays open this session, deliberately. Authentication without per-user
+    scoping is a half-gate that looks like security while every caller still sees every
+    league; closing and scoping the reads is one coherent change with one coherent proof, and
+    that is S2.
+
+    Recording the profile row here — rather than in a database trigger on ``auth.users`` — keeps
+    the behavior in reviewable code instead of invisible DDL, and costs one no-op INSERT per
+    call. Deliberately narrow: id and email only, because the user→league ownership model is
+    S2's and inventing it early guarantees rework.
+    """
+    db.execute(_UPSERT_APP_USER, {"id": user["id"], "email": user["email"]})
+    return {"id": user["id"], "email": user["email"]}
 
 
 @router.get("/weeks")

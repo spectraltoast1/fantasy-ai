@@ -21,18 +21,34 @@ export function setActiveSlice(slice) {
   _slice = slice || {};
 }
 
+// The caller's access token (P5/S1), or null when signed out. Same shape as `_slice` above and
+// for the same reason: this is the ONE place a request is assembled, so it is the one place
+// auth attaches — no view component learns that auth exists. App publishes it from Supabase's
+// onAuthStateChange, which fires on sign-in, sign-out AND token refresh; a token that stops
+// being republished on refresh silently starts failing an hour after sign-in.
+let _token = null;
+
+// Set (or clear, with null) the bearer token sent on every subsequent request.
+export function setAuthToken(token) {
+  _token = token || null;
+}
+
 // GET `${API}${path}` with the active slice + per-call `params` as the query string. `as_of_week`
 // (or any null/undefined param) is OMITTED so the server applies its "latest week" default — the
 // old `n == null → latest` seam; unset slice fields drop the same way. Per-call params win on a key
 // collision. Throws on a non-2xx, mirroring the DuckDB-era `query()` so views' existing
 // loading/error states keep working. Returns the parsed JSON (which may be `null` — e.g. an
 // unknown roster/matchup — matching the old loaders).
+// The bearer token rides along when signed in. Every read endpoint is still OPEN this session
+// (S1 is identity; scoping is S2), so a signed-out request is unchanged and the public demo
+// keeps working exactly as before — sending the header is forward-wiring, not a gate.
 async function apiGet(path, params = {}) {
   const qs = Object.entries({ ..._slice, ...params })
     .filter(([, v]) => v != null)
     .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
     .join('&');
-  const res = await fetch(`${API}${path}${qs ? `?${qs}` : ''}`);
+  const res = await fetch(`${API}${path}${qs ? `?${qs}` : ''}`,
+    _token ? { headers: { Authorization: `Bearer ${_token}` } } : undefined);
   if (!res.ok) throw new Error(`GET ${path} → ${res.status}`);
   return res.json();
 }

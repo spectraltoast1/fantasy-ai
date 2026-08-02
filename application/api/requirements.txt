@@ -5,3 +5,7 @@ fastapi==0.118.0
 uvicorn[standard]==0.37.0
 psycopg[binary]==3.2.10
 python-dotenv==1.1.1
+# P5/S1 auth. The ONE dependency this session adds: it verifies Supabase's ES256 tokens and,
+# via its own PyJWKClient (urllib under the hood, with a TTL cache), fetches the project's
+# JWKS — so no HTTP client is needed alongside it.
+pyjwt[crypto]==2.13.0
