@@ -150,11 +150,14 @@ Part 5 — the frontend:
   demo stays browsable EXACTLY as it is today. Do NOT trim the demo slate, freeze a week, or add any metric
   explainer — both are wanted, both are scoped as separate work, neither is this session.
 
-Prove it (all four demonstrated, not asserted):
+Prove it (all five demonstrated, not asserted):
 1. An invited address can sign in and reach the app.
 2. An UNINVITED address cannot obtain a session — show the attempt failing.
 3. /api/me returns identity on a valid token and 401 on each of: no token, forged token, expired token.
-4. PARITY: with the shell signed in, every existing read returns byte-identical payloads to today. A payload
+4. SESSION PERSISTENCE: sign in, fully close the browser, reopen — still signed in, no second magic link.
+   Use supabase-js's persisted session + token refresh; do NOT hand-roll token storage. A user who gets
+   emailed a link on every visit will read the product as broken.
+5. PARITY: with the shell signed in, every existing read returns byte-identical payloads to today. A payload
    that moves is a bug under the standing rule, not an acceptable side effect.
 
 Scope guard — this session does NOT: scope any read to a user, build the ownership model, write RLS
@@ -175,10 +178,13 @@ commit that was never deployed has bitten this project before (P0/B3).
 2. An **uninvited** email **cannot obtain a session** — demonstrated, with the failure shown.
 3. `GET /api/me` returns the caller's identity on a valid token and **401** on each of a missing, forged, and
    expired token — all three demonstrated.
-4. **Parity holds:** every existing read returns byte-identical payloads with the shell signed in.
-5. A logged-out visitor still browses the demo exactly as today — unchanged, not merely "still works."
-6. The **service-role key appears nowhere** in the frontend bundle, the image, or git — verified, not assumed.
-7. Merged **and redeployed**, with the live URL confirming the sign-in screen is actually there.
+4. **The session survives a browser restart.** Sign in, fully close the browser, reopen — still signed in, no
+   second link. Demonstrated, not assumed. It is easy to build magic-link auth that technically authenticates
+   but doesn't persist, and the symptom is every user being emailed on every visit, which reads as broken.
+5. **Parity holds:** every existing read returns byte-identical payloads with the shell signed in.
+6. A logged-out visitor still browses the demo exactly as today — unchanged, not merely "still works."
+7. The **service-role key appears nowhere** in the frontend bundle, the image, or git — verified, not assumed.
+8. Merged **and redeployed**, with the live URL confirming the sign-in screen is actually there.
 
 ## Scope guard
 
