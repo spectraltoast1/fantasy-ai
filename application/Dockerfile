@@ -13,6 +13,19 @@ WORKDIR /web
 # Install deps first for layer caching (lockfile-exact, reproducible).
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
+# Supabase config for the SPA (P5/S1). These MUST be build args: Vite inlines
+# `import.meta.env.VITE_*` at build time, .dockerignore strips every .env from the build
+# context, and Fly *secrets* reach the running machine rather than the builder — so a .env or
+# a secret would both yield a bundle with `undefined` config and a sign-in button that does
+# nothing. Values live in fly.toml's [build.args] so a bare `fly deploy` stays correct.
+# The anon key is publishable by design (it ships in the bundle either way) and this project's
+# Data API is disabled with RLS deny-by-default, so it opens nothing. The service-role key must
+# NEVER appear here — build args are readable in image history.
+# Declared AFTER `npm ci` so changing a key doesn't invalidate the dependency-install layer.
+ARG VITE_SUPABASE_URL
+ARG VITE_SUPABASE_ANON_KEY
+ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL \
+    VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY
 # Build the SPA. frontend/public/data (the parquet symlinks) is excluded by
 # .dockerignore, so `vite build` copies no parquet into dist — the image stays lean.
 COPY frontend/ ./

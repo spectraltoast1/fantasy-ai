@@ -5,6 +5,16 @@ app = "fantasy-ai-api"
 primary_region = "iad"
 
 [build]
+  # Supabase config for the SPA (P5/S1). Build args, not secrets: Vite inlines these at BUILD
+  # time, and `fly secrets` only reach the running machine. Committed here on purpose so a bare
+  # `fly deploy` is correct — this project has already shipped a merged-but-undeployed change
+  # (P0/B3) and a stale bundle (S4a); a deploy that needs a remembered --build-arg would be a
+  # third way to break it. Both values are public: the anon key ships in the JS bundle
+  # regardless, and this project's Data API is disabled with RLS deny-by-default, so it opens
+  # nothing. The service-role key is admin-grade and lives ONLY in application/config.py.
+  [build.args]
+    VITE_SUPABASE_URL = "https://llanqdqzgncekvybasyd.supabase.co"
+    VITE_SUPABASE_ANON_KEY = "REPLACE_ME"
 
 [http_service]
   internal_port = 8080

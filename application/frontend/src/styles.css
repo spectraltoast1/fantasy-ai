@@ -171,6 +171,53 @@ body {
   color: var(--violet-light); font-weight: 800; font-size: 12px;
 }
 
+/* ---- Account / sign-in (P5/S1) -------------------------------------------- */
+/* Occupies the avatar grid area so the topbar's 5-column layout is untouched. */
+.gr-account { grid-area: avatar; display: flex; align-items: center; gap: 10px; }
+.gr-avatar-auth { background: var(--violet); border-color: var(--violet); color: var(--on-violet); }
+
+.gr-signin-btn, .gr-signout-btn {
+  font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+  padding: 6px 12px; border-radius: var(--r-ctl); white-space: nowrap;
+}
+.gr-signin-btn { background: var(--violet); border: 1px solid var(--violet); color: var(--on-violet); }
+.gr-signout-btn { background: transparent; border: 1px solid var(--border-2); color: var(--muted); }
+.gr-signout-btn:hover { color: var(--text-2); border-color: var(--border-3); }
+
+.gr-overlay {
+  position: fixed; inset: 0; z-index: 40;
+  display: grid; place-items: center; padding: 20px;
+  background: rgba(6, 8, 12, 0.72);
+}
+.gr-signin {
+  position: relative; width: min(420px, 100%);
+  background: var(--surface); border: 1px solid var(--border-2);
+  border-radius: var(--r-card); padding: 28px;
+}
+.gr-signin-x {
+  position: absolute; top: 12px; right: 14px;
+  background: none; border: none; color: var(--faint);
+  font-size: 22px; line-height: 1; cursor: pointer; padding: 4px;
+}
+.gr-signin-x:hover { color: var(--text-2); }
+.gr-signin-title { margin: 0 0 6px; font-size: 19px; font-weight: 800; color: var(--text); }
+.gr-signin-lede { margin: 0 0 18px; font-size: 13px; color: var(--text-3); line-height: 1.5; }
+.gr-signin-input {
+  width: 100%; box-sizing: border-box; font: inherit; font-size: 14px;
+  padding: 10px 12px; margin-bottom: 10px;
+  background: var(--canvas); color: var(--text);
+  border: 1px solid var(--border-2); border-radius: var(--r-ctl);
+}
+.gr-signin-input:focus { outline: none; border-color: var(--violet-border); }
+.gr-signin-go {
+  width: 100%; font: inherit; font-size: 14px; font-weight: 700; cursor: pointer;
+  padding: 10px; border-radius: var(--r-ctl);
+  background: var(--violet); border: 1px solid var(--violet); color: var(--on-violet);
+}
+.gr-signin-go:disabled { opacity: 0.6; cursor: default; }
+.gr-signin-err { margin: 12px 0 0; font-size: 12px; color: var(--rebuild); }
+.gr-signin-note { margin: 16px 0 0; font-size: 11.5px; color: var(--faint); line-height: 1.5; }
+
 /* ---- Main content --------------------------------------------------------- */
 .gr-main { padding: 26px; }
 .gr-page { max-width: 1120px; margin: 0 auto; }
@@ -696,7 +743,10 @@ body {
     column-gap: 12px;
     padding: 12px 16px;
   }
-  .gr-avatar { justify-self: end; }
+  /* The account cluster now owns the `avatar` grid area (P5/S1); keep it right-aligned and
+     let the sign-in/out button shrink rather than push the header wider on a phone. */
+  .gr-avatar, .gr-account { justify-self: end; }
+  .gr-signin-btn, .gr-signout-btn { padding: 5px 10px; font-size: 11.5px; }
 
   /* League + week become tappable cards (mockup look). */
   .gr-league {
