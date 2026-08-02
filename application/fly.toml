@@ -9,12 +9,24 @@ primary_region = "iad"
   # time, and `fly secrets` only reach the running machine. Committed here on purpose so a bare
   # `fly deploy` is correct — this project has already shipped a merged-but-undeployed change
   # (P0/B3) and a stale bundle (S4a); a deploy that needs a remembered --build-arg would be a
-  # third way to break it. Both values are public: the anon key ships in the JS bundle
-  # regardless, and this project's Data API is disabled with RLS deny-by-default, so it opens
-  # nothing. The service-role key is admin-grade and lives ONLY in application/config.py.
+  # third way to break it. Both values are public: the PUBLISHABLE key (sb_publishable_…, which
+  # replaced the legacy anon JWT) ships in the JS bundle regardless, and this project's Data API
+  # is disabled with RLS deny-by-default, so it opens nothing. The SECRET key is admin-grade,
+  # is not a JWT, and lives ONLY in application/config.py — never a build arg, since those are
+  # readable in image history.
   [build.args]
     VITE_SUPABASE_URL = "https://llanqdqzgncekvybasyd.supabase.co"
-    VITE_SUPABASE_ANON_KEY = "REPLACE_ME"
+    VITE_SUPABASE_PUBLISHABLE_KEY = "sb_publishable_L7TWXDY4KQHYecu78tWnlQ_YlYwZYNW"
+
+# Runtime env for the API. SUPABASE_URL is needed in BOTH places and it is easy to miss the
+# second: the build arg above reaches `vite build` only, while the API resolves this at request
+# time to derive the JWKS endpoint and the expected token issuer. The image ships no config.py,
+# so without this every /api/me returns 503 "auth is not configured" — which the post-deploy
+# check caught. Declared here rather than as a Fly secret because it is not secret (it is in
+# every URL the browser hits) and a declared value keeps a bare `fly deploy` correct.
+# The genuinely secret values (DATABASE_URL, MY_USERNAME, LEAGUE_ID) remain Fly secrets.
+[env]
+  SUPABASE_URL = "https://llanqdqzgncekvybasyd.supabase.co"
 
 [http_service]
   internal_port = 8080

@@ -18,14 +18,14 @@ RUN npm ci
 # context, and Fly *secrets* reach the running machine rather than the builder — so a .env or
 # a secret would both yield a bundle with `undefined` config and a sign-in button that does
 # nothing. Values live in fly.toml's [build.args] so a bare `fly deploy` stays correct.
-# The anon key is publishable by design (it ships in the bundle either way) and this project's
-# Data API is disabled with RLS deny-by-default, so it opens nothing. The service-role key must
-# NEVER appear here — build args are readable in image history.
+# The publishable key is public by design (it ships in the bundle either way) and this
+# project's Data API is disabled with RLS deny-by-default, so it opens nothing. The SECRET key
+# must NEVER appear here — build args are readable in image history.
 # Declared AFTER `npm ci` so changing a key doesn't invalidate the dependency-install layer.
 ARG VITE_SUPABASE_URL
-ARG VITE_SUPABASE_ANON_KEY
+ARG VITE_SUPABASE_PUBLISHABLE_KEY
 ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL \
-    VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY
+    VITE_SUPABASE_PUBLISHABLE_KEY=$VITE_SUPABASE_PUBLISHABLE_KEY
 # Build the SPA. frontend/public/data (the parquet symlinks) is excluded by
 # .dockerignore, so `vite build` copies no parquet into dist — the image stays lean.
 COPY frontend/ ./

@@ -12,9 +12,15 @@ no such path. Sharing stays word-of-mouth; the mouth just routes through Will, w
 point — nobody consumes pipeline compute on the single worker without him knowing.
 
 Lives in `scripts/` rather than `application/api/` on purpose: the Dockerfile copies the whole
-api package into the image, and admin tooling that reads a service-role key has no business
-being in the served image. The key comes from `application/config.py` (gitignored) or the
-environment, and is never passed as an argument — shell history is a file too.
+api package into the image, and admin tooling that reads a secret key has no business being in
+the served image. The key comes from `application/config.py` (gitignored) or the environment,
+and is never passed as an argument — shell history is a file too.
+
+Uses Supabase's CURRENT secret key (`sb_secret_…`), which replaced the legacy `service_role`
+JWT. Because the new keys are opaque strings rather than JWTs they belong in the `apikey`
+header and NOT in `Authorization`; sending both still works today only as backward
+compatibility when the values match. Verified against the live project: `apikey` alone → 200,
+`Authorization` alone → 401.
 
 Uses stdlib urllib: no dependency, so it runs under any of the project's interpreters.
 """
@@ -34,18 +40,20 @@ from application.api import settings  # noqa: E402
 
 
 def _call(path: str, *, method: str = "GET", body: dict | None = None) -> dict:
-    base, key = settings.supabase_url(), settings.supabase_service_role_key()
+    base, key = settings.supabase_url(), settings.supabase_secret_key()
     if not base or not key:
         raise SystemExit(
-            "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set.\n"
-            "Add them to application/config.py (the gitignored secret home) — the service-role\n"
-            "key is admin-grade: never git, never the Docker image, never the SPA bundle."
+            "SUPABASE_URL and SUPABASE_SECRET_KEY must be set.\n"
+            "Add them to application/config.py (the gitignored secret home) — the secret key is\n"
+            "admin-grade: never git, never the Docker image, never the SPA bundle."
         )
     req = urllib.request.Request(
         f"{base}/auth/v1{path}", method=method,
         data=json.dumps(body).encode() if body else None,
-        headers={"apikey": key, "Authorization": f"Bearer {key}",
-                 "Content-Type": "application/json"},
+        # `apikey` only — see the module docstring. No Authorization header: the secret key is
+        # not a JWT, and relying on the matching-values compatibility path would be borrowing
+        # against a deprecation.
+        headers={"apikey": key, "Content-Type": "application/json"},
     )
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:

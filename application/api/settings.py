@@ -16,9 +16,16 @@ depends on it (the env var wins there).
   JWKS endpoint and the expected token issuer from it. Not a secret; it is in every URL the
   browser already hits. Stored explicitly rather than parsed out of ``DATABASE_URL``'s pooler
   username, which is where the project ref happens to appear but is not a contract.
-- ``supabase_service_role_key()`` — admin-grade, for the local invite script ONLY. It never
-  belongs in the deployed image, the SPA bundle, or git, so there is deliberately no Fly
-  secret for it: the API never calls an admin endpoint.
+- ``supabase_secret_key()`` — admin-grade, for the local invite script ONLY. It never belongs
+  in the deployed image, the SPA bundle, or git, so there is deliberately no Fly secret for
+  it: the API never calls an admin endpoint.
+
+Note the key names are Supabase's CURRENT ones — publishable / secret (``sb_publishable_…`` /
+``sb_secret_…``), not the legacy ``anon`` / ``service_role`` JWTs they replace. The practical
+difference for this code: the new keys are opaque strings rather than JWTs, so they go in the
+``apikey`` header and NOT in ``Authorization`` (verified against the live project: ``apikey``
+alone → 200, ``Authorization`` alone → 401). None of this touches token verification in
+``auth.py`` — a user's access token is still an ES256 JWT checked against the project's JWKS.
 """
 
 from __future__ import annotations
@@ -55,6 +62,7 @@ def supabase_url() -> str | None:
     return str(url).rstrip("/") if url else None
 
 
-def supabase_service_role_key() -> str | None:
-    """The admin key for the local invite script. Absent in the deployed image, by design."""
-    return os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or _config_attr("SUPABASE_SERVICE_ROLE_KEY")
+def supabase_secret_key() -> str | None:
+    """The admin key (``sb_secret_…``) for the local invite script. Absent in the deployed
+    image, by design — the API never calls an admin endpoint."""
+    return os.environ.get("SUPABASE_SECRET_KEY") or _config_attr("SUPABASE_SECRET_KEY")

@@ -13,6 +13,8 @@ in `sessions/` and `_deprecated/`; deep mechanism rationale lives in `context/ap
   `projections.py`) over **Supabase-hosted Postgres** (`DATABASE_URL`).
 - **Frontend** — React + Vite SPA (`application/frontend/`): Players, Teams, League, Matchups, Manager
   Dossier.
+- **Auth** — **Supabase Auth**, magic link, invite-only (P5/S1). The API verifies the caller's access token
+  (ES256) against the project's published JWKS; the SPA holds only the **publishable** key.
 - **Hosting** — one Fly.io app (`fantasy-ai-api`, region `iad`) serves the built SPA at `/` and `/api` on the
   **same origin** (no CORS) from a multi-stage Docker image. Live at https://fantasy-ai-api.fly.dev/;
   scale-to-zero.
@@ -63,6 +65,11 @@ substrate shared by every league on the same profile, stamped with each slice's 
 engine-improvement **ledger** (predictions / outcomes / resolutions / scorecard) is deliberately **not** in
 the served store — it's the tuning/validation spine. → *see appendix: store-schema, engine-improvement-loop.*
 
+**Plus `app_users`, outside all of that on purpose (P5/S1).** `serve/schema.sql` is *generated* by `--emit`
+and applied by `--load`, which DROPs every table it names — so the auth table lives in hand-written
+`api/auth_schema.sql` instead, and `init_auth_schema.py --verify` asserts it stays absent from the generated
+DDL. → *see appendix: auth.*
+
 **The honest-band boundary.** `ros_player_band` is served only from `build_db.FIRST_HONEST_BAND_SEASON`
 (2026) onward. Below it the band belongs to the **frozen corpus** — built at pre-8c `CENTER_SHRINK=1.0` and
 the artifact the immutable L2 ledger was derived from — so those files are never loaded and never rebuilt
@@ -74,10 +81,16 @@ re-backfill — the annual pipeline's job.
 
 `/health` · `/health/db` · `/api/weeks` · `/api/league-meta` · `/api/players` · `/api/players/{id}` ·
 `/api/standings` · `/api/teams/{id}` · `/api/managers/{id}` · `/api/league` · `/api/positional-talent` ·
-`/api/matchups` · `/api/matchups/{id}` · `/api/leagues` (catalog). **Read-only** — there is no write/ingest
-surface. Every read takes an optional `?league_id=`(+`?season=`+`?viewer_roster_id=`) via the `slice_params`
-dependency, defaulting to the owner's league (a 404 guards an unknown `league_id`); `/api/leagues` is the one
-unscoped catalog read.
+`/api/matchups` · `/api/matchups/{id}` · `/api/leagues` (catalog) · `/api/me` (identity). **Read-only** —
+there is no write/ingest surface. Every read takes an optional `?league_id=`(+`?season=`+`?viewer_roster_id=`)
+via the `slice_params` dependency, defaulting to the owner's league (a 404 guards an unknown `league_id`);
+`/api/leagues` is the one unscoped catalog read.
+
+**`/api/me` is the only gated endpoint.** It takes the `auth.current_user` dependency and returns the
+verified caller (401 on a missing/forged/expired token, 503 when the JWKS can't be reached — denied either
+way, but an outage stays distinguishable from a bad credential). Every other read is deliberately still
+**open**: authentication without per-user scoping is a half-gate, so closing and scoping the reads is one
+change with one proof, and that is P5/S2.
 
 **Two gates, two questions.** `readiness.jsx` answers *"is there enough data yet"* (`Gate` + the `BANDS`
 ladder, keyed to **`weeksOfData`** — weeks with real RESULTS as of the viewed week, from `/api/weeks`'s
@@ -112,10 +125,18 @@ fallback, so the band is the honest, wide, position-typical prior until games sh
 - **Viewer identity** — `viewer_roster_id` (per league, from the catalog) is the "you" seam; a request with no
   `viewer_roster_id` falls back to `MY_USERNAME`'s roster (the default). The `MY_USERNAME` Fly secret stays as
   that default resolver.
-- **Multi-user / auth** — none today: single-tenant, one owner-role Postgres connection that bypasses RLS.
-  RLS is deny-by-default on every public table and the unused Data API is disabled, so the DB isn't externally
-  reachable — defense-in-depth, not authz. Per-user isolation is the API's job in P5; Postgres was chosen so
-  **Supabase Auth** is a later bolt-on. → `projects/v1/` (P5).
+- **Auth — live, identity only (P5/S1).** Supabase Auth, **magic link**, invite-only: account creation is
+  gated at the *project*, so there is no app-code check to bypass and no invite-list table
+  (`scripts/invite.py` is the one way in). `auth.current_user` verifies the access token (ES256) against the
+  project's JWKS; the SPA attaches the bearer token in one place (`queries.js`'s `apiGet`); a
+  `public.app_users` row is written on first authenticated call. Keys are Supabase's current
+  **publishable/secret** pair, and the SPA's config reaches it as a **Docker build arg** while the API needs
+  `SUPABASE_URL` at **runtime** — needing it in both places is the easy thing to miss.
+  → *see appendix: auth.*
+- **Per-user isolation — NOT yet.** Every read except `/api/me` is still open, and the app still connects as
+  one owner-role Postgres connection that bypasses RLS. RLS is deny-by-default on every public table and the
+  unused Data API is disabled — defense-in-depth, not authz. Scoping each read to its owner is **P5/S2**, in
+  the API layer, not an RLS-policy build. → `projects/v1/` (P5).
 
 ## Scope & rules
 
