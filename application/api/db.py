@@ -84,3 +84,18 @@ def fetch_all(sql: str, params: dict | None = None) -> list[dict]:
     with connect() as conn, conn.cursor() as cur:
         cur.execute(sql, params or {})
         return cur.fetchall()
+
+
+def execute(sql: str, params: dict | None = None) -> int:
+    """Run one write on a fresh connection, commit, and return the affected row count.
+
+    The API's first write path (P5/S1 — recording a user's profile row on first sign-in).
+    Everything else here is read-only, and the store's own data is written by the loader, not
+    by the API: this exists for the small app-side tables auth introduces, not as a general
+    door into the served store. Same server-side binding as ``fetch_all``.
+    """
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(sql, params or {})
+        n = cur.rowcount
+        conn.commit()
+        return n
