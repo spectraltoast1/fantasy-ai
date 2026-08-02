@@ -164,6 +164,50 @@ next full load. Logged in STATUS for **S2**; the durable fix is to make `--emit`
 
 ---
 
+## OPEN DECISION FOR THE PM — the invite model may be wrong (raised post-merge, 2026-08-02)
+
+**Will, after using it: "I don't plan to be manually adding people as users, I plan for them to
+self-serve signing up. The word of mouth part is just that I won't be trying to drive unknown
+people to my corner of the internet."**
+
+That is *discovery* being word-of-mouth, not *provisioning*. The brief read it as provisioning —
+decision 1 says "give Will a one-command admin invite… nobody consumes pipeline compute on the
+single worker without him knowing" — and S1 built exactly that. **So the shipped configuration
+blocks the behaviour Will actually wants**, in two independent places, both deliberate:
+
+| block | where |
+|---|---|
+| "allow new users to sign up" is OFF | the Supabase project |
+| `shouldCreateUser: false` | `SignIn.jsx:30` |
+
+Measured just now: a brand-new address hits **422 `otp_disabled`**. Every prospective user gets
+that until both are reversed. Reversing them is ~2 lines and a dashboard toggle — the question is
+not cost, it's what replaces the gate.
+
+**What the gate was actually buying, and where that protection has to move.** The brief's stated
+rationale was compute safety: one volume-pinned worker, and no stranger able to queue a job on it
+without Will knowing. Open signup removes that entirely, which makes three already-planned things
+**load-bearing rather than belt-and-braces**:
+
+- **S0's compute caps** (per-user connected-league cap, daily global job ceiling) stop being
+  prudence and become the only thing bounding the worker.
+- **S5's preflight rejection** becomes the first line of defence against junk leagues, not a
+  politeness feature.
+- **S2's isolation** matters more, not less: with open signup, "another user" is anyone on the
+  internet rather than someone Will personally admitted.
+
+**Also worth re-checking: the Week-1 email burst.** Will's read is that the rate limit "is unlikely
+to be burned at any other time than right now," which is right for a trickle. But `BUILD_ORDER.md`
+plans the opposite shape — *"Week 1 ready for the whole cohort… everyone onboards around kickoff
+rather than trickling in."* A simultaneous cohort onboard against a free-tier sender that allows a
+couple of emails an hour is a bad Week 1, and S1 burned that budget with only one real user in the
+system. Custom SMTP was deferred by the brief as a "log it" item; if signup goes self-serve **and**
+onboarding is a burst, it stops being deferrable. That is the PM's call, but it should be made
+against the roadmap's own onboarding shape rather than against steady state.
+
+**Recommendation:** settle the signup model before S2 starts, because it changes what S2 is
+defending against. Nothing needs reverting today — the app works, and Will is signed in.
+
 ## For S2
 
 - **Per-user isolation is the whole job**, in the API layer (the owner role bypasses RLS, so this
