@@ -1,7 +1,11 @@
 # P5 — Signup model: word-of-mouth *discovery* vs *provisioning*
 
-**Written:** 2026-08-02 · **By:** Code, at Will's request, as input to a PM correction
-**Status:** Assessment + recommendation. **Nothing has been changed.** S1 is shipped and live as built.
+**Written:** 2026-08-02 · **Updated:** 2026-08-02 after Will's decisions · **By:** Code, as input to a PM
+correction
+**Status:** **Direction settled by Will — a shared access code.** Also settled: **Cohorts A and B collapse**
+into word-of-mouth friends at the draft, and Will has already flipped `allow new users to sign up` to **ON**
+in the project. What remains is the build (not yet done) and two things the PM must record — see
+*Where this leaves us right now* and *Questions*.
 
 ---
 
@@ -23,16 +27,47 @@ constraint, and it is worth stating as a design criterion rather than a preferen
 must be zero.** Note what it does *not* say — it isn't a wish for the door to be open to everyone, it's a
 refusal to be the bottleneck. Those come apart, and the gap between them is where the workable answer lives.
 
-## What is built, and exactly what blocks the intent
+**Root cause, per Will: the pilot doc is stale and was never kept current.** *"The pilot doc is a little bit
+old and hasn't really been updated properly… that's also on me for not directly instructing my PM sessions
+to update it as things have changed."* This matters beyond this decision. `pilot-2026.md` is an
+**appendix**, and `CODING_BIBLE` §7's anti-bloat discipline is written for `STATUS`/`ARCHITECTURE` — it says
+appendices are where depth *goes*, but nothing says who keeps them true. So an appendix can quietly drift
+into fiction while still being cited as authority, which is exactly what happened: the cohort gates were
+being reasoned from as current when they no longer reflected intent. **Fix the doc as part of this
+correction, and give appendices an explicit owner-on-change rule** — otherwise the next session inherits the
+same trap from a different file.
 
-Self-serve signup is blocked in two independent places, both deliberate, both trivial to reverse:
+## Where this leaves us right now — read this bit
 
-| block | location | measured effect |
+Will has already flipped the project setting. Verified live via `GET /auth/v1/settings`:
+**`disable_signup: false`.** So of the two blocks S1 shipped, one is gone:
+
+| block | status | note |
 |---|---|---|
-| `allow new users to sign up` = OFF | Supabase project setting | new address → **422 `otp_disabled`** |
-| `shouldCreateUser: false` | `frontend/src/SignIn.jsx:30` | the SPA cannot mint an account even if the project allowed it |
+| `allow new users to sign up` = OFF | **removed by Will** | the platform now permits account creation |
+| `shouldCreateUser: false` (`SignIn.jsx:30`) | **still in place** | the only remaining barrier |
+| copy: *"Invite-only while in testing"* | still in place | now inaccurate; change with the build |
 
-Plus one line of copy: *"Invite-only while in testing"* in the sign-in overlay.
+**The consequence is worth stating plainly, because it is the exact thing the brief argued against.** The
+gate has moved from the platform (where there is no path around it) into **frontend code** (where there is).
+The publishable key ships in the public JS bundle by design, so `POST /auth/v1/otp` with
+`create_user: true` can be called directly, bypassing the SPA entirely. One line of client code is not a
+gate; it is a speed bump with the instructions printed on it.
+
+**How much does that matter today? Modestly, and it is bounded:**
+
+- **Not a data exposure.** Every read is open anyway this session (that's S2's job), and the only thing an
+  account currently buys is `/api/me` plus the demo that logged-out visitors already see.
+- **No compute exposure yet.** There is no connect-a-league flow until S4, so nobody can queue work on the
+  worker regardless.
+- **The real exposure is the email budget** — and that is not hypothetical: S1 exhausted the free-tier
+  sender with one real user, which locked Will out of his own product for the better part of an hour.
+  Anyone able to mint accounts can consume it, and the result is a denial of sign-in for real users.
+
+**So the access code is now load-bearing rather than nice-to-have, and its priority went up.** Until it
+ships there is no enforceable gate at all. That is an acceptable interim position — the window is small,
+the surface is thin, and nobody is being pointed at the site — but it should be a *known* interim position
+rather than a discovered one.
 
 **Nothing else in S1 is affected.** Token verification, `/api/me`, `app_users`, the `apiGet` token seam, the
 build plumbing, the parity guarantee — all independent of signup policy. **This is a policy correction, not
@@ -49,16 +84,30 @@ rework.** Whichever option below is chosen, the auth mechanism stands.
 - **Cohort C** — **strangers — "held back"**, and only after the Week-8 engine gate:
   *"**Do not open Cohort C. Do not market.** The gate exists to be obeyed."*
 
-**Fully open signup opens Cohort C on day one** — not by intent, but by mechanism. The invite gate is
-currently the thing that makes "held back" *enforceable* rather than aspirational.
+**Will's revision (2026-08-02): collapse A and B into one cohort — word-of-mouth friends, onboarding at the
+draft.** The access code is what holds C back, and forwarding is explicitly fine: *"If someone forwards it
+to someone, it won't break things."* That is coherent, and it is a better fit for how this will actually go
+than a two-stage cohort ramp.
 
-The honest nuance: if Will only ever tells people he knows, the people who arrive *are* Cohort B, and
-nothing bad happens. The risk isn't Will's behaviour — it's that an open door has **no failure mode**. One
-forwarded link, one screenshot, one search-indexed URL, and strangers are in a product whose own pilot plan
-says they must not be, during the weeks the engine is still being certified.
+**One thing the collapse quietly drops, which the PM should re-decide rather than inherit.** The staging
+wasn't only about who — it was about *when*, and there was a gate between the stages:
 
-So the question is not *"open or gated?"* It is: **how does Will stop provisioning people without also
-opening the door to everyone?**
+> *"**Week 4** | Data quality: no scoring-key collision, no anchor-fusion bug, health ≥95%, every Cohort-A
+> league resolving. | Fix before trusting any downstream number. **Cohort B stays closed.**"*
+
+Cohort A existed to shake out data-quality bugs on Will's own leagues *before* anyone else saw a number.
+Collapsing A into B means friends are looking at the product during exactly the weeks that gate was meant to
+protect. That may well be the right trade — they're friends, expectations are calibrated by that, and the
+engine's honesty work already withholds what a thin sample can't support (S4a: no posture chip, no clinch
+magic number, no trend direction under three weeks). But it *is* a trade, and "we decided the week-4 gate
+was worth skipping for friends" is a very different record from "the gate was quietly lost when the cohorts
+merged."
+
+**Recommendation:** keep the week-4 data-quality checks as a *checklist Will runs*, even without a cohort
+boundary to enforce them. The gate's value was never the boundary — it was the list.
+
+So the design question stands unchanged: **how does Will stop provisioning people without also opening the
+door to everyone?**
 
 ---
 
@@ -120,10 +169,31 @@ Flip both switches, rely entirely on caps and preflight.
 - ❌ Removes the compute protection with nothing yet built to replace it (S0's caps and S5's preflight are
   designed but not implemented).
 
-**Recommendation: Option 1 now, Option 2's shape later.** The code satisfies Will's model and the pilot plan
-simultaneously, today, with the least building. Option 2's identity/entitlement split is the right structure
-once there's a reason to let strangers hold accounts — which by the pilot's own schedule is after the Week-8
-gate.
+**DECIDED (Will, 2026-08-02): Option 1 — the shared access code.** *"I like the shared access code, I didn't
+know that would be an option… If someone forwards it to someone, it won't break things."* Option 2's
+identity/entitlement split remains the right structure later, once there is a reason to let strangers hold
+accounts.
+
+### What building it involves
+
+Small, and it should land before anyone is pointed at the site — it is currently the only gate there would
+be:
+
+- **Where the check goes.** At signup, in the API — *not* in the SPA. That is the whole lesson of the
+  current interim state: a client-side check is bypassable because the publishable key is public. Concretely
+  the SPA can't be the enforcement point, so either signup routes through an API endpoint that validates the
+  code before calling Supabase, or the code gates the *connect* action server-side (Option 2's shape) while
+  signup stays open.
+- **Where the code lives.** `application/config.py` + a Fly secret is enough for one code — no table, no
+  admin UI. A `codes` table only if per-code attribution ("who did this spread through?") is ever wanted.
+- **Rotation is the response to a leak**, and should be one config change, not a migration.
+- **Copy.** The overlay's *"Invite-only while in testing"* becomes a code field with honest wording.
+- **`scripts/invite.py`** loses its reason to exist as an invite tool; keep `--list`, and it is the natural
+  home for the `--ban` this model now needs.
+
+**Sequencing note:** this is S1-shaped work arriving after S1 shipped. It is small enough to be a bounded
+follow-on session rather than an S2 add-on, and it should not be folded into S2 — S2 is the isolation
+session and its proof should stay about isolation.
 
 ---
 
@@ -155,15 +225,28 @@ One thing that *disappears* under any self-serve option: the **invited-but-uncon
 account reads as a signup to GoTrue until the invite is accepted once). That's a wrinkle of the invite flow
 specifically, and it caused the dead end Will hit while testing.
 
-## Questions the PM should settle
+## Settled by Will
 
-1. **Does self-serve signup override the pilot plan's Cohort-C gate, or must it coexist with it?** This is
-   the actual fork; everything else follows from it. If the gate stands, Option 1. If Will judges the gate
-   obsolete, that is a deliberate revision to `pilot-2026.md` and should be recorded as one — not absorbed
-   silently by a config change.
-2. **What is the intended cohort size at Week 1?** The caps in S0's report were sized against 10 / 50 / 200
-   connected leagues; the pilot plan says ~5 people. Those imply very different urgency for S4's queue.
-3. **Is custom SMTP in or out for Week 1?** Self-serve plus a burst onboard makes the free-tier sender a
-   launch dependency rather than a nuisance.
-4. **Who owns the correction to the P5 brief?** Decision 1 and the S1 row both encode the provisioning
-   reading and should be rewritten so a future session doesn't rebuild the same gate.
+1. **Mechanism:** a shared access code (Option 1).
+2. **Cohorts:** A and B collapse into word-of-mouth friends at the draft. Forwarding the code is acceptable.
+3. **Project setting:** `allow new users to sign up` is already ON.
+
+## Still for the PM
+
+1. **Update `pilot-2026.md` — it is the root cause, not a footnote.** The A/B collapse, the access code, and
+   whatever survives of the Cohort-C line all need writing in. Right now the doc says *"Do not open Cohort
+   C. Do not market"* alongside a project that permits open signup, and a future session reading it will
+   reason from fiction. **Also worth a durable rule: appendices need an owner-on-change, the way STATUS and
+   ARCHITECTURE do under CODING_BIBLE §7.** This miscommunication is what an unmaintained appendix costs.
+2. **Does the week-4 data-quality gate survive the A/B collapse, as a checklist rather than a boundary?**
+   (See the cohort section — recommended yes.)
+3. **Correct the P5 brief.** Decision 1 and the S1 session row both encode the provisioning reading; leave
+   them and a future session rebuilds the same gate.
+4. **When does the access code get built?** It is currently the only gate that would exist, and one line of
+   frontend code is standing in for it. Recommend a bounded follow-on session before anyone is pointed at
+   the site — explicitly *not* folded into S2.
+5. **Is custom SMTP in or out for Week 1?** Unchanged by these decisions and still open. A burst onboard at
+   the draft against a free-tier sender is a launch dependency, not a nuisance — S1 exhausted that budget
+   with a single user.
+6. **What cohort size should the caps be sized for?** S0's caps were costed at 10 / 50 / 200 connected
+   leagues; the collapsed cohort is far smaller, which changes how urgent S4's queue really is.
