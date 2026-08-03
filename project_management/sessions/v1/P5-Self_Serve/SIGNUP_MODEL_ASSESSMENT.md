@@ -18,6 +18,11 @@ users, I plan for them to self-serve signing up."*
 Same three words, two different systems. The brief's version puts Will in the loop per user; Will's version
 puts him in the loop for *promotion* only.
 
+**Will's reason, stated:** *"to limit the touching I have to do to onboard users."* That is the operative
+constraint, and it is worth stating as a design criterion rather than a preference: **per-user manual work
+must be zero.** Note what it does *not* say — it isn't a wish for the door to be open to everyone, it's a
+refusal to be the bottleneck. Those come apart, and the gap between them is where the workable answer lives.
+
 ## What is built, and exactly what blocks the intent
 
 Self-serve signup is blocked in two independent places, both deliberate, both trivial to reverse:
@@ -58,6 +63,18 @@ opening the door to everyone?**
 ---
 
 ## Three options
+
+Scored against both constraints — Will's (**zero per-user touch**) and the pilot plan's (**Cohort C stays
+closed**):
+
+| | per-user touch | Cohort C held back | build cost |
+|---|---|---|---|
+| **1 · shared access code** | **zero** | **yes** | small |
+| 2 · open signup, entitlement to connect | zero *if* auto-granted; provisioning if not | no | medium |
+| 3 · fully open | zero | **no** | none |
+
+Only Option 1 satisfies both. Options 1 and 3 tie on Will's constraint — so the code costs him **nothing he
+was trying to avoid**, and buys back the gate for free.
 
 ### Option 1 — A shared access code (RECOMMENDED)
 
