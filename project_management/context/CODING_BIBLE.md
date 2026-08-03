@@ -107,6 +107,23 @@ self-contained, and let the SOT link to it, so an agent pulls exactly the contex
 more. **Pushing content out can mean either folding it into an existing scoped appendix or creating a new
 one** — whichever keeps the set coherent; don't duplicate a topic across two appendices.
 
+**Appendices need an owner-on-change — an unmaintained appendix is worse than no appendix.** STATUS and
+ARCHITECTURE are kept current by every session; nothing said who keeps an appendix true, so one can quietly
+drift into fiction while still being *cited as authority*. That is not hypothetical — it cost this project a
+whole session (P5/S1: `pilot-2026.md`'s cohort gates were reasoned from as current long after Will's intent
+had changed, and a brief was written from them). The rule:
+
+- **Every appendix carries a `Current as of: <date>` line** directly under its title.
+- **An appendix older than the last project boundary is STALE BY DEFAULT.** A session may not reason from a
+  stale appendix's claims — it must confirm them against live state (or Will) first, and **re-stamp the date
+  when it does**. Confirming costs a minute; inheriting a fossil costs a session.
+- **A session whose work contradicts an appendix fixes the appendix in that same session.** Not "logs it" —
+  fixes it. This is the same discipline STATUS already has, extended to where the depth actually lives.
+- **Corollary for briefs, and it is the real lesson: a decision is not made until it is in the document.**
+  Chat, a report, or a summary is not a system of record. If a brief and a conversation disagree, the brief
+  is what gets executed — so the brief is what must be right, and it must be updated *in the same turn* the
+  decision changes. Verify the file; don't remember the file.
+
 **Keep the SOT skimmable.** A new agent should orient from STATUS + ARCHITECTURE in ~2 minutes. Length is a
 smell: past a few hundred lines, condense and push detail out — before it accretes, not after.
 

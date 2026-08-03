@@ -68,7 +68,8 @@ let Gate A (Will's draft, ~late Aug) be a verification batch rather than a build
 | Session | Goal | Scope | Definition of done |
 |---|---|---|---|
 | **S0 — Latency spike** | Know what "connect" actually costs | Time a **brand-new** league end to end (not a re-run — the pipeline's per-step gates make a repeat look artificially fast); report the per-step split (fetch / join / spine / load); confirm the 2026 ppr+half substrate is genuinely shared so per-league work excludes it | A number, a per-step breakdown, and a sizing recommendation. It decides spinner-vs-email in S4 and the machine size in S3 |
-| **S1 — Auth + user model + invite gate** | The app knows who is asking | Wire **Supabase Auth** (magic link); a minimal `app_users` profile; token verification via the project's **JWKS** endpoint (asymmetric, not the legacy shared HS256 secret); public signup **off** so the gate lives in the platform, not app code | An invited person signs in; an uninvited address **cannot obtain a session**, demonstrated; `/api/me` 401s on missing/forged/expired; every existing read stays byte-parity identical → `sessions/v1/P5-Self_Serve/SESSION_P5_S1_AUTH_AND_INVITE.md` |
+| **S1 — Auth + user model** ✅ *shipped 2026-08-02* | The app knows who is asking | Wire **Supabase Auth** (magic link); a minimal `app_users` profile; token verification via the project's **JWKS** endpoint (asymmetric, not the legacy shared HS256 secret) | Magic-link sign-in works; `/api/me` 401s on missing/forged/expired; session survives a browser restart; every existing read stays byte-parity identical → `sessions/v1/P5-Self_Serve/SESSION_P5_S1_AUTH_AND_INVITE.md` |
+| **S1b — The shared access code** ⚠️ *NOT YET BUILT — currently the only gate, and it is client-side* | Self-serve signup, strangers still out | Validate a shared access code **server-side at signup** (an API endpoint that checks the code before calling Supabase — **not** the SPA, whose publishable key is public by design); code in config + a Fly secret; rotation = one config change; honest copy; `scripts/invite.py` keeps `--list`, gains `--ban` | A stranger with the URL cannot create an account; a person with the code can, with **zero per-user work from Will**; the check is proven un-bypassable from the client → `sessions/v1/P5-Self_Serve/SESSION_P5_S1B_ACCESS_CODE.md` |
 | **S2 — Ownership + API-layer isolation** | Users see only their leagues | A user→league ownership model; **scope every read to the authenticated caller in the API layer** (NOT an RLS-policy build — the owner role bypasses RLS); scope `/api/leagues`; move viewer identity from a *league* property to a ***user × league*** property | A logged-in user sees only their leagues plus the public demo; a direct request for another user's `league_id` is **denied, demonstrated**. **The security session — do not let a fast cadence compress it; isolation bugs are silent** |
 | **S3 — The Fly worker + the store boundary** | The laptop stops being infrastructure | Stand up a **separate Fly app** + volume; seed it per the one-directional store-ownership rule above (write it as an ADR first); run the **existing pipeline unchanged** there, replay league → prod Postgres. No queue yet — a manually triggered run | The full pipeline completes on the worker for a replay league and lands in Postgres, byte-parity with a local run. Will can power off his laptop and it still works |
 | **S4 — The job queue + connect flow** | A user can ask for their league | A Postgres `jobs` table (no new infra — you already have transactional Postgres and the job count is in the dozens); worker leases one job at a time; states `queued → validating → fetching → building → loading → ready \| rejected \| failed`; the connect endpoint + a progress screen | A league already in the demo slate is onboarded through the **real** flow end to end, with progress visible and a clean re-submit |
@@ -99,12 +100,25 @@ let Gate A (Will's draft, ~late Aug) be a verification batch rather than a build
 
 - **Identity mapping** — Sleeper username → app user; one user with many leagues; and the *user × league*
   viewer change described in Context. S2 must settle this.
-- **The invite mechanism, given there is no invite list (Will, 2026-07-31).** Sharing is word-of-mouth. Three
-  shapes: (a) **admin-invite** — a person asks Will, Will runs one command; word-of-mouth still works, the
-  mouth just routes through him, and nobody can consume pipeline compute without his knowledge;
-  (b) **invite codes** — self-serve with a code, but a code can be forwarded; (c) **open signup** — drops the
-  gate entirely and exposes the single worker to unbounded jobs. **(a) recommended at this cohort size**, with
-  (b) as the natural upgrade when being in the loop stops being cheap.
+- **~~The invite mechanism~~ — SETTLED 2026-08-02: a shared access code (Option 1).** *This bullet previously
+  recommended admin-provisioning and that recommendation was wrong.* "Word of mouth" describes **discovery**, not
+  **provisioning** — Will's constraint is that **per-user manual work must be zero**, which is not the same as
+  wanting the door open to everyone. Signup is self-serve; completing it requires a code Will hands out however
+  he's already talking to the person. Forwarding it is fine (that *is* word of mouth); a leak is answered by
+  rotating the code. The check must live **server-side**, because the SPA's publishable key ships in the public
+  bundle — a client-side check is a speed bump with the instructions printed on it. Option 2's identity/entitlement
+  split stays the right long-term shape, once there's a reason to let strangers hold accounts.
+  → full analysis: `sessions/v1/P5-Self_Serve/SIGNUP_MODEL_ASSESSMENT.md`
+- **Cohort — SETTLED 2026-08-02.** Pilot cohorts A and B collapse into one word-of-mouth cohort at the draft:
+  **Will's one qualifying league + friends ≈ 10–15 leagues.** The pilot's **week-4 data-quality gate survives as a
+  checklist Will runs**, not a cohort boundary (`context/appendices/pilot-2026.md`). Cohort C is still held back —
+  by the access code now, not a calendar.
+- **Custom SMTP is a Week-1 DEPENDENCY, not a nicety.** Supabase's built-in auth email sender is **2 messages per
+  hour**, documented as non-production and best-effort to **pre-authorized addresses only**. S1 exhausted it with
+  one real user and locked Will out of his own product for an hour. Self-serve signup without custom SMTP means a
+  friend requests a link and may simply never receive one — with no support channel. Free tiers (e.g. Resend's
+  100/day) cover a 10–15 league cohort many times over, and configuring custom SMTP also raises Supabase's own
+  baseline to 30/hour.
 
 ## Risks / notes
 

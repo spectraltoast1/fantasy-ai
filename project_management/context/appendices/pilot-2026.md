@@ -1,7 +1,13 @@
 # The 2026 Pilot — Test Plan
 
 **Created:** 2026-07-12 · **Rewritten:** 2026-07-12 — *the corpus changed what this is for*
-**Status:** proposed
+**Current as of: 2026-08-03** — cohorts A+B collapsed into one word-of-mouth cohort held by a shared access
+code; the week-4 gate survives as a **checklist, not a boundary** (see *Cohorts*). **Status:** current.
+
+> **Why this stamp exists.** This doc's cohort plan was reasoned from as authoritative *after* Will's intent
+> had changed, and a P5 session brief was written from the stale reading — costing a session. Per
+> `CODING_BIBLE` §7, an appendix past the last project boundary is **stale by default**: confirm its claims
+> before acting on them, and **re-stamp this date** when you do.
 **Companions:** [`engine-corpus.md`](./engine-corpus.md) · [`engine-improvement-loop.md`](./engine-improvement-loop.md) · [`_deprecated/audits/712_BACKEND_AUDIT.md`](../_deprecated/audits/712_BACKEND_AUDIT.md)
 
 ---
@@ -57,29 +63,49 @@ easier with a corpus.
 
 ## Cohorts
 
-### Cohort A — your own leagues · **2–3** · onboard at draft (late Aug)
-You. Full instrumentation, zero support burden, zero social cost when it breaks.
+> **REVISED 2026-08-03 (Will).** Cohorts A and B are **collapsed into one cohort**: word-of-mouth friends,
+> onboarding at the draft. The staged A→B ramp is gone; what holds Cohort C back is now a **shared access
+> code**, not a calendar. The original A/B text is preserved below as *why the staging existed*, because one
+> thing it carried is still load-bearing — see *The week-4 checklist* — but **it is no longer the plan.**
 
-**This is the whole pilot for the first 4 weeks.** It exercises all four un-backfillable items except the
-human-behaviour one — and it exercises that too, for one human, which is enough to prove the plumbing.
+### The one cohort — Will's league + word-of-mouth friends · **~10–15 leagues** · onboard at draft (late Aug)
 
-> Make at least two of them **different scoring** (PPR + half, say). Not for statistical power — the
-> corpus has that — but because it's the only way to be sure the live `scoring_key` path is right before
-> anyone else touches it.
+Will qualifies **one** league of his own; friends extend it to roughly 10–15 leagues total. Discovery is
+word of mouth — Will is not driving unknown people to the site. **Provisioning is self-serve**: signup is
+open, and completing it requires a **shared access code** Will hands out however he's already talking to the
+person. He never does per-user work. Forwarding the code is explicitly fine — a friend passing it to a
+league-mate *is* word of mouth. A leak is answered by rotating the code, not by cleanup.
 
-### Cohort B — friendly humans · **~4–6 people** · week 4+, gated
-The minimum needed for **decision-touch and divergence** to have any *n*. They can be inside your own
-leagues — you don't need new leagues, you need new *people making decisions*.
+> Still true, and still worth doing: get **more than one scoring key** into that first wave (PPR + half).
+> Not for statistical power — the corpus has that — but because it is the only way to prove the live
+> `scoring_key` path before anyone trusts a number. **This is not idle caution: P5/S0 found
+> `weekly_refresh._resolve_scoring_key` silently falling back to the *owner's* key for any league not yet in
+> the catalog** — i.e. every user league. That is the exact collision the week-4 gate was written to catch.
 
-**Gate:** only after week 4's data-quality check.
+> Note the inversion the original plan drew, which survives intact: **the corpus wants leagues; the pilot
+> wants *decisions*.** A second manager in a league Will already runs is worth more to the pilot than a whole
+> new league — and costs almost nothing.
 
-> Note the inversion: **the corpus wants leagues; the pilot wants *decisions*.** A second manager in a
-> league you already run is worth more to the pilot than a whole new league — and costs you almost
-> nothing.
+### The week-4 checklist — the gate survives, the boundary does not
 
-### Cohort C — strangers · **held back**
-**Gate:** the week-8 engine gate. Shipping an uncalibrated confidence signal to a stranger is a law-2
-violation with a real person on the other end.
+Cohort A existed so data-quality bugs surfaced on Will's own leagues *before* anyone else saw a number.
+Collapsing A into B means friends see the product during exactly those weeks. **That is a deliberate trade,
+not an oversight** — they're friends, expectations are calibrated by that, and S4a's honesty work already
+withholds what a thin sample can't support (no posture chip, no clinch magic number, no trend direction under
+three weeks).
+
+**But the value of that gate was never the boundary — it was the list.** So it stays, as a checklist Will
+runs at week 4 regardless of who is looking:
+
+- [ ] **No scoring-key collision** — every connected league resolves its *own* key, not the owner's.
+- [ ] **No anchor-fusion bug** — the prior-season anchor is flagged, never silently fused.
+- [ ] **Collector health ≥95%**.
+- [ ] **Every connected league resolving** — no silent partial slices.
+
+### Cohort C — strangers · **still held back** · now held by the access code
+**Gate:** unchanged — the week-8 engine gate. Shipping an uncalibrated confidence signal to a stranger is a
+law-2 violation with a real person on the other end. **What changed is only the mechanism:** the code is what
+keeps a stranger who finds the URL from getting in. *Do not publish the code publicly, and do not market.*
 
 *(Consent: your stance is that public Sleeper data is fair game, and for the corpus that's a coherent
 position — you're reading completed public seasons and nobody is being served anything. It gets less
@@ -140,7 +166,7 @@ Add a second question and they stop answering the first.
 |---|---|---|
 | **Pre-kickoff** | Corpus retune complete; all quantitative reads certified **out-of-sample**; ledger schema live. | You are shipping unearned constants. Don't. |
 | **Pre-kickoff** | Live path writes `served=true` rows for Cohort A. Collectors off-laptop. | **Do not onboard anyone.** An un-instrumented week is unrecoverable. |
-| **Week 4** | Data quality: no scoring-key collision, no anchor-fusion bug, health ≥95%, every Cohort-A league resolving. | Fix before trusting any downstream number. **Cohort B stays closed.** |
+| **Week 4** | Data quality: no scoring-key collision, no anchor-fusion bug, health ≥95%, every connected league resolving. | Fix before trusting any downstream number. **(Revised 2026-08-03: a checklist Will runs, not a cohort boundary — the A/B collapse removed the boundary, not the list.)** |
 | **Week 8** | **THE ENGINE GATE.** §2 AI confidence honesty monotone **and** the corpus-tuned quantitative reads holding their certified numbers live. | **Do not open Cohort C. Do not market.** The gate exists to be obeyed. |
 | **Week 12** | Decision-touch baseline established; divergence-adjudication has readable *n*. | Re-scope the surface, not the engine. |
 | **Season end** | Fold 2026 into the corpus. Retune on 6–7 seasons. | This is now an *annual* ritual, not a one-off. |
@@ -154,10 +180,10 @@ Add a second question and they stop answering the first.
 | **Jul 12 – Jul 26** | L0 keying · **corpus harvester** · probe 2020 projections | — |
 | **Jul 26 – Aug 16** | Ledger schema (backfilled) · **scorer** · **retune all constants OOS** | — |
 | **Mid–late Aug** | *Fix what the corpus broke* (superflex / division / custom scoring **will** break something) | Move collectors off-laptop |
-| **Late Aug (draft)** | corpus frozen for the season | Onboard **Cohort A** (2–3 of your leagues, mixed scoring). Verify `served=true` rows. |
-| **Weeks 1–4** | — | Live path bedding in. Data-quality gate. |
-| **Weeks 4–8** | — | **Cohort B** (~5 humans). L5 AI eval + champion/challenger on §2. |
-| **Weeks 8–18** | — | L6 proposer. Cohort C **only if** the week-8 gate passed. |
+| **Late Aug (draft)** | corpus frozen for the season | Onboard **the one cohort** — Will's league + word-of-mouth friends (~10–15 leagues, mixed scoring), self-serve behind the access code. Verify `served=true` rows. |
+| **Weeks 1–4** | — | Live path bedding in. **Week-4 data-quality checklist** (above). |
+| **Weeks 4–8** | — | L5 AI eval + champion/challenger on §2. *(No cohort step here any more — everyone is already in.)* |
+| **Weeks 8–18** | — | L6 proposer. Cohort C **only if** the week-8 gate passed — i.e. don't publish the code or market. |
 | **Post-season** | Fold 2026 in · retune on 6–7 seasons | — |
 
 **The recruiting window (late Aug, draft season) still matters — but it matters much less now.** You need
