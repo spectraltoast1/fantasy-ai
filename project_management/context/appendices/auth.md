@@ -1,31 +1,65 @@
 # Appendix — Auth (how the front door actually works)
 
 **Scope:** the mechanism behind ARCHITECTURE's Auth bullet. Read this when touching sign-in, keys,
-the deploy plumbing, or the `app_users` table. Shipped P5/S1 (2026-08-02);
-`sessions/v1/P5-Self_Serve/SESSION_P5_S1_REPORT.md` has the session narrative and the proofs.
+the deploy plumbing, or the auth tables. Shipped P5/S1, signup model corrected in **S1b**
+(2026-08-03); the session reports in `sessions/v1/P5-Self_Serve/` carry the narratives and proofs,
+and `SIGNUP_MODEL_ASSESSMENT.md` records why the model changed.
 
 ---
 
-## The invite gate is a project setting, not app code
+## The gate: self-serve signup behind a shared access code
 
-Account creation is off at the Supabase project ("allow new users to sign up"). There is therefore
-**no signup path for app code to guard, and no invite-list table to get wrong** — a check in code
-can be bypassed if any other signup path exists; a project that refuses to create users has no such
-path. `scripts/invite.py` (`invite <email>` / `--list`) is the one sanctioned way in.
+**S1 got this wrong and S1b fixed it.** The S1 brief read "word of mouth" as *provisioning* — Will
+invites each person by hand — when he meant only that he wouldn't promote the site. The correction
+turns on a distinction the original argument missed: **platform-signup-OFF does not imply a human
+provisions people.** Turn it off, and let *the API* perform the admin action automatically when a
+valid code is presented.
 
-Measured behaviour, same endpoint and key each time, account state the only variable:
+That gets both properties at once:
 
-| account state | result |
-|---|---|
-| uninvited, `create_user=false` (what the SPA sends) | 422 `otp_disabled` |
-| uninvited, `create_user=true` (a sloppier client) | 422 `signup_disabled` |
-| invited but **unconfirmed** | 422 `signup_disabled` |
-| invited **and confirmed** | passes the gate |
+- **Zero per-user work.** The API is the admin, not Will.
+- **Un-bypassable.** With platform signup off there is no public path to account creation except
+  the endpoint that checks the code. The gate is not a line of client code — it is the *absence of
+  any other door*. This matters concretely: the publishable key ships in the SPA bundle by design,
+  so anything checked in the browser can be walked around with a direct call to Supabase. S1
+  briefly shipped exactly that state, and it is what S1b exists to close.
 
-**The unconfirmed row is an onboarding fact worth knowing:** an invited-but-unconfirmed account
-still looks like a *signup* to GoTrue, so magic link is refused until the invite is accepted once.
-The invite email is a one-time bootstrap; after it, magic link works normally. Expect at least one
-"I was invited and it says signups are disabled" report.
+**The code is required on every request, from everyone** — not only at account creation. That buys
+a hard property: *no valid code, no email is ever sent, to anyone.* It also keeps one uniform path,
+so there is no "does this account exist?" branch to leak whether an address is registered. Nothing
+is lost later: when signup opens to the public, `signInWithOtp` handles create-or-send natively and
+`api/signup.py` gets **deleted** rather than promoted — it is transitional scaffolding by design.
+
+Rotation is one config change (`ACCESS_CODE` here and the Fly secret); the old value stops working
+immediately, with no table to migrate. If the code spreads further than intended, the response is
+`scripts/users.py --ban` on the accounts plus a rotation.
+
+`api/signup.py` fails **closed** — missing config, unreachable Supabase, anything unexpected
+refuses the request. `api/rate_limit.py` deliberately fails **open**, because it is a nuisance
+control rather than an authorization one and a database hiccup should not mean nobody can sign in.
+
+### The rate limiter is in Postgres because it has to be
+
+`fly.toml` runs **two** machines with `min_machines_running = 0` and `auto_stop_machines = "stop"`.
+In-process state would be split across both (an attacker gets ~double the budget) and, worse,
+**erased whenever a machine stops** — so the limiter could be reset by waiting out the idle window.
+A limiter you defeat by being patient is not a limiter. Hence `public.signup_attempts`, and hence
+the check that it still bites from a brand-new process.
+
+What it is actually defending: the code is chosen to be sayable out loud, so it is low-entropy by
+construction. **Brute-force resistance is the first job**, protecting the email send budget the
+second. Client IP comes from Fly's `Fly-Client-IP` header — `request.client.host` is Fly's proxy,
+identical for every caller, so limiting on it would throttle all users as one.
+
+## Custom SMTP is a hard dependency, not a nicety
+
+Supabase's built-in auth sender is documented as **"best-effort only and intended for
+non-production use cases"**, is capped at **"2 messages per hour"**, and — the decisive part —
+**"will refuse to deliver messages to addresses that are not part of the project's team."**
+
+So without custom SMTP, *no friend can receive a magic link at all*. Not slowly: not at all. That
+is also why S1's invite reached Will and nobody else would have — he is the project owner.
+Configuring custom SMTP raises Supabase's own baseline to 30 messages/hour.
 
 ## Token verification — asymmetric, fail-closed
 
@@ -73,8 +107,12 @@ This is the part that is easy to get wrong, and it bit once during S1.
 - **The API needs `SUPABASE_URL` at RUNTIME**, to derive the JWKS endpoint and the expected issuer.
   The image ships no `config.py`, so without `fly.toml`'s `[env]` every `/api/me` returns 503 "auth
   is not configured". S1's first deploy did exactly this.
+- **S1b added two runtime SECRETS**, which is a different category again: `ACCESS_CODE` and
+  `SUPABASE_SECRET_KEY` are `fly secrets`, never build args (those are readable in image history)
+  and never committed. So the full set is: build args for the SPA's public values, `[env]` for the
+  public URL, and secrets for the two private ones.
 
-Both are committed rather than passed as flags, so a **bare `fly deploy` stays correct** — this
+The non-secret values are committed rather than passed as flags, so a **bare `fly deploy` stays correct** — this
 project has already shipped a merged-but-undeployed change (P0/B3) and a stale bundle (S4a); a
 deploy that needs a remembered flag would be a third way to break it.
 
@@ -83,14 +121,15 @@ deploy that needs a remembered flag would be a third way to break it.
 console names exactly what is missing, and the overlay renders an honest unavailable state. The demo
 keeps working: auth being misconfigured must not cause more damage than the thing it broke.
 
-## `app_users` lives outside the generated schema — structurally
+## The auth tables live outside the generated schema — structurally
 
 There is **no migration mechanism in this project**. The only DDL is `serve/schema.sql`, which
 `build_db --emit` rewrites wholesale and `--load` applies after DROPping every table it names. An
 auth table listed there would be dropped by the next full reload.
 
-So it lives in hand-written `api/auth_schema.sql`, applied by `api/init_auth_schema.py`, whose
-`--verify` **asserts the table is absent from the generated DDL** — the guarantee is tested, not
+So they live in hand-written `api/auth_schema.sql` (`app_users`, and S1b's `signup_attempts`),
+applied by `api/init_auth_schema.py`, whose `--verify` **asserts they are absent from the
+generated DDL** — the guarantee is tested, not
 documented. The row is written on first authenticated `/api/me` call rather than by a database
 trigger, keeping the behaviour in reviewable code instead of invisible DDL.
 
@@ -103,7 +142,10 @@ destroyed by the next full load. The durable fix is to make `--emit` emit the RL
 
 The bearer token attaches in exactly one place: `queries.js`'s `apiGet`, as a module-level
 `_token`/`setAuthToken` pair mirroring the `_slice`/`setActiveSlice` pattern beside it. No view
-component knows auth exists. `App.jsx` republishes the token on **every** `onAuthStateChange` event,
+component knows auth exists. S1b added `apiPost` alongside it for the signup call — `apiGet` merges
+the active slice into every request (an auth call has no business carrying a `league_id`) and
+discards the response body, whereas signup is the first endpoint whose message *is* the feature and
+has to reach the person typing. `App.jsx` republishes the token on **every** `onAuthStateChange` event,
 not just sign-in — that event also fires on `TOKEN_REFRESHED`, and a token that stops being
 republished there starts failing silently about an hour in. Session persistence and refresh are
 supabase-js's own, never hand-rolled: magic-link auth that authenticates but doesn't persist emails

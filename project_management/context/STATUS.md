@@ -96,15 +96,24 @@ per-league cost that scales is metered per token). Shared-substrate reuse proven
 `serve/bench_cold_league.py` is committed so **S3 re-runs it unchanged on the worker**.
 → `sessions/v1/P5-Self_Serve/SESSION_P5_S0_REPORT.md` + its audit.
 
-**P5/S1 done — the app has a front door, and it is live.** Supabase Auth, **magic link**, invite-only:
-account creation is gated at the *project*, so there is no app-code check to bypass and no invite-list
-table; `scripts/invite.py` is the one way in. The API verifies access tokens (ES256) against the project's
-JWKS and exposes **`/api/me`** — the *only* gated endpoint. Every other read stays open by design:
-authentication without scoping is a half-gate, so closing and scoping the reads is **S2**, one change with
-one proof. Proven live: an uninvited address is refused two independent ways, `/api/me` 401s on
-missing/garbage/forged/expired (the forged token carried the project's real `kid`, so the live JWKS was
-fetched to reject it) and 503s when the verifier is unreachable, and **all 12 reads are byte-identical**
-to their pre-session payloads. → `sessions/v1/P5-Self_Serve/SESSION_P5_S1_REPORT.md`.
+**P5/S1 done — the app has a front door, and it is live.** Supabase Auth, **magic link**. The API verifies
+access tokens (ES256) against the project's JWKS and exposes **`/api/me`**, the only *authenticated*
+endpoint; it 401s on missing/garbage/forged/expired tokens and 503s when the verifier is unreachable
+(denied either way, but an outage stays distinguishable from a bad credential). Every read stays open by
+design — authentication without scoping is a half-gate, so closing and scoping the reads is **S2**, one
+change with one proof. → `sessions/v1/P5-Self_Serve/SESSION_P5_S1_REPORT.md`.
+
+**P5/S1b done — the signup model corrected.** S1 shipped an *invite* gate because the brief read "word of
+mouth" as Will provisioning each person; he meant only that he wouldn't promote the site. So signup is now
+**self-serve behind a shared access code**, enforced **server-side** at `POST /api/signup` — the API holds
+the secret key and does the admin create itself, which is what makes platform-signup-OFF compatible with
+zero per-user work. The code is required from everyone on every request, so *no valid code → no email ever
+sent*. The rate limiter lives in Postgres, not memory: two Fly machines with scale-to-zero would otherwise
+let an attacker reset it by waiting out the idle window. `scripts/invite.py` → `scripts/users.py`
+(`--list`/`--ban`/`--unban`) — nobody is invited now, but self-serve creates the need to remove someone.
+**Custom SMTP is a hard dependency**: Supabase's built-in sender *refuses* addresses that aren't project
+team members, so without it no friend can receive a link at all.
+→ `sessions/v1/P5-Self_Serve/SESSION_P5_S1B_REPORT.md` + `SIGNUP_MODEL_ASSESSMENT.md`.
 
 **Next: P5/S2** (ownership + API-layer per-user isolation — the security session; do not let a fast cadence
 compress it, since isolation bugs fail silently). Two things still queue behind calendar gates, neither

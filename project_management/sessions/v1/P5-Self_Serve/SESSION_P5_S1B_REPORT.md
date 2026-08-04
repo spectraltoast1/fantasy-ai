@@ -1,0 +1,134 @@
+# P5 · S1b — The shared access code — report
+
+**Ran:** 2026-08-03 · **Brief:** `SESSION_P5_S1B_ACCESS_CODE.md` · **Commits:** 3
+**Status: built, gate proven un-bypassable; NOT yet deployed** — two items need Will (below).
+
+---
+
+## Verdict
+
+**The gate is built and it is the un-bypassable kind.** Signup is self-serve behind a shared
+access code, checked **server-side** at `POST /api/signup`; the API holds the secret key and
+performs the admin create itself, which is what makes platform-signup-OFF compatible with zero
+per-user work for Will. The brief's central insight was right and is the thing that makes this
+work — *platform-signup-OFF does not imply a human provisions people.*
+
+The headline check passes: with platform signup off, a direct `POST /auth/v1/otp` — using the
+publishable key anyone can read out of the bundle — is refused. That is the property S1 shipped
+without and the reason this session exists.
+
+What is **not** done: **custom SMTP** and the **access code string**, both of which need Will, and
+the deploy that follows them. One DoD item is therefore untestable and one is half proven; listed
+plainly below rather than glossed.
+
+---
+
+## What shipped
+
+| | |
+|---|---|
+| `api/signup.py` | code check (`hmac.compare_digest`) + admin-create + send. Fails **closed** |
+| `api/rate_limit.py` | by IP and email, over Postgres. Fails **open**, deliberately |
+| `api/auth_schema.sql` | `+ signup_attempts`; `init_auth_schema.py` generalized to a table list |
+| `api/settings.py` | `access_code()`, `supabase_publishable_key()`; corrected the now-false "the API never calls an admin endpoint" docstrings |
+| `routes.py` | `POST /api/signup` — the API's first write endpoint and only unauthenticated one |
+| `api/check_signup.py` | the offline proof |
+| `queries.js` | `apiPost` — the seam's first POST |
+| `SignIn.jsx` | code field; posts through the seam instead of calling Supabase; honest copy |
+| `scripts/invite.py` → `users.py` | `--list` / `--ban` / `--unban` |
+| `config.example.py` | the four auth values a fresh worktree had no way to discover |
+
+---
+
+## Proven
+
+**Offline** (`check_signup.py`, no DB, no network): accepts the right code and tolerates
+surrounding whitespace (people paste from Messages); rejects a wrong code, an empty one, an
+omitted one, a **one-character near miss**, a prefix, an over-long variant, wrong case, and an
+inner-space variant. **An unconfigured server refuses everyone** — absent config never means
+"welcome". Uses `hmac.compare_digest`, so a near miss isn't distinguishable by timing. One uniform
+refusal message, asserted to contain none of *close / almost / length / exists / registered /
+unknown*.
+
+**Live, against the real project:**
+
+| check | result |
+|---|---|
+| missing / wrong / near-miss code | **403**, identical message each time |
+| malformed email | 400, before any Supabase call |
+| **valid code** | **gate opens** — account created and confirmed; the *mailer* is what then fails, which is the SMTP dependency proving itself rather than the gate |
+| rate limit | trips on the **6th** attempt for one email |
+| **limit survives a restart** | killed the process, started a fresh one — still 429. An in-memory limiter would have forgotten, which on a scale-to-zero app is how you reset it by being patient |
+| `Fly-Client-IP` | honoured when present (`request.client.host` is Fly's proxy, identical for everyone) |
+| attempt log | wrong codes are recorded, so brute-force counts against the budget rather than being free |
+| **browser, desktop + mobile** | code field renders; a wrong code shows **the server's sentence** — which is the entire reason `apiPost` surfaces `detail`, since `apiGet` would have shown `POST /signup → 403` |
+| logged-out demo | unchanged |
+
+**And the headline check (DoD 1) — the one S1's gate failed.** Will flipped platform signup OFF
+mid-session, so this is now demonstrated rather than pending. Bypassing the SPA entirely and using
+the publishable key anyone can read out of the bundle: `POST /auth/v1/otp` with `create_user: true`
+→ **422 `signup_disabled`**; with `create_user: false` → **422 `otp_disabled`**. **There is no
+public path to account creation left.** The only door is `POST /api/signup`, which checks the code
+server-side before doing anything at all. This is the property the whole session exists for, and it
+is the one S1 shipped without.
+
+---
+
+## Not proven, and why — read this before assuming the session is closed
+
+1. **A magic link arriving at a non-team inbox (DoD 6) is untestable** until custom SMTP exists.
+   Supabase's built-in sender *"will refuse to deliver messages to addresses that are not part of
+   the project's team"*. Also unverified: my planned probe of that restriction returned
+   `email_address_invalid` — Supabase rejected the *domain* I used, so that attempt tested nothing.
+   The real test is Will's `+alias` after SMTP is configured.
+2. **`--ban` is half proven (DoD 7).** The ban sets correctly — `banned_until` populates and
+   `--list` flags it — but the sign-in refusal was **masked by the email rate limit firing first**,
+   so the observed 429 does not demonstrate the ban. Re-test once SMTP raises the ceiling. Noting
+   this rather than claiming the stronger result; it is the same error class as reading a status
+   code without reading the error body, which cost time in S1.
+
+Will's account was banned and **unbanned** during the test; it is in its original state.
+
+---
+
+## Decisions worth carrying
+
+**The rate limiter had to go in Postgres, and that was forced by the deployment rather than
+taste.** `fly.toml` runs **two** machines with `min_machines_running = 0` and
+`auto_stop_machines = "stop"`. In-process state would be split across both *and erased on
+scale-to-zero* — defeatable on purpose by waiting out the idle window. Its first job is
+brute-force resistance (a code chosen to be sayable is low-entropy by construction); protecting
+the send budget is second.
+
+**Two opposite failure modes, deliberately.** `signup.py` fails **closed** — missing config,
+unreachable Supabase, anything unexpected refuses. `rate_limit.py` fails **open** — it is a
+nuisance control, not an authorization one, and a database hiccup should not mean nobody can sign
+in. The code check is what decides admission.
+
+**The posture change is real and is recorded, not slipped in.** The secret key is now a Fly
+secret, so an admin-grade credential lives in the deployed environment for the first time. That is
+the price of the gate being un-bypassable; gating in the SPA was *measured* to be no gate at all.
+
+**This endpoint is scaffolding.** When signup opens to the public, `signInWithOtp` handles
+create-or-send natively — so `signup.py` should be **deleted**, not promoted. Worth knowing before
+someone invests in it.
+
+---
+
+## What Will needs to do (~10 min, and the session can't close without it)
+
+1. ~~Turn "allow new users to sign up" OFF.~~ **Done mid-session** — verified
+   `disable_signup: true`, and the headline check passes because of it.
+2. **Pick the access code**, put it in `application/config.py` as `ACCESS_CODE`.
+3. **Create a Resend account and paste its SMTP credentials** into Supabase → Authentication →
+   SMTP Settings.
+
+Then the deploy needs two Fly secrets — `ACCESS_CODE` and `SUPABASE_SECRET_KEY` — and no
+`fly.toml` change, so a bare `fly deploy` is correct afterwards.
+
+## For S2
+
+Unchanged by this session: per-user isolation in the API layer, `/api/leagues` is still the one
+unscoped read, viewer identity still needs to become *user × league*, and the `ros_player_band`
+RLS drift still wants fixing at its source (`--emit` should emit the RLS lines). S1b touched no
+read path — the twelve reads are untouched and `slice_params` is unchanged.

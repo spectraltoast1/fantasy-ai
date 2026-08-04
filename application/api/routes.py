@@ -12,9 +12,9 @@ read to that slice. An unknown ``league_id`` 404s. ``load_leagues`` is the one u
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
-from application.api import auth, db, reads
+from application.api import auth, db, rate_limit, reads, signup
 
 router = APIRouter(prefix="/api")
 
@@ -54,6 +54,36 @@ def me(user: dict = Depends(auth.current_user)) -> dict:
     """
     db.execute(_UPSERT_APP_USER, {"id": user["id"], "email": user["email"]})
     return {"id": user["id"], "email": user["email"]}
+
+
+@router.post("/signup")
+def signup_request(request: Request, body: dict = Body(...)) -> dict:
+    """Request a sign-in link. The API's first write endpoint, and its only unauthenticated one.
+
+    Takes ``{email, code}``. The access code is required on every request from everyone — see
+    ``signup.py`` for why that is the property worth having rather than a friction to remove.
+
+    Deliberately NOT taking ``slice_params``: this has nothing to do with which league you are
+    looking at, and merging the slice into it would put a ``league_id`` on an auth call.
+
+    The response is the same whether or not the address already had an account, so it can't be
+    used to enumerate who is registered.
+    """
+    email = str(body.get("email") or "").strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Enter a valid email address.")
+
+    # Check the limit BEFORE doing any work, then record the attempt whatever the outcome — so a
+    # wrong code still counts against the budget. Recording only successes would leave the
+    # brute-force door open, which is the main thing this is defending.
+    rate_limit.check(request, email)
+    try:
+        signup.request_link(email, body.get("code"))
+    except Exception:
+        rate_limit.record(request, email, ok=False)
+        raise
+    rate_limit.record(request, email, ok=True)
+    return {"sent": True}
 
 
 @router.get("/weeks")

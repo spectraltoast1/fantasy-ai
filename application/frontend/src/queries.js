@@ -53,6 +53,44 @@ async function apiGet(path, params = {}) {
   return res.json();
 }
 
+// POST a JSON body (P5/S1b — the first write from the client). Two things `apiGet` can't do, and
+// both matter here rather than being style:
+//   1. it merges the active `_slice` into every request, and an auth call has no business
+//      carrying a `league_id`;
+//   2. it discards the response body on a non-2xx. Every read endpoint's error is a developer
+//      problem the user never sees, so throwing the status was enough. Signup is the first
+//      endpoint whose message IS the feature — "that access code isn't right" has to reach the
+//      person typing it — so this surfaces the server's `detail`.
+// Same seam rule as `apiGet`: this is where a request is assembled, so it's where the token
+// attaches. Views still never touch fetch.
+export async function apiPost(path, body) {
+  const res = await fetch(`${API}${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(_token ? { Authorization: `Bearer ${_token}` } : {}),
+    },
+    body: JSON.stringify(body ?? {}),
+  });
+  let payload = null;
+  try {
+    payload = await res.json();
+  } catch {
+    payload = null;   // a proxy error page or an empty body — fall through to the status
+  }
+  if (!res.ok) {
+    const err = new Error(payload?.detail || `POST ${path} → ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  return payload;
+}
+
+// --- Auth (P5/S1b) -----------------------------------------------------------------------
+// Ask the server to email a sign-in link. The access code is checked SERVER-side — the client
+// only carries it. Throws with the server's message on refusal, which the sign-in form shows.
+export const requestSignInLink = (email, code) => apiPost('/signup', { email, code });
+
 // --- Shared chrome -----------------------------------------------------------------------
 export const loadWeeks = () => apiGet('/weeks');
 export const loadLeagueMeta = (asOfWeek) => apiGet('/league-meta', { as_of_week: asOfWeek });
