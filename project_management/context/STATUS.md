@@ -2,7 +2,18 @@
 
 **What this is:** Gridiron — a fantasy-football decision-support dashboard whose unit is the manager's
 *decision*, not the player. Live, single-league, on the server stack.
-**Live at:** https://fantasy-ai-api.fly.dev/ · **Updated:** 2026-07-31
+**Live at:** https://fantasy-ai-api.fly.dev/ · **Updated:** 2026-08-04
+**Name + domain:** the product is being called **SurplusFF**; **surplusff.com** is registered (SSL live) and is
+the **Resend sending domain** for auth email — Supabase's custom SMTP sender, which is what makes a magic link
+reach anyone who is not a project team member. The app **also serves from surplusff.com** (Fly cert + DNS live) as well as
+`fantasy-ai-api.fly.dev` — with **surplusff.com as the canonical
+origin**: S1b removed S1's `emailRedirectTo`, so the magic link goes wherever Supabase's **Site URL**
+points regardless of where the person signed up — that is now set to surplusff.com (2026-08-04), so a
+sign-in started on either host returns to surplusff.com. **Round trip observed 2026-08-04** — signed out
+beforehand, link requested from surplusff.com, clicked, landed signed in on surplusff.com. → `sessions/v1/P5-Self_Serve/SESSION_P5_S1B_AUDIT.md`.
+The UI still says **Gridiron**;
+moving either is an undecided, cosmetic-but-broad change (SPA copy plus
+Supabase's redirect allow-list), not a launch dependency.
 **Read next:** `ARCHITECTURE.md` (how it's built) · `CODING_BIBLE.md` (rules for coding agents) ·
 `ROADMAP.md` (where it's going) · `projects/v1/` (the active build).
 
@@ -122,6 +133,26 @@ P5 — which data-proves S2's refresh, S3b's band panel and S4a's regimes at onc
 ROS-range panel against real band data**; and **S4b** (market turn-on) post-launch.
 → `ROADMAP.md` + `projects/v1/BUILD_ORDER.md` + `projects/v1/P5_ACCOUNTS_SELF_SERVE_ONBOARDING.md`.
 
+## Must fix before Gate A (loading the first real 2026 league)
+
+- **`_derive_matchup_result` mints a phantom W/L on a tie — and a freshly drafted league is all ties.**
+  It ranks a matchup by `sort_by(roster_total_points, descending).first()` with **no tie branch**, so a
+  0-0 unplayed matchup (and a genuine real-life tie) produces a W and an L decided by sort order.
+  `compute_bracket_sim` handles the same case correctly (0.5 each), so the served record and
+  `bracket_odds.current_wins` disagree by construction. **Re-filed from "parked" to a Gate-A blocker on
+  2026-08-04:** the first thing Will's 2026 league does after the draft is load with every matchup at 0-0,
+  so fake standings are what he would see on the first real load — not a deep-season edge case. Changes
+  measured data and only takes effect on a re-join → its own bounded session with a parity check.
+  **CONFIRMED against the live Sleeper API, 2026-08-04** — and the trigger is the **draft**, not
+  kickoff: a 2026 league that has not drafted returns an empty matchup array, while one with a schedule
+  returns a full slate at `points: 0.0` with paired `matchup_id`s *today*, which the real function turns
+  into **6 W and 6 L by roster-id sort order**. The corpus has no footprint (7 joined league-seasons,
+  16,364 rows, 554 matchups: zero tied, zero degenerate) — which also hands the fix a **byte-identical
+  parity oracle** on 2020–2025. A second, latent case in the same function (null `matchup_id` on playoff
+  weeks groups the whole league into one match) is unreachable only because joins stop at
+  `playoff_week_start - 1`. → `sessions/v1/P2-Go_Live_2026/FINDING_matchup_tie_gate_a.md`.
+  (S4a's depth clock reads points, not W/L, so it is already immune.)
+
 ## Deferred / parked (not blocking; each picked up in its project)
 
 - **The ROS-range panel is unverified against real band data.** Everything around it is proven — the loader
@@ -162,13 +193,6 @@ ROS-range panel against real band data**; and **S4b** (market turn-on) post-laun
   scoring key. Every user's league is absent from the catalog until the connect flow catalogs it, so this
   sits on P5's live path. Fix = derive from the league's own settings (`_keys.scoring_key_from_settings`,
   which is what the S0 harness does). Harmless today (nothing but demo slices refresh); **P5/S4 owns it.**
-- **`_derive_matchup_result` mints a phantom W/L on a tie.** It ranks a matchup by
-  `sort_by(roster_total_points, descending).first()` with **no tie branch**, so both a 0-0 unplayed matchup
-  and a genuine real-life tie produce a W and an L decided by sort order. `compute_bracket_sim` handles the
-  same case correctly (0.5 each), so the served record and `bracket_odds.current_wins` disagree by
-  construction. Changes measured data and only takes effect on a re-join → its own bounded session with a
-  parity check, worth doing before the season runs deep. (S4a's depth clock reads points, not W/L, so it is
-  already immune.)
 - **`matchup_win_probs` returns 50/50 whenever both σ are 0**, regardless of μ — a 30-point projected gap
   included. Pinned by `check_projections`, and it disagrees with the sim's own `_win_prob`, which returns
   1.0/0.0 there. Only reachable on a week with no projections at all.
