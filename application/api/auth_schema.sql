@@ -29,3 +29,33 @@ CREATE TABLE IF NOT EXISTS public.app_users (
 -- RLS, so this denies nothing to this API. It matters if the Data API is ever re-enabled or a
 -- non-owner role ever connects. Real per-user isolation is API-layer work, and it is S2's.
 ALTER TABLE public.app_users ENABLE ROW LEVEL SECURITY;
+
+
+-- Signup attempts (P5/S1b) — the rate limiter's state.
+--
+-- IN POSTGRES, NOT IN MEMORY, and that is forced by the deployment shape rather than taste.
+-- fly.toml runs TWO machines with `min_machines_running = 0` and `auto_stop_machines = "stop"`.
+-- An in-process dict would therefore be (a) split across two machines, so an attacker gets
+-- roughly double the intended budget, and (b) ERASED whenever a machine scales to zero — which
+-- makes the limiter defeatable on purpose by simply waiting out the idle window. A limiter you
+-- can reset by being patient is not a limiter.
+--
+-- What it is really defending: the access code is chosen to be sayable out loud, so it is
+-- low-entropy by construction. The rate limit is what makes that safe — brute-force resistance
+-- first, protection of the email send budget second.
+--
+-- Rows are disposable; anything outside the window is noise. `at` is indexed because every
+-- lookup is "attempts since T".
+CREATE TABLE IF NOT EXISTS public.signup_attempts (
+    id      bigserial PRIMARY KEY,
+    email   text,
+    ip      text,
+    ok      boolean NOT NULL DEFAULT false,   -- did the code check pass (for triage, not policy)
+    at      timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS signup_attempts_at_idx ON public.signup_attempts (at);
+CREATE INDEX IF NOT EXISTS signup_attempts_email_at_idx ON public.signup_attempts (email, at);
+CREATE INDEX IF NOT EXISTS signup_attempts_ip_at_idx ON public.signup_attempts (ip, at);
+
+ALTER TABLE public.signup_attempts ENABLE ROW LEVEL SECURITY;
