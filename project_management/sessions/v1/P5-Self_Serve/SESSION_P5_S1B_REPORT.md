@@ -1,7 +1,7 @@
 # P5 · S1b — The shared access code — report
 
 **Ran:** 2026-08-03 · **Brief:** `SESSION_P5_S1B_ACCESS_CODE.md` · **Commits:** 3
-**Status: built, gate proven un-bypassable; NOT yet deployed** — two items need Will (below).
+**Status: SHIPPED, DEPLOYED, MERGED** (main `c85761c`) — every DoD item demonstrated.
 
 ---
 
@@ -17,9 +17,9 @@ The headline check passes: with platform signup off, a direct `POST /auth/v1/otp
 publishable key anyone can read out of the bundle — is refused. That is the property S1 shipped
 without and the reason this session exists.
 
-What is **not** done: **custom SMTP** and the **access code string**, both of which need Will, and
-the deploy that follows them. One DoD item is therefore untestable and one is half proven; listed
-plainly below rather than glossed.
+Custom SMTP is live on **surplusff.com** and a magic link has been confirmed arriving at a non-team
+address — which was the thing actually standing between the cohort and the product, and is unrelated
+to the gate.
 
 ---
 
@@ -74,22 +74,37 @@ is the one S1 shipped without.
 
 ---
 
-## Not proven, and why — read this before assuming the session is closed
+## The two that were open at write-time — both since proven
 
-1. **A magic link arriving at a non-team inbox (DoD 6) is untestable** until custom SMTP exists.
-   Supabase's built-in sender *"will refuse to deliver messages to addresses that are not part of
-   the project's team"*. Also unverified: my planned probe of that restriction returned
-   `email_address_invalid` — Supabase rejected the *domain* I used, so that attempt tested nothing.
-   The real test is Will's `+alias` after SMTP is configured.
-2. **`--ban` is half proven (DoD 7).** The ban sets correctly — `banned_until` populates and
-   `--list` flags it — but the sign-in refusal was **masked by the email rate limit firing first**,
-   so the observed 429 does not demonstrate the ban. Re-test once SMTP raises the ceiling. Noting
-   this rather than claiming the stronger result; it is the same error class as reading a status
-   code without reading the error body, which cost time in S1.
+1. **A magic link reaching a non-team inbox (DoD 6).** Will registered **surplusff.com** on Resend and
+   configured it as Supabase's SMTP sender. `POST /api/signup` with the real code for
+   `willdaniel.wrd+test@gmail.com` — a *different address string*, so not a project team member —
+   returned **200**, and **Will confirmed the email arrived** from surplusff.com. The same call before
+   SMTP returned **502** on the mailer, so this is a clean A/B rather than an assertion.
 
-Will's account was banned and **unbanned** during the test; it is in its original state.
+   Worth recording for whoever sets this up next: **Resend requires a verified domain** — *"You must
+   add and verify at least one domain to send and receive emails"* — and its `onboarding@resend.dev`
+   test sender only reaches the account owner. So "use Resend without a domain" solves nothing; it
+   reproduces exactly the restriction it was meant to escape.
 
----
+2. **`--ban` (DoD 7) — proven, and the technique is the interesting part.** Two obvious routes are both
+   dead ends: the sign-in path returns **429** (Supabase's per-address minimum interval), which *looks*
+   like a refusal but isn't the ban; and `admin/generate_link` returns **200 for a banned user**,
+   because it's an admin call that doesn't enforce bans. The definitive test is to **redeem** the link
+   the way a browser would — `GET /auth/v1/verify?token=…` → **303** to
+   `#error=access_denied&error_code=user_banned`, **no session issued**.
+
+   The lesson generalises: **bans bite at token exchange, not at link generation.** A consequence worth
+   knowing operationally — an already-issued access token stays valid until it expires (~1h), so a ban
+   is not an instant eviction.
+
+   I nearly recorded the first 429 as a pass. It is the same error class as reading a status code
+   without reading the error body, which cost time in S1; flagging it because the habit is the thing
+   worth keeping, not the individual catch.
+
+**Every DoD item is now demonstrated.** Test artifacts removed: the `+test` account is deleted and the
+attempt log is back to 0 rows; Will's account was banned and unbanned during testing and is in its
+original state.
 
 ## Decisions worth carrying
 
@@ -115,16 +130,13 @@ someone invests in it.
 
 ---
 
-## What Will needs to do (~10 min, and the session can't close without it)
+## Deployed state
 
-1. ~~Turn "allow new users to sign up" OFF.~~ **Done mid-session** — verified
-   `disable_signup: true`, and the headline check passes because of it.
-2. **Pick the access code**, put it in `application/config.py` as `ACCESS_CODE`.
-3. **Create a Resend account and paste its SMTP credentials** into Supabase → Authentication →
-   SMTP Settings.
-
-Then the deploy needs two Fly secrets — `ACCESS_CODE` and `SUPABASE_SECRET_KEY` — and no
-`fly.toml` change, so a bare `fly deploy` is correct afterwards.
+`ACCESS_CODE` and `SUPABASE_SECRET_KEY` are Fly secrets; `SUPABASE_URL` stays in `fly.toml`'s `[env]`
+and the publishable key in `[build.args]`, so a bare `fly deploy` remains correct. Verified on
+production: the gate refuses a missing and a wrong code, the bundle carries the code field, **neither
+the secret key nor the access code appears in the bundle**, the publishable key does (as designed),
+`/api/me` is unchanged, and all **12 reads are byte-identical** to the pre-S1 baseline.
 
 ## For S2
 
