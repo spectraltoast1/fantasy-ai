@@ -1,6 +1,6 @@
 # V1 · The demo league — an anonymized clone — a brief for Code
 
-**Last reviewed:** 2026-08-05 · **Status:** ready, but **not a blocker** — run it whenever ·
+**Last reviewed:** 2026-08-05 · **Status:** ready, **DEFERRED by Will 2026-08-05** — S2 goes first ·
 **Owner:** Code drives; Will approves the team names and the look.
 **Related:** `SESSION_P5_S2_OWNERSHIP_AND_ISOLATION.md` (which consumes `DEMO_LEAGUE_ID`).
 
@@ -11,6 +11,16 @@
 > **Why it is not a blocker.** `DEMO_LEAGUE_ID` is a config value. It points at the real LoRP 2025 slice
 > today; when this session lands, it gets repointed at the clone. One line. S2 does not wait on this, and
 > this does not wait on S2.
+
+> **Deferred deliberately (2026-08-05).** S2 (ownership + isolation) runs first: it is the critical path
+> — nobody can be invited until per-user isolation exists — while shipping this clone late costs nothing,
+> because the public demo is already LoRP 2025 and `DEMO_LEAGUE_ID` makes the swap a one-line change.
+> **S2a owns `DEMO_LEAGUE_ID`.** If this session lands first, report the new id rather than wiring it; if
+> S2a lands first, this session does the one-line repoint.
+>
+> **One thing worth spiking early, separately from the rest:** writing a demo-scoped band file and loading
+> it stamped to a single league. It is the only genuinely unproven step here, and it is the one nobody
+> wants to discover is hard in September. ~30 minutes retires the risk without spending a session.
 
 ## Why a clone at all
 
