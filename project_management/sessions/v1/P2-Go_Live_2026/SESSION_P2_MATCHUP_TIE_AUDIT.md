@@ -1,5 +1,13 @@
 # P2 · Matchup tie / unplayed slate — AUDIT
 
+> **CLOSED 2026-08-05 — merged (`c4182d8`), deployed, confirmed live.** Both action items below were
+> addressed before merge and re-verified here: the report's handoff now leads with **`fly deploy`** and
+> names https://surplusff.com/, and the parity claim is restated as *record-bearing VALUES* with the
+> two added keys (`ties`, `record`) called out explicitly. Code also went one better than the
+> recommendation — `verify_record_parity.py` is committed beside the report, with the reason it cannot
+> be a `check_*` gate written down (it needs two git refs and a live DB). The audit body is left as
+> written, at the time it was written.
+
 **Reviewed:** 2026-08-05 · **By:** PM, against the branch `claude/fantasy-ai-matchup-tie-gate-5b1016`
 (`5951910`, `741296f`, `b1e8dc0`) — **not yet merged into `main`** — plus an independent recomputation
 over the persisted corpus. **Report:** `SESSION_P2_MATCHUP_TIE_REPORT.md` ·

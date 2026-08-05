@@ -1,9 +1,11 @@
 # STATUS
 
-**What this is:** Gridiron — a fantasy-football decision-support dashboard whose unit is the manager's
+**What this is:** SurplusFF — a fantasy-football decision-support dashboard whose unit is the manager's
 *decision*, not the player. Live, single-league, on the server stack.
-**Live at:** https://fantasy-ai-api.fly.dev/ · **Updated:** 2026-08-04
-**Name + domain:** the product is being called **SurplusFF**; **surplusff.com** is registered (SSL live) and is
+**Live at:** https://surplusff.com/ (also https://fantasy-ai-api.fly.dev/) · **Updated:** 2026-08-05
+**Name + domain:** the official name is **SurplusFF**, commonly shortened to **Surplus** in speech and
+writing (Will, 2026-08-05); "Gridiron" was a working name — retire it. **surplusff.com** is registered
+(SSL live) and is
 the **Resend sending domain** for auth email — Supabase's custom SMTP sender, which is what makes a magic link
 reach anyone who is not a project team member. The app **also serves from surplusff.com** (Fly cert + DNS live) as well as
 `fantasy-ai-api.fly.dev` — with **surplusff.com as the canonical
