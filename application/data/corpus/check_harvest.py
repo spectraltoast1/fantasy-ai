@@ -188,7 +188,8 @@ def check(sample_determinism: int = 2) -> bool:
     flags = data_layer.read_corpus_two_way_flags()
     _ok("corpus_two_way_flags == 10 rows (2.5 reference)", flags.height == 10, results, f"got {flags.height}")
     flag_pairs = {(int(s), str(p)) for s, p in zip(flags["season"].to_list(), flags["sleeper_player_id"].to_list())}
-    have_col = mislabeled = 0
+    have_col = mislabeled = null_flag = 0
+    null_rows = 0
     exposure = defaultdict(set)
     checked_join = 0
     for r in tgts:
@@ -200,6 +201,15 @@ def check(sample_determinism: int = 2) -> bool:
         if "is_two_way" not in j.columns:
             continue
         have_col += 1
+        # NULL is its own failure, reported separately from a wrong value. They have different
+        # causes and different fixes: a null means the column was never applied to those rows (the
+        # join doesn't emit `is_two_way`, and the per-week append diagonal-concats, so any week added
+        # after the harvest arrives without it), whereas a wrong value means the reference moved.
+        # Collapsing both into "mislabeled" is what sent the last reader hunting the wrong defect.
+        n_null = int(j["is_two_way"].null_count())
+        if n_null:
+            null_flag += 1
+            null_rows += n_null
         # correctness: is_two_way iff (season, player) ∈ the reference
         expect = j["sleeper_player_id"].is_in([p for (s, p) in flag_pairs if s == season])
         if not j["is_two_way"].equals(expect):
@@ -208,6 +218,8 @@ def check(sample_determinism: int = 2) -> bool:
             exposure[season].add(pid)
     _ok("is_two_way present on every join", have_col == checked_join, results,
         f"{have_col}/{checked_join}")
+    _ok("is_two_way never null (never applied)", null_flag == 0, results,
+        f"{null_flag} league(s), {null_rows} rows")
     _ok("is_two_way correctly applied (== reference)", mislabeled == 0, results,
         f"{mislabeled} mislabeled leagues")
     n_exposed = sum(len(v) for v in exposure.values())

@@ -34,8 +34,8 @@ from application.api import db
 from application.data import data_layer
 from application.data.fetchers import nfl_stats, sleeper
 from application.data.serve import build_db
-from application.data.transforms import compute_ros_player_band, join_nfl_sleeper_weekly
-from application.data.corpus import compute_spine
+from application.data.transforms import audit_join, compute_ros_player_band, join_nfl_sleeper_weekly
+from application.data.corpus import compute_spine, harvest as corpus_harvest
 from application.shared import league_resolver
 
 
@@ -141,6 +141,24 @@ def refresh_league(lid: str | None = None, season: int | None = None, *,
             if data_layer._sleeper_matchups_path(season, wk, lid).exists():
                 join_nfl_sleeper_weekly.run(season, wk, league_id=lid)
                 act(f"joined week {wk} → season_{season}.parquet")
+
+    # 2b. TWO-WAY FLAG — re-apply after any advance, or the column silently rots.
+    # `join_nfl_sleeper_weekly` does not emit `is_two_way`; it is a corpus-era column that
+    # `harvest._apply_two_way` owns. The per-week append concats how="diagonal", so a week joined here
+    # arrives WITHOUT the column and gets null-filled — which is exactly how this league ended up with
+    # 147 null flags in week 5 and check_harvest check 5 red. Every weekly advance of the season would
+    # have re-created it. Re-applying is cheap, preserves every other column, and rewrites the file only
+    # when the flag actually changes, so a no-op advance stays a no-op.
+    #
+    # Guarded, not depended on: a league with no corpus flag reference (every real user's league) must
+    # advance normally, so a missing reference is a skip, never an error.
+    try:
+        flag_ids = audit_join._two_way_ids(season)
+        if flag_ids and data_layer.join_season_exists(season, league_id=lid):
+            hit = corpus_harvest._apply_two_way(lid, season, flag_ids)
+            act(f"re-applied is_two_way ({hit} row(s) flagged) — the join doesn't emit it")
+    except Exception as e:   # noqa: BLE001 — the flag is corpus metadata; it must never block an advance
+        act(f"is_two_way re-apply skipped ({type(e).__name__}: {str(e)[:60]})")
 
     # 3a. BAND (the scoring-keyed substrate the spine's centre and the card's range share) ----------------
     # production_vor advances every week but the band never did, which is how the store came to hold a
