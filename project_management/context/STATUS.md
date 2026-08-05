@@ -172,12 +172,12 @@ populated synthetically** and derived from real numbers until P4 ships. **P4 the
 
 ## Deferred / parked (not blocking; each picked up in its project)
 
-- **`audit_join._build_zero_stat_row` writes repair rows without the post-join columns** (found
-  2026-08-05, pre-existing). Its synthetic zero-stat rows set roster/matchup/points but never
-  `matchup_result` or `is_two_way`, so 2 rows in `1182101676608823296`/2025 carry a null verdict and a
-  wrong flag. Harmless to what's served (`max(matchup_result)` skips nulls, so the roster-week's real
-  verdict still wins) but it is **the one pre-existing FAIL in `check_harvest` check 5**, reproduced on
-  unmodified main. `check_matchup_result` reports the count rather than tolerating it silently.
+- **Deferred: let the join resolve a null position from the pinned registry.** `_apply_registry_eligibility`
+  fires only on the *conflict* branch, so a rostered player with no `nflreadpy` row keeps a null position
+  and falls to remainders — which is *why* `audit_join` synthesises repair rows at all. Coalescing the null
+  retires that class, but it changes the corpus **row population** the L2 ledger grades against, and a
+  refactor that changes a number is a bug until equivalence is proven. **Its own session; first deliverable
+  is a corpus-wide count.** → `sessions/v1/P2-Go_Live_2026/SESSION_P2_AUDIT_JOIN_NULLS_REPORT.md`.
 
 - **The ROS-range panel is unverified against real band data.** Everything around it is proven — the loader
   guard, the parity oracle across 14 tables, the pinned select, the absent-state — but the populated panel was
