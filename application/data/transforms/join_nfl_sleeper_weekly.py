@@ -25,6 +25,7 @@ from pathlib import Path
 import polars as pl
 
 from application.data import data_layer
+from application.data.transforms import _matchup
 
 SKILL_POSITIONS = {"QB", "RB", "WR", "TE"}
 
@@ -187,22 +188,19 @@ def _parse_sleeper_matchups(
 
 
 def _derive_matchup_result(sleeper: pl.DataFrame) -> pl.DataFrame:
-    """Tag each row W/L based on which roster scored more in the matchup."""
-    winners = (
-        sleeper.group_by("matchup_id")
-        .agg(
-            pl.col("roster_id")
-            .sort_by("roster_total_points", descending=True)
-            .first()
-            .alias("winner_roster_id")
-        )
-    )
-    return sleeper.join(winners, on="matchup_id", how="left").with_columns(
-        pl.when(pl.col("roster_id") == pl.col("winner_roster_id"))
-        .then(pl.lit("W"))
-        .otherwise(pl.lit("L"))
-        .alias("matchup_result")
-    ).drop("winner_roster_id")
+    """Tag each row W / L / T from its matchup's two roster totals — null when there is no result.
+
+    Called on ONE week's frame (`_parse_sleeper_matchups(season, week)`), one row per rostered
+    player, `roster_total_points` constant across a roster's rows — so grouping on `matchup_id`
+    is already per-week by construction.
+
+    The rule lives in `_matchup`, the one definition `compute_bracket_sim._standings_as_of`
+    reads row-wise, so the served record and `bracket_odds` can no longer disagree by
+    construction. It replaced a `sort_by(roster_total_points, descending).first()` that had no
+    tie branch, and so fabricated a W and an L for three shapes that have no winner: an
+    unplayed (all-zero) slate, a genuine tie, and a null/absent matchup_id.
+    """
+    return sleeper.with_columns(_matchup.result_expr().alias("matchup_result"))
 
 
 # ---------------------------------------------------------------------------
@@ -344,6 +342,10 @@ def _print_validation(
     zero_stat = joined.filter(pl.col("fantasy_points") == 0.0).height
     print(f"\nZero-stat rows (inactive this week): {zero_stat}/{skill_count}")
 
+    # A null `matchup_result` is INFORMATIVE, not an anomaly: `_matchup` reports the absence of a
+    # result rather than fabricating one, so an unplayed slate (every league from its draft until
+    # kickoff), a playoff week with no matchup_id, and a bye all read as nulls here. On a played
+    # regular-season week it should still be 0 — that is the line to look at.
     key_cols = ["player_display_name", "position", "fantasy_points", "matchup_result"]
     for col in key_cols:
         if col in joined.columns:
