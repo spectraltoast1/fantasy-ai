@@ -44,7 +44,7 @@ import sys
 import polars as pl
 
 from application.data import data_layer
-from application.data.transforms import _matchup, join_nfl_sleeper_weekly
+from application.data.transforms import _matchup, compute_bracket_sim, join_nfl_sleeper_weekly
 
 # The four genuine ties in the corpus — (league_id, season, week, matchup_id, points-per-side).
 # Measured 2026-08-05 over all 271 persisted joins; both sides played and scored identically.
@@ -204,6 +204,24 @@ def _check_one_definition(results):
                     agree = False
                     print(f"      DRIFT {name} roster {rid}: expr={vec[rid]} scalar={scalar}")
     _ok("the two renderings agree on every shape", agree, results)
+
+    # The join and the sim must reach the same verdict on the same week, or the served record and
+    # bracket_odds.current_wins disagree by construction — which is the state this fix ends.
+    print("      the sim's win credit agrees with the join's verdict:")
+    for name, (specs, expect) in _SHAPES.items():
+        raw = pl.DataFrame(
+            [{"week": 1, "roster_id": rid, "matchup_id": mid, "points": tot} for rid, mid, tot in specs],
+            schema={"week": pl.Int32, "roster_id": pl.Int64, "matchup_id": pl.Int64, "points": pl.Float64},
+        )
+        st = compute_bracket_sim._standings_as_of(raw, 1)
+        # A roster the sim never records at all (it drops null-matchup_id rows before grouping) has
+        # earned nothing, which is the same fact as an explicit 0.0 — so default rather than require
+        # the key. What is being compared is WIN CREDIT, not roster bookkeeping.
+        wins = {rid: st.get(rid, {"wins": 0.0})["wins"] for rid in expect}
+        # W -> 1.0, L -> 0.0, T -> 0.5, and an ungraded matchup awards nothing at all.
+        want = {rid: {"W": 1.0, "L": 0.0, "T": 0.5, None: 0.0}[expect[rid]] for rid in expect}
+        _ok(f"{name}: sim win credit == join verdict", wins == want, results,
+            "" if wins == want else f"sim={wins} join-implied={want}")
 
 
 def _raw_verdicts(lid, season, weeks) -> pl.DataFrame:
@@ -373,6 +391,60 @@ def _check_known_ties(results, full_corpus: bool):
         print(f"      missing:    {sorted(expected_keys - changed)}")
 
 
+def _legacy_standings_as_of(matchups: pl.DataFrame, n: int) -> dict:
+    """`_standings_as_of` frozen as it was before the gradeability guard — the sim's parity oracle."""
+    standings: dict = {}
+    sub = matchups.filter((pl.col("week") <= n) & pl.col("matchup_id").is_not_null())
+    for _, g in sorted(sub.group_by("week", "matchup_id"), key=lambda kv: (int(kv[0][0]), int(kv[0][1]))):
+        rows = g.sort("roster_id").to_dicts()
+        for r in rows:
+            standings.setdefault(int(r["roster_id"]), {"wins": 0.0, "points": 0.0})
+            standings[int(r["roster_id"])]["points"] += float(r["points"])
+        if len(rows) == 2:
+            a, b = rows[0], rows[1]
+            ra, rb = int(a["roster_id"]), int(b["roster_id"])
+            if a["points"] > b["points"]:
+                standings[ra]["wins"] += 1.0
+            elif b["points"] > a["points"]:
+                standings[rb]["wins"] += 1.0
+            else:
+                standings[ra]["wins"] += 0.5
+                standings[rb]["wins"] += 0.5
+    return standings
+
+
+def _check_sim_noop(results, full_corpus: bool):
+    """The sim guard must move no persisted number. `_standings_as_of` feeds `bracket_odds`
+    (current_wins AND base_wins -> proj_wins / playoff_odds / avg_seed / magic_wins, all served) and
+    `backfill_outcomes` -> the immutable L2 ledger's `roster_wins`. The corpus has no ungradeable
+    matchup, so this is expected to be an exact identity — checked, not assumed."""
+    print("  5 — the sim guard is a no-op on real data (bracket_odds + the L2 ledger):")
+    rows = data_layer.read_demo_manifest().sort("season", "league_id").to_dicts()
+    if full_corpus:
+        from application.data.corpus import harvest
+        rows = harvest.targets()
+    changed = window_changed = scanned = 0
+    for r in rows:
+        lid, season = str(r["league_id"]), int(r["season"])
+        if not data_layer.join_season_exists(season, league_id=lid):
+            continue
+        reg_end, _teams = compute_bracket_sim._playoff_config(season, league_id=lid)
+        m = data_layer.read_season_matchups(season, through_week=reg_end, league_id=lid)
+        if m.is_empty():
+            continue
+        scanned += 1
+        for n in range(1, int(m["week"].max()) + 1):
+            if compute_bracket_sim._standings_as_of(m, n) != _legacy_standings_as_of(m, n):
+                changed += 1
+            # The simulated window is unchanged iff every week <= n was played.
+            if compute_bracket_sim._last_played_week(m, n) != n:
+                window_changed += 1
+    _ok("_standings_as_of unchanged on every as-of week", changed == 0, results,
+        f"{scanned} league-seasons, {changed} changed")
+    _ok("simulated window unchanged (last_played == n everywhere)", window_changed == 0, results,
+        f"{window_changed} as-of weeks would shift")
+
+
 # --- the gate -----------------------------------------------------------------------------------------
 
 def check(rejoin_slices: int = 1, full_corpus: bool = False) -> bool:
@@ -383,6 +455,7 @@ def check(rejoin_slices: int = 1, full_corpus: bool = False) -> bool:
     _check_one_definition(results)
     _check_demo_parity(results, rejoin_slices)
     _check_known_ties(results, full_corpus)
+    _check_sim_noop(results, full_corpus)
 
     # prove-it-bites: the shipped bug IS the bite. Same fixtures, old expression, every check must fail.
     print("  PROVE-BITES (the old expression on the same fixtures):")
@@ -409,6 +482,20 @@ def check(rejoin_slices: int = 1, full_corpus: bool = False) -> bool:
     _ok("value-equality bites (differing values ≠; row permutation ==)",
         (not _frame_eq(pl.DataFrame({"a": [1, 2]}), pl.DataFrame({"a": [1, 3]})))
         and _frame_eq(pl.DataFrame({"a": [2, 1]}), pl.DataFrame({"a": [1, 2]})), results)
+
+    # The sim's own bite: on the unplayed slate the OLD `_standings_as_of` reads 0.0 == 0.0 as a draw
+    # and hands all 12 rosters half a win for a game nobody played. Check 5's oracle must see that.
+    unplayed = pl.DataFrame(
+        [{"week": 1, "roster_id": rid, "matchup_id": mid, "points": tot}
+         for rid, mid, tot in _SHAPES["unplayed"][0]],
+        schema={"week": pl.Int32, "roster_id": pl.Int64, "matchup_id": pl.Int64, "points": pl.Float64})
+    old = _legacy_standings_as_of(unplayed, 1)
+    new = compute_bracket_sim._standings_as_of(unplayed, 1)
+    _ok("legacy sim awards 12 x 0.5 wins on the unplayed slate (check-5 bites)",
+        sum(v["wins"] for v in old.values()) == 6.0 and sum(v["wins"] for v in new.values()) == 0.0,
+        results, f"legacy={sum(v['wins'] for v in old.values())} new={sum(v['wins'] for v in new.values())}")
+    _ok("legacy sim consumes the unplayed week (check-5 window bites)",
+        compute_bracket_sim._last_played_week(unplayed, 1) == 0, results)
 
     ok = all(results) and bool(results)
     print()
