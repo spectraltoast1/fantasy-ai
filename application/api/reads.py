@@ -170,7 +170,8 @@ def load_league_meta(as_of_week=None, league_id=None, season=None, viewer_roster
                 superflex = True
         qb = "SF" if superflex else f"{qb_slots or 1}QB"
 
-        # The user's record as of week N (one W/L per team-week).
+        # The user's record as of week N (one W/L/T per team-week; NULL where the week has no
+        # gradeable matchup, which the FILTERs drop from every bucket — see _sql_standings_weeks).
         record = None
         my_roster_id = int(me_rows[0]["roster_id"]) if me_rows else None
         if my_roster_id is not None:
@@ -181,12 +182,13 @@ def load_league_meta(as_of_week=None, league_id=None, season=None, viewer_roster
                 "  GROUP BY roster_id, week"
                 ") "
                 "SELECT count(*) FILTER (WHERE result = 'W') AS w,"
-                "       count(*) FILTER (WHERE result = 'L') AS l "
+                "       count(*) FILTER (WHERE result = 'L') AS l,"
+                "       count(*) FILTER (WHERE result = 'T') AS t "
                 "FROM tw WHERE roster_id = %(rid)s",
                 {"rid": my_roster_id},
             )
             if rows and rows[0]["w"] is not None:
-                record = f"{int(rows[0]['w'])}-{int(rows[0]['l'])}"
+                record = calcs.format_record(rows[0]["w"], rows[0]["l"], rows[0]["t"])
 
     return {
         "name": None,
@@ -464,8 +466,17 @@ def load_player_card(sleeper_id, as_of_week=None, league_id=None, season=None,
 # Teams tab — the standings table + team detail + manager dossier.
 # ---------------------------------------------------------------------------
 
-# One row per (team, week): total points + W/L, weeks <= N. Feeds the real record and the
+# One row per (team, week): total points + W/L/T, weeks <= N. Feeds the real record and the
 # all-play "true record". any_value(col) -> max(col) (the value is constant per team-week).
+#
+# The max() is load-bearing in two ways now that `matchup_result` is four-valued. It is still a true
+# any_value — `transforms/_matchup` grades a whole matchup at once, so every row of a team-week carries
+# the same verdict and the lexicographic order ('W' > 'T' > 'L') never gets to matter. And Postgres
+# max() SKIPS nulls, returning NULL only when every row is NULL — which is exactly the ungraded week
+# (unplayed / bye / no matchup_id). So an ungraded week arrives as `result IS NULL` and falls through
+# every branch downstream, counting nowhere, which is the intended behaviour rather than a coincidence.
+# (One caveat this also absorbs: `audit_join`'s repair rows carry a null result on an otherwise graded
+# team-week; max() ignores them and the real verdict still wins.)
 def _sql_standings_weeks(n):
     return (
         "SELECT roster_id, week, max(roster_total_points) AS pts, max(matchup_result) AS result "
@@ -511,17 +522,14 @@ def load_standings(as_of_week=None, league_id=None, season=None, viewer_roster_i
         team_rows = q("SELECT roster_id, team_name, owner_name FROM teams WHERE league_id = %(lid)s")
 
     # Records + all-play, from the team-week scores (insertion order = first-seen roster order).
+    # The record tally lives in projections.records_by_roster — one home, so a tie can't reach the
+    # matchup surfaces and not the standings.
+    record = projections.records_by_roster(team_weeks)
     by_week: dict[int, list] = {}
-    record: dict[int, dict] = {}
     for r in team_weeks:
-        rid = int(r["roster_id"])
-        row = {"rosterId": rid, "pts": float(r["pts"]), "result": r["result"]}
-        by_week.setdefault(int(r["week"]), []).append(row)
-        rec = record.setdefault(rid, {"w": 0, "l": 0})
-        if row["result"] == "W":
-            rec["w"] += 1
-        elif row["result"] == "L":
-            rec["l"] += 1
+        by_week.setdefault(int(r["week"]), []).append(
+            {"rosterId": int(r["roster_id"]), "pts": float(r["pts"]), "result": r["result"]}
+        )
 
     all_play: dict[int, dict] = {}
     for rows in by_week.values():
@@ -550,7 +558,7 @@ def load_standings(as_of_week=None, league_id=None, season=None, viewer_roster_i
         t = name_of.get(rid)
         o = odds_by_team.get(rid)
         ap = all_play[rid]
-        rec = record.get(rid, {"w": 0, "l": 0})
+        rec = record.get(rid, projections.EMPTY_RECORD)
         last = o["last"] if o else None
         playoff_pct = float(last["playoff_odds"]) * 100 if last and last["playoff_odds"] is not None else None
         all_play_pct = (ap["w"] / (ap["w"] + ap["l"])) * 100 if (ap["w"] + ap["l"]) else 0
@@ -561,6 +569,10 @@ def load_standings(as_of_week=None, league_id=None, season=None, viewer_roster_i
             "isMe": rid == viewer,
             "wins": rec["w"],
             "losses": rec["l"],
+            "ties": rec["t"],
+            # The rendered string, built server-side so all five record surfaces share one formatter.
+            # `wins`/`losses` stay in the payload: they are a different fact (a count, not a label).
+            "record": calcs.format_record(rec["w"], rec["l"], rec["t"]),
             "allPlayW": ap["w"],
             "allPlayL": ap["l"],
             "playoffPct": playoff_pct,
@@ -642,24 +654,24 @@ def load_team_detail(roster_id, as_of_week=None, league_id=None, season=None, vi
         by_week.setdefault(int(r["week"]), []).append(
             {"rosterId": int(r["roster_id"]), "pts": float(r["pts"]), "result": r["result"]}
         )
-    w = l = 0
+    rec = projections.records_by_roster(team_weeks).get(rid, projections.EMPTY_RECORD)
+    # Points/week averages over GRADED weeks only. An ungraded week (unplayed, bye, no matchup_id)
+    # contributes 0.0 points and would otherwise drag the average down — a freshly drafted league,
+    # whose whole slate is joined at 0.0 from the draft on, rendered "Pts/Wk 0.0". Same class of
+    # fabrication as the phantom W/L this fix removes, so it is gated on the same signal.
     pts_for = 0.0
     games = 0
     for rows in by_week.values():
         mine = next((x for x in rows if x["rosterId"] == rid), None)
-        if mine is None:
+        if mine is None or mine["result"] is None:
             continue
         games += 1
         pts_for += mine["pts"]
-        if mine["result"] == "W":
-            w += 1
-        elif mine["result"] == "L":
-            l += 1
     ap = _all_play_record(by_week, rid)
 
     odds = odds_rows[0] if odds_rows else None
     stats = {
-        "record": f"{w}-{l}",
+        "record": calcs.format_record(rec["w"], rec["l"], rec["t"]),
         "trueRec": f"{ap['w']}-{ap['l']}",
         "playoffPct": float(odds["playoff_odds"]) * 100 if odds and odds["playoff_odds"] is not None else None,
         "seed": calcs.js_round(float(odds["avg_seed"])) if odds and odds["avg_seed"] is not None else None,
@@ -874,8 +886,8 @@ def load_matchups(as_of_week=None, league_id=None, season=None, viewer_roster_id
                 "rosterId": rid, "name": f"Team {rid}", "owner": None,
                 "isMe": False, "mu": 0, "sigma": 0,
             }
-            r = rec.get(rid, {"w": 0, "l": 0})
-            sides.append({**t, "record": f"{r['w']}-{r['l']}"})
+            r = rec.get(rid, projections.EMPTY_RECORD)
+            sides.append({**t, "record": calcs.format_record(r["w"], r["l"], r["t"])})
         probs = [None] * len(sides)
         if len(sides) == 2:
             probs = projections.matchup_win_probs(
@@ -927,7 +939,7 @@ def load_matchup_detail(matchup_id, as_of_week=None, league_id=None, season=None
     sides = []
     for rid in rids:
         t = teams[rid]
-        r = rec.get(rid, {"w": 0, "l": 0})
+        r = rec.get(rid, projections.EMPTY_RECORD)
         # Team Score Range = Σ starters' quantiles; a starter without a projection falls back to
         # its μ term (p25 ?? pts) so the band stays coherent.
         p25 = sum((p["p25"] if p["p25"] is not None else p["pts"]) for p in t["starters"])
@@ -938,7 +950,7 @@ def load_matchup_detail(matchup_id, as_of_week=None, league_id=None, season=None
             "name": t["name"],
             "owner": t["owner"],
             "isMe": t["isMe"],
-            "record": f"{r['w']}-{r['l']}",
+            "record": calcs.format_record(r["w"], r["l"], r["t"]),
             "proj": t["mu"],
             "sigma": t["sigma"],
             "range": {"p25": calcs.round1(p25), "p50": calcs.round1(p50), "p75": calcs.round1(p75)},

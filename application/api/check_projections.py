@@ -96,12 +96,45 @@ def check_num():
     print("  ok  _num: null-safe coercion")
 
 
+def check_records_by_roster():
+    """A team-week whose matchup wasn't gradeable counts NOWHERE — not W, not L, not T.
+
+    `matchup_result` is four-valued since the Gate-A tie fix (`transforms/_matchup`): W/L/T, and NULL
+    for an unplayed slate, a bye, or a week with no matchup_id. A freshly drafted league is ALL nulls,
+    so "counts nowhere" is what makes it read 0-0 instead of inventing a record."""
+    rows = [
+        {"roster_id": 1, "result": "W"}, {"roster_id": 1, "result": "W"},
+        {"roster_id": 1, "result": "L"}, {"roster_id": 1, "result": "T"},
+        {"roster_id": 1, "result": None},   # ungraded week
+        {"roster_id": 1, "result": "X"},    # unknown value — also counts nowhere
+        {"roster_id": 2, "result": None}, {"roster_id": 2, "result": None},
+    ]
+    rec = pj.records_by_roster(rows)
+    assert rec[1] == {"w": 2, "l": 1, "t": 1}, f"expected 2-1-1, got {rec[1]}"
+    assert rec[2] == {"w": 0, "l": 0, "t": 0}, f"all-ungraded must be 0-0-0, got {rec[2]}"
+    assert pj.EMPTY_RECORD == {"w": 0, "l": 0, "t": 0}
+    # EMPTY_RECORD is a shared default — the tally must not have mutated it.
+    assert rec[1] is not pj.EMPTY_RECORD
+    print("  ok  records_by_roster: W/L/T counted, null + unknown count nowhere")
+
+
+def check_format_record():
+    """The ties term is additive: at t == 0 the string is byte-identical to what shipped."""
+    assert calcs.format_record(3, 2, 0) == "3-2", "zero ties must reproduce the old string exactly"
+    assert calcs.format_record(3, 2) == "3-2", "default t=0"
+    assert calcs.format_record(0, 0, 0) == "0-0", "a league that has played nothing"
+    assert calcs.format_record(3, 2, 1) == "3-2-1", "a tie shows as the third segment"
+    print("  ok  format_record: 'W-L' at zero ties, 'W-L-T' once a tie exists")
+
+
 def main():
     print("check_projections:")
     check_expand_slots()
     check_optimal_lineup()
     check_win_probs()
     check_num()
+    check_records_by_roster()
+    check_format_record()
     print("ALL GREEN")
 
 
