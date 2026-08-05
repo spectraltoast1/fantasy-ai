@@ -23,6 +23,7 @@ import sys
 import polars as pl
 
 from application.data import data_layer
+from application.data.transforms import _matchup
 
 # Positions in the Sleeper players registry that map to skill positions.
 _SKILL_POSITIONS = {"QB", "RB", "WR", "TE"}
@@ -45,14 +46,94 @@ def _load_sleeper_players() -> pl.DataFrame:
     return data_layer.read_pinned_sleeper_players()
 
 
+def _gsis_by_sleeper() -> dict:
+    """sleeper_player_id -> gsis `player_id`, from the same map the join's own fallback uses
+    (`join_nfl_sleeper_weekly._apply_player_id_map_fallback`)."""
+    idm = data_layer.read_player_id_map()
+    return {r["sleeper_player_id"]: r["gsis_id"] for r in idm.iter_rows(named=True)
+            if r.get("sleeper_player_id") and r.get("gsis_id")}
+
+
+def _two_way_ids(season: int) -> set:
+    """The season's two-way `sleeper_player_id`s — the same reference `harvest._apply_two_way` writes
+    the flag from, so a repair row and a real row agree. Absent reference -> empty set (the flag then
+    derives to False, which is what `_apply_two_way` would also produce)."""
+    if not data_layer.corpus_two_way_flags_exists():
+        return set()
+    flags = data_layer.read_corpus_two_way_flags()
+    return {str(r["sleeper_player_id"]) for r in flags.iter_rows(named=True)
+            if int(r["season"]) == season}
+
+
+def _week_fetched_at(joined: pl.DataFrame):
+    """The week's own snapshot timestamp, so a repair row dates with the cohort it joins rather than
+    carrying a null. One distinct non-null value per weekly file."""
+    if "fetched_at" not in joined.columns:
+        return None
+    vals = joined["fetched_at"].drop_nulls()
+    return vals[0] if len(vals) else None
+
+
+def fill_null_matchup_result(week_frame: pl.DataFrame) -> pl.DataFrame:
+    """Fill `matchup_result` ONLY where it is null, from the week's own matchup groups.
+
+    A second CALL SITE of `transforms/_matchup`'s single rule — not a second implementation. This
+    frame is ONE week (every caller reads a single (season, week) slice), which is exactly the
+    invariant `result_expr`'s default `over="matchup_id"` relies on.
+
+    Null-only is what makes this safe to run over an existing artifact: an already-graded verdict is
+    never overwritten, so verdict-neutrality holds BY CONSTRUCTION rather than by inspection.
+    """
+    if "matchup_result" not in week_frame.columns:
+        return week_frame
+    return week_frame.with_columns(
+        pl.when(pl.col("matchup_result").is_null())
+        .then(_matchup.result_expr())
+        .otherwise(pl.col("matchup_result"))
+        .alias("matchup_result")
+    )
+
+
 def _build_zero_stat_row(
     remainder_row: dict,
     player: dict,
     joined_schema: dict,
     season: int,
     week: int,
+    *,
+    gsis_by_sleeper: dict | None = None,
+    two_way_ids: set | None = None,
+    fetched_at=None,
 ) -> dict:
-    """Build a zero-stat output row for a resolved skill-position remainder."""
+    """Build a zero-stat output row for a resolved skill-position remainder.
+
+    A repair row has to look like a row the JOIN would have written, because everything downstream
+    reads it as one. The zero-fill below covers the numeric stat columns (155 of 173), but every
+    column derived *after* the join is a String / Boolean / Datetime and so falls straight through
+    it — which is how these rows came to carry a null `matchup_result` and, latently, a null
+    `is_two_way` (Boolean is deliberately absent from the numeric tuple; zero-filling a flag to
+    `false` would be a fabrication, so it is DERIVED below instead).
+
+    What is filled here, and what is deliberately left null — the distinction is the point:
+
+      FILLED, because a real source exists
+        player_id       the same `player_id_map` the join's own fallback uses
+        position_group  identity from `position`; for QB/RB/WR/TE nflreadpy's group == the position
+        is_two_way      the corpus two-way reference (`read_corpus_two_way_flags`), NOT a zero-fill
+        fetched_at      the week frame's own snapshot timestamp, so the row dates with its cohort
+        matchup_result  NOT here — it needs the whole week's frame; filled in `audit()` (see there)
+
+      LEFT NULL, because there is nothing honest to put there (§3 Law 2: a missing signal is null,
+      never fabricated)
+        game_id, opponent_team    the player did not play a game. There is no game to name.
+        team                      from the pinned registry, which is already tried above; a free
+                                  agent at pin time has none, and null is the honest answer.
+        headshot_url              absent from the pinned registry and from this season's stats. It
+                                  IS recoverable from a prior season, but that is a cross-season
+                                  identity read nothing else in the join performs, for a cosmetic
+                                  field — declined on purpose, not overlooked.
+        fg_*_list                 kicker-only columns; a skill player has no value for them.
+    """
     row = {col: None for col in joined_schema}
 
     # Identity from Sleeper players registry
@@ -71,6 +152,17 @@ def _build_zero_stat_row(
     row["sleeper_points"] = remainder_row["sleeper_points"]
     row["is_starter"] = remainder_row["is_starter"]
     row["roster_total_points"] = remainder_row["roster_total_points"]
+
+    # Post-join derived columns the numeric zero-fill cannot reach (see the docstring).
+    sid = remainder_row["sleeper_player_id"]
+    if "player_id" in row:
+        row["player_id"] = (gsis_by_sleeper or {}).get(sid)
+    if "position_group" in row and row["position"] in _SKILL_POSITIONS:
+        row["position_group"] = row["position"]
+    if "is_two_way" in row:
+        row["is_two_way"] = sid in (two_way_ids or set())
+    if "fetched_at" in row and fetched_at is not None:
+        row["fetched_at"] = fetched_at
 
     # Zero-fill all numeric stat columns
     for col, dtype in joined_schema.items():
@@ -111,6 +203,11 @@ def audit(season: int, week: int) -> None:
     joined = data_layer.read_join_nfl_sleeper_weekly(season, week)
     joined_schema = {col: joined[col].dtype for col in joined.columns}
 
+    # Sources for the post-join derived columns (see `_build_zero_stat_row`). Read once, not per row.
+    gsis_by_sleeper = _gsis_by_sleeper()
+    two_way_ids = _two_way_ids(season)
+    fetched_at = _week_fetched_at(joined)
+
     skill_rows = []
     discarded = []
     still_unknown = []
@@ -125,7 +222,9 @@ def audit(season: int, week: int) -> None:
 
         pos = player.get("position")
         if pos in _SKILL_POSITIONS:
-            skill_rows.append(_build_zero_stat_row(row, player, joined_schema, season, week))
+            skill_rows.append(_build_zero_stat_row(
+                row, player, joined_schema, season, week,
+                gsis_by_sleeper=gsis_by_sleeper, two_way_ids=two_way_ids, fetched_at=fetched_at))
         elif pos in _EXCLUDE_POSITIONS or pos is None:
             discarded.append({"sleeper_player_id": sid, "position": pos,
                                "full_name": player.get("full_name")})
@@ -147,6 +246,7 @@ def audit(season: int, week: int) -> None:
 
         new_rows_df = pl.DataFrame(skill_rows, schema=joined_schema)
         joined = pl.concat([joined, new_rows_df])
+        joined = fill_null_matchup_result(joined)
         data_layer.write_join_nfl_sleeper_weekly(joined, season, week)
         print(f"  Joined file updated: {len(joined)} total rows.")
 
