@@ -77,3 +77,17 @@ def round1(n: float) -> float:
     the DuckDB path. Points are non-negative, so ``floor(x + 0.5)`` reproduces Math.round. l.625.
     """
     return math.floor(n * 10 + 0.5) / 10
+
+
+def format_record(w, l, t=0) -> str:
+    """A team's record: ``"W-L"``, or ``"W-L-T"`` once a tie exists. queries.js printed ``"W-L"``.
+
+    The ties term is ADDITIVE: at ``t == 0`` this is byte-identical to what shipped, so every league
+    currently served (zero ties across the 31 demo slices) renders exactly as before — the CODING_BIBLE
+    §5 parity guard satisfied by construction rather than by inspection. The third segment appears only
+    when it carries information.
+
+    One home for the four inline ``f"{w}-{l}"`` copies this replaced, so a tie cannot reach one surface
+    and not another.
+    """
+    return f"{int(w)}-{int(l)}-{int(t)}" if t else f"{int(w)}-{int(l)}"

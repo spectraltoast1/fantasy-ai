@@ -1,5 +1,13 @@
 # Finding — the matchup tie bug is a **confirmed** Gate-A blocker
 
+> **RESOLVED 2026-08-05** → `SESSION_P2_MATCHUP_TIE_REPORT.md`. Kept as the evidence chain. Three things
+> below turned out differently in the build: the null-`matchup_id` case is **not** unreachable
+> (`weekly_refresh` has no `playoff_week_start - 1` clamp, only `harvest` does); the corpus does contain
+> **4 genuine ties** at full 271-league scale (none in the demo slate), so the oracle is an allowlist
+> rather than blanket identity, and "byte-identical" had to be implemented as **value**-identical
+> because polars' parquet writer is physically non-deterministic; and `matchup_result` has three tally
+> bodies across four consumption sites, not two consumers.
+
 **Established:** 2026-08-04 · **By:** PM, against the **live Sleeper API** and the harvested corpus.
 **Subject:** `_derive_matchup_result` — `application/data/transforms/join_nfl_sleeper_weekly.py:189`.
 **Why this doc exists:** `STATUS.md` carried this as *parked, "worth doing before the season runs deep."*

@@ -98,18 +98,28 @@ def matchup_win_probs(mu_a, sig_a, mu_b, sig_b) -> list[float]:
     return [pa, 1 - pa]
 
 
+EMPTY_RECORD = {"w": 0, "l": 0, "t": 0}
+
+
 def records_by_roster(week_rows) -> dict:
-    """Real W-L per roster from the team-week results (queries.js recordsByRoster, l.750).
+    """Real W-L-T per roster from the team-week results (queries.js recordsByRoster, l.750).
 
     ``week_rows`` are ``_sql_standings_weeks`` rows (one per team-week, weeks ≤ N).
+
+    ``result`` is NULL for a week with no gradeable matchup — unplayed, a bye, or no matchup_id
+    (``transforms/_matchup``). That week counts NOWHERE: not a win, not a loss, not a tie. The absent
+    ``else`` is the point, not an oversight — it is what makes a freshly drafted league read 0-0 instead
+    of inventing a record out of a slate nobody has played.
     """
     rec: dict[int, dict] = {}
     for r in week_rows:
-        x = rec.setdefault(int(r["roster_id"]), {"w": 0, "l": 0})
+        x = rec.setdefault(int(r["roster_id"]), dict(EMPTY_RECORD))
         if r["result"] == "W":
             x["w"] += 1
         elif r["result"] == "L":
             x["l"] += 1
+        elif r["result"] == "T":
+            x["t"] += 1
     return rec
 
 

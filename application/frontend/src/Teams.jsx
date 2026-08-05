@@ -73,7 +73,10 @@ export default function Teams({ asOfWeek, weeks, onOpenTeam }) {
                       {t.isMe ? <span className="pl-you">YOU</span> : null}
                     </span>
                   </td>
-                  <td className="tm-r mono">{t.wins}-{t.losses}</td>
+                  {/* Server-built, so a tie ("6-5-1") reaches this cell the same way it reaches
+                      TeamDetail / Matchups / the header. This was the app's only client-side record
+                      construction — every record string now comes from calcs.format_record. */}
+                  <td className="tm-r mono">{t.record}</td>
                   <td className="tm-r mono tm-true">{t.allPlayW}-{t.allPlayL}</td>
                   <td className="tm-l">
                     {shape && t.posture ? (

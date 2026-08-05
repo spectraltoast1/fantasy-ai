@@ -51,6 +51,7 @@ import numpy as np
 import polars as pl
 
 from application.data import data_layer
+from application.data.transforms import _matchup
 from application.data.transforms._analytics import round1, expand_slots, optimal_lineup
 from application.data.transforms.compute_production_vor import _roster_as_of
 
@@ -198,7 +199,13 @@ def _team_week_dist(pids: list, cons_week: dict, slots: list) -> tuple:
 def _standings_as_of(matchups: pl.DataFrame, n: int) -> dict:
     """roster_id → {"wins", "points"} from the *actual* results for weeks ≤ N. A matchup is the two
     rows sharing a (week, matchup_id); higher points wins (a tie splits 0.5). Points-for is the
-    tiebreaker carried alongside wins."""
+    tiebreaker carried alongside wins.
+
+    A matchup that isn't GRADEABLE awards nothing. Same definition the join grades `matchup_result`
+    with (`_matchup`, one rule in two renderings), so the served record and `bracket_odds` can no
+    longer disagree by construction. The case that made this matter: Sleeper returns a full, paired
+    slate at 0.0 from the DRAFT onward, and the `else` below used to read that as a draw and hand
+    every roster 0.5 wins for a game nobody had played."""
     standings: dict = {}
     sub = matchups.filter((pl.col("week") <= n) & pl.col("matchup_id").is_not_null())
     # Iterate the groups in a FIXED (week, matchup_id) order. A roster's cumulative points is a float sum,
@@ -207,12 +214,13 @@ def _standings_as_of(matchups: pl.DataFrame, n: int) -> dict:
     # boundary — a latent non-determinism the fixed-SEED sim otherwise inherits (current_points was the only
     # column it reached; graded outputs stayed stable). Sorting pins it; proven a no-op for the whole
     # persisted corpus (matched + is_mine), only making the value reproducible.
-    for _, g in sorted(sub.group_by("week", "matchup_id"), key=lambda kv: (int(kv[0][0]), int(kv[0][1]))):
+    for key, g in sorted(sub.group_by("week", "matchup_id"), key=lambda kv: (int(kv[0][0]), int(kv[0][1]))):
         rows = g.sort("roster_id").to_dicts()
         for r in rows:
             standings.setdefault(int(r["roster_id"]), {"wins": 0.0, "points": 0.0})
             standings[int(r["roster_id"])]["points"] += float(r["points"])
-        if len(rows) == 2:
+        # Points-for accumulates above regardless (a 0.0 week adds 0.0); only the WIN credit is gated.
+        if _matchup.is_gradeable(key[1], [float(r["points"]) for r in rows]):
             a, b = rows[0], rows[1]
             ra, rb = int(a["roster_id"]), int(b["roster_id"])
             if a["points"] > b["points"]:
@@ -294,10 +302,26 @@ def _simulate(team_ids: list, base: dict, dists: dict, sched: dict, weeks: range
     }
 
 
+def _last_played_week(matchups: pl.DataFrame, n: int) -> int:
+    """The highest week ≤ N in which somebody scored — 0 when none has. The same "a week counts only
+    if somebody scored" clock `api/reads.load_weeks` serves as `played` (S4a), applied to the sim's
+    own input so the two can't disagree about how much season has happened."""
+    played = matchups.filter((pl.col("week") <= n) & (pl.col("points").abs() > 0.0))
+    return 0 if played.is_empty() else int(played["week"].max())
+
+
 def _compute_as_of(n, roster_pids, cons_by_week, slots, matchups, season,
                    reg_season_end: int, playoff_teams: int, div_map=None, *, seed: int = SEED) -> list:
-    """Bracket-odds rows for one as-of cutoff N (playoff config injected from league settings)."""
-    weeks = range(n + 1, reg_season_end + 1)
+    """Bracket-odds rows for one as-of cutoff N (playoff config injected from league settings).
+
+    The simulated window starts after the last week that was actually PLAYED, not after N. Those are
+    the same week for every league that has ever been graded, so this is an identity on the corpus —
+    but they diverge for a freshly drafted league, whose week 1 is joined at 0.0 from the draft on.
+    Starting at N+1 there would treat that week as spent: its real games would never be simulated and
+    `remaining_games` would be short by one. `dists` and `sched` follow this range, so widening it is
+    the whole change.
+    """
+    weeks = range(_last_played_week(matchups, n) + 1, reg_season_end + 1)
     team_ids = sorted(roster_pids.keys())
     if not list(weeks) or not team_ids:
         return []

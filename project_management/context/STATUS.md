@@ -92,7 +92,16 @@ Seven projects (P0 finish multi-league → P6 launch hardening); critical-path s
 **P0–P2 done.** P2 delivered the un-freeze end to end: the 2026 preseason substrate (ppr+half, honest
 constants, `check_forward_substrate` green), the per-league scoped loader + weekly-refresh orchestrator,
 the honestly-retired cross-time market, the wired-but-dark ROS band, and the honest early-season window.
-→ `sessions/v1/P2-Go_Live_2026/`.
+**Gate A's one blocker is cleared (2026-08-05):** `transforms/_matchup` is now the single rule the join
+and the sim share — *a matchup is gradeable iff it has a `matchup_id`, exactly two rosters, and somebody
+scored; else null, never fabricated.* A freshly drafted league had minted a full W/L slate by roster-id
+sort order before a game was played; it now reads `0-0`. A genuine tie became a real outcome (`'T'` →
+`2-1-1`), and the null-`matchup_id` playoff case was **not** merely latent — `weekly_refresh` joins
+without `harvest`'s `playoff_week_start - 1` clamp. Nothing was re-joined or reloaded: only a *future*
+join changes, reaching Postgres via `weekly_refresh`'s existing `reload_league`. Parity is exact — 80
+read payloads byte-identical to main, and across all 271 corpus league-seasons exactly **4** groups
+change verdict, all genuine ties outside the demo slate.
+→ `sessions/v1/P2-Go_Live_2026/` (+ `SESSION_P2_MATCHUP_TIE_REPORT.md`).
 
 **P5 (accounts + invite-gated self-serve onboarding) is the active block** — 7 sessions, S0–S6, the
 critical-path long pole. Everything but S6 is buildable against the 2025 replay now, so the preseason
@@ -133,27 +142,14 @@ P5 — which data-proves S2's refresh, S3b's band panel and S4a's regimes at onc
 ROS-range panel against real band data**; and **S4b** (market turn-on) post-launch.
 → `ROADMAP.md` + `projects/v1/BUILD_ORDER.md` + `projects/v1/P5_ACCOUNTS_SELF_SERVE_ONBOARDING.md`.
 
-## Must fix before Gate A (loading the first real 2026 league)
-
-- **`_derive_matchup_result` mints a phantom W/L on a tie — and a freshly drafted league is all ties.**
-  It ranks a matchup by `sort_by(roster_total_points, descending).first()` with **no tie branch**, so a
-  0-0 unplayed matchup (and a genuine real-life tie) produces a W and an L decided by sort order.
-  `compute_bracket_sim` handles the same case correctly (0.5 each), so the served record and
-  `bracket_odds.current_wins` disagree by construction. **Re-filed from "parked" to a Gate-A blocker on
-  2026-08-04:** the first thing Will's 2026 league does after the draft is load with every matchup at 0-0,
-  so fake standings are what he would see on the first real load — not a deep-season edge case. Changes
-  measured data and only takes effect on a re-join → its own bounded session with a parity check.
-  **CONFIRMED against the live Sleeper API, 2026-08-04** — and the trigger is the **draft**, not
-  kickoff: a 2026 league that has not drafted returns an empty matchup array, while one with a schedule
-  returns a full slate at `points: 0.0` with paired `matchup_id`s *today*, which the real function turns
-  into **6 W and 6 L by roster-id sort order**. The corpus has no footprint (7 joined league-seasons,
-  16,364 rows, 554 matchups: zero tied, zero degenerate) — which also hands the fix a **byte-identical
-  parity oracle** on 2020–2025. A second, latent case in the same function (null `matchup_id` on playoff
-  weeks groups the whole league into one match) is unreachable only because joins stop at
-  `playoff_week_start - 1`. → `sessions/v1/P2-Go_Live_2026/FINDING_matchup_tie_gate_a.md`.
-  (S4a's depth clock reads points, not W/L, so it is already immune.)
-
 ## Deferred / parked (not blocking; each picked up in its project)
+
+- **`audit_join._build_zero_stat_row` writes repair rows without the post-join columns** (found
+  2026-08-05, pre-existing). Its synthetic zero-stat rows set roster/matchup/points but never
+  `matchup_result` or `is_two_way`, so 2 rows in `1182101676608823296`/2025 carry a null verdict and a
+  wrong flag. Harmless to what's served (`max(matchup_result)` skips nulls, so the roster-week's real
+  verdict still wins) but it is **the one pre-existing FAIL in `check_harvest` check 5**, reproduced on
+  unmodified main. `check_matchup_result` reports the count rather than tolerating it silently.
 
 - **The ROS-range panel is unverified against real band data.** Everything around it is proven — the loader
   guard, the parity oracle across 14 tables, the pinned select, the absent-state — but the populated panel was
