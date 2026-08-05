@@ -105,9 +105,9 @@ runbooks — are reference in **`sessions/v1/`**. For how the whole `project_man
 
 | Capability | Project | Late-plan |
 |---|---|---|
-| Waiver / free-agent value | P3 | **#1 in the late bucket — target Week 1.** A user can draft and set lineups without it, so it's the safest single thing to slip to ~Week 2 if the spine is tight. |
+| Waiver / free-agent value | P3 | **Now runs AFTER P4 (2026-08-05)** — it gates nothing else and carries no visible promise. #1 in the late bucket — target Week 1. A user can draft and set lineups without it, so it's the safest single thing to slip to ~Week 2 if the spine is tight. |
 | Market value + live trade lean | P2 (market half) | Show the live read once collectors are proven; **gate the panel at launch if not — never show the old cross-time POC.** The SF market/QB-pool check rides here. |
-| Live 2026 AI outlook (bull/bear/situation) | P4 | Target early in-season; gate honestly at launch if not ready. **Best candidate to be late** — both for the timeline and because the honesty guardrails (R2) benefit from not rushing. |
+| Live 2026 AI outlook (bull/bear/situation) | P4 | **REPRIORITISED 2026-08-05: P4 now runs BEFORE P3.** The public demo populates its AI-outlook panel *synthetically* until P4 ships (see `sessions/v1/P5-Self_Serve/SESSION_P5_DEMO_LEAGUE_CLONE.md`), so P4 is the session that retires a placeholder a visitor can see — it is no longer the safe thing to slip. R2's guardrails below still apply in full — populating the panel is fine *if* they hold, and shipping the grades without them is not. (Previously filed here as the best candidate to be late.) |
 | AI cost caps, deeper monitoring/alerting, perf polish | P6 | Rides with the AI outlook and post-launch load. |
 
 **Post-V1 stays out entirely** (standard/custom/dynasty scoring, other platforms, owner-keyed dossiers, annual-retune automation) — that's the "next improvements" state you're aiming for.

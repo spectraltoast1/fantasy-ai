@@ -144,6 +144,32 @@ P5 — which data-proves S2's refresh, S3b's band panel and S4a's regimes at onc
 ROS-range panel against real band data**; and **S4b** (market turn-on) post-launch.
 → `ROADMAP.md` + `projects/v1/BUILD_ORDER.md` + `projects/v1/P5_ACCOUNTS_SELF_SERVE_ONBOARDING.md`.
 
+## Decided 2026-08-05 — the demo, visibility, and what a signed-in user sees
+
+**One public league, everything else private.** Visibility is one predicate: *is the demo* **OR** *owned by
+the caller AND current season*. `DEMO_LEAGUE_ID` is a **config value, not a table** (env-first like
+`ACCESS_CODE`) — it points at real LoRP 2025 today and gets repointed at an anonymized clone later, one
+line. "Current season" comes from Sleeper's `/v1/state/nfl`, not a constant; the demo is the deliberate
+season-independent exception, so visibility must **not** be built as a global `season = current` filter.
+An unowned league returns the **same 404** as a league that does not exist — a 403 would confirm existence,
+and Sleeper league ids are guessable.
+
+**What people see:** signed out → the demo (which is the landing page until Will writes one); signed in
+with a league → **their own league first**, demo still switchable; signed in with none → the demo as the
+empty state. The **season selector goes** (prior seasons are corpus, not product; `season` is not a SQL
+filter anywhere, so this is frontend + catalog only). The **league** and **week** switchers stay.
+
+**The 31 corpus slices STAY in the database** — they are engineering fixtures (`compute_demo_slices`,
+`build_demo_manifest`, B6's 31/31, `check_scoped_reload`'s parity oracle). Only the *public catalog*
+shrinks to one. Nothing is deleted.
+
+**The demo league becomes an anonymized clone** of LoRP 2025 at week 5 under a dedicated id, hard-excluded
+from every engine component — real computed data everywhere it exists (including a rest-of-season band
+computed at live constants into a *demo-only* file, never the frozen-corpus path), with the **AI outlook
+populated synthetically** and derived from real numbers until P4 ships. **P4 therefore moves ahead of P3**
+— it is the session that retires a placeholder a visitor can see.
+→ `sessions/v1/P5-Self_Serve/SESSION_P5_S2_OWNERSHIP_AND_ISOLATION.md` + `SESSION_P5_DEMO_LEAGUE_CLONE.md`.
+
 ## Deferred / parked (not blocking; each picked up in its project)
 
 - **`audit_join._build_zero_stat_row` writes repair rows without the post-join columns** (found
