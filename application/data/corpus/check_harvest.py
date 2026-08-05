@@ -235,6 +235,18 @@ def check(sample_determinism: int = 2) -> bool:
     _ok("check-4 value-equality bites (differing values ≠; row permutation ==)",
         (not _frame_eq(pl.DataFrame({"a": [1, 2]}), pl.DataFrame({"a": [1, 3]})))
         and _frame_eq(pl.DataFrame({"a": [2, 1]}), pl.DataFrame({"a": [1, 2]})), results)
+    # check-5's two halves must fail INDEPENDENTLY, which is the whole reason they were split:
+    # a null flag and a wrong flag are different defects. Note polars' `equals` defaults to
+    # null_equal=True, so null==null passes while null-vs-False does not — which is exactly why a
+    # never-applied column reads as "mislabeled" unless the null count is asserted on its own.
+    _want = pl.Series("is_two_way", [True, False, False])       # the reference
+    _never_applied = pl.Series("is_two_way", [True, False, None])
+    _wrong = pl.Series("is_two_way", [False, False, False])
+    _ok("check-5 null half bites (a never-applied flag)", _never_applied.null_count() > 0, results)
+    _ok("check-5 correctness half bites (a wrong flag)", not _wrong.equals(_want), results)
+    _ok("check-5 halves are independent (a null ALSO fails equality)",
+        _wrong.null_count() == 0 and not _never_applied.equals(_want), results)
+    _ok("check-5 passes a correct flag (not vacuous)", _want.equals(_want), results)
 
     ok = all(results) and bool(results)
     print()

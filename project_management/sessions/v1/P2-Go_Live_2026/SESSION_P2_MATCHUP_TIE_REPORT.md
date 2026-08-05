@@ -82,6 +82,11 @@ simulated and `remaining_games` is right).
 - **`weekly_refresh` does not clamp to `playoff_week_start - 1`.** The finding called the null-`matchup_id`
   case unreachable on the strength of `harvest._build_join`; the live weekly path has no such clamp, so
   it is reachable in-season. That moved it from "latent" to "fixed now", as planned.
+- **[CORRECTED 2026-08-05]** the claim below that these rows caused the `check_harvest` check-5 FAIL was
+  **wrong**, and the correction is recorded in `SESSION_P2_AUDIT_JOIN_NULLS_REPORT.md`. The repair rows
+  carry `is_two_way = false`, which is *correct*. Check 5 was red for an unrelated reason: 147 week-5 rows
+  whose flag was null-filled by the diagonal concat when P2/S2 appended that week. Only the null
+  `matchup_result` half of the sentence below was true.
 - **`audit_join._build_zero_stat_row` writes repair rows without the post-join columns** — 2 rows in
   league `1182101676608823296`/2025 carry a null `matchup_result` and a wrong `is_two_way`. Pre-existing
   (reproduced on unmodified `main`), harmless to the served record (`max()` skips the nulls), and the

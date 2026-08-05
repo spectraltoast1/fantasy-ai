@@ -39,7 +39,13 @@ from application.data import data_layer
 from application.data.corpus import harvest
 from application.data.transforms import audit_join
 
-_UNTOUCHED_EXEMPT = ("matchup_result", "is_two_way")
+# The columns this tool is allowed to write. Everything else is asserted value-identical.
+#
+# `fetched_at` is deliberately NOT here even though `audit_join` now fills it on new rows: it is null
+# on 77 rows of the is_mine league, i.e. on ordinary rows and not just repair rows, so a null there is
+# pre-existing provenance state rather than this defect. Borrowing a sibling row's timestamp to close
+# them would fabricate provenance, which is the opposite of the point.
+_UNTOUCHED_EXEMPT = ("matchup_result", "is_two_way", "player_id", "position_group")
 
 
 def _fill_results(df: pl.DataFrame) -> pl.DataFrame:
@@ -50,6 +56,29 @@ def _fill_results(df: pl.DataFrame) -> pl.DataFrame:
     parts = [audit_join.fill_null_matchup_result(g)
              for _k, g in sorted(df.group_by("week"), key=lambda kv: int(kv[0][0]))]
     return pl.concat(parts, how="vertical").select(df.columns)
+
+
+def _fill_identity(df: pl.DataFrame) -> pl.DataFrame:
+    """Fill `player_id` / `position_group` where null, from the same sources `audit_join` now uses.
+
+    Null-only, so an existing value can never move. Both are null on exactly the repair rows in the
+    affected league — a real row gets them from the join — but the fill is written as a general
+    null-only rule rather than a row targeting hack, so it stays correct on any input.
+    """
+    gsis = audit_join._gsis_by_sleeper()
+    if "player_id" in df.columns:
+        df = df.with_columns(
+            pl.when(pl.col("player_id").is_null())
+            .then(pl.col("sleeper_player_id").replace_strict(gsis, default=None))
+            .otherwise(pl.col("player_id")).alias("player_id"))
+    if "position_group" in df.columns:
+        # nflreadpy's group == the position for every skill position; verified against the join.
+        df = df.with_columns(
+            pl.when(pl.col("position_group").is_null()
+                    & pl.col("position").is_in(list(audit_join._SKILL_POSITIONS)))
+            .then(pl.col("position"))
+            .otherwise(pl.col("position_group")).alias("position_group"))
+    return df
 
 
 def _assert_untouched(before: pl.DataFrame, after: pl.DataFrame, label: str) -> None:
@@ -95,8 +124,12 @@ def run(league_id: str, season: int, write: bool = False) -> dict:
             print(f"    wk{r['week']} roster={r['roster_id']} matchup={r['matchup_id']} "
                   f"{r['player_display_name']} (sleeper_id={r['sleeper_player_id']})")
 
-    after = _fill_results(before)
+    id_null = {c: int(before[c].null_count()) for c in ("player_id", "position_group")
+               if c in before.columns}
+    after = _fill_identity(_fill_results(before))
     _assert_untouched(before, after, f"{league_id} {season}")
+    for c, n0 in id_null.items():
+        print(f"  {c}: {n0 - int(after[c].null_count())} of {n0} null(s) filled")
     filled = mr_null - (after["matchup_result"].is_null().sum() if "matchup_result" in after.columns else 0)
     if mr_null:
         for r in after.filter(pl.col("sleeper_player_id").is_in(
