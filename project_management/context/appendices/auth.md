@@ -1,9 +1,11 @@
 # Appendix — Auth (how the front door actually works)
 
-**Scope:** the mechanism behind ARCHITECTURE's Auth bullet. Read this when touching sign-in, keys,
-the deploy plumbing, or the auth tables. Shipped P5/S1, signup model corrected in **S1b**
-(2026-08-03); the session reports in `sessions/v1/P5-Self_Serve/` carry the narratives and proofs,
-and `SIGNUP_MODEL_ASSESSMENT.md` records why the model changed.
+**Current as of:** 2026-08-09.
+**Scope:** the mechanism behind ARCHITECTURE's Auth and Ownership bullets. Read this when touching
+sign-in, keys, the deploy plumbing, or the app-side tables. Shipped P5/S1, signup model corrected in
+**S1b** (2026-08-03), ownership + the scoped catalog added in **S2a** (2026-08-09); the session
+reports in `sessions/v1/P5-Self_Serve/` carry the narratives and proofs, and
+`SIGNUP_MODEL_ASSESSMENT.md` records why the signup model changed.
 
 ---
 
@@ -121,22 +123,68 @@ deploy that needs a remembered flag would be a third way to break it.
 console names exactly what is missing, and the overlay renders an honest unavailable state. The demo
 keeps working: auth being misconfigured must not cause more damage than the thing it broke.
 
-## The auth tables live outside the generated schema — structurally
+## The app-side tables live outside the generated schema — structurally
 
 There is **no migration mechanism in this project**. The only DDL is `serve/schema.sql`, which
 `build_db --emit` rewrites wholesale and `--load` applies after DROPping every table it names. An
 auth table listed there would be dropped by the next full reload.
 
-So they live in hand-written `api/auth_schema.sql` (`app_users`, and S1b's `signup_attempts`),
-applied by `api/init_auth_schema.py`, whose `--verify` **asserts they are absent from the
-generated DDL** — the guarantee is tested, not
-documented. The row is written on first authenticated `/api/me` call rather than by a database
-trigger, keeping the behaviour in reviewable code instead of invisible DDL.
+So they live in hand-written `api/auth_schema.sql` — `app_users`, S1b's `signup_attempts`, and
+S2a's `user_leagues` + `nfl_state_cache` — applied by `api/init_auth_schema.py`, whose `--verify`
+**asserts they are absent from the generated DDL**: the guarantee is tested, not documented. Adding
+a table is one entry in `_TABLES` and it inherits both the column dump and the leak check. The
+`app_users` row is written on first authenticated `/api/me` call rather than by a database trigger,
+keeping the behaviour in reviewable code instead of invisible DDL.
 
 **The hazard is not theoretical:** `ros_player_band` has RLS **off** while the other 13 served
 tables have it on, because RLS was enabled by hand and a later `--emit`/`--load` recreated the table
 without it. Any out-of-band property on a `schema.sql` table — RLS, a grant, a trigger, an FK — is
-destroyed by the next full load. The durable fix is to make `--emit` emit the RLS lines (S2).
+destroyed by the next full load. The durable fix is to make `--emit` emit the RLS lines (**S2c**).
+
+## Ownership and visibility (S2a)
+
+Visibility is **one predicate in one function** (`reads.visible`), so there is one place to get it
+wrong and one place to test:
+
+    visible(league) = (league_id == DEMO_LEAGUE_ID) OR (owned by caller AND season == current)
+
+**The demo term is first and season-independent, and that ordering is load-bearing.** The demo is a
+2025 league living in the 2026 season; expressed as a global `season = current` filter it disappears,
+and a missing demo reads as an auth bug rather than as the filter it is.
+
+**Ownership is `public.user_leagues`** — `(user_id, league_id)`, cascading off `auth.users`. No
+`season` column on purpose: a redraft `league_id` already pins one `(league, season)` slice, so a
+season here would be a second copy of a fact `demo_manifest` holds, and the two would eventually
+disagree. It is read **per request**, never carried in the token, so a revoke bites immediately
+rather than an hour later (demonstrated: a revoke changed the catalog for an access token that had
+already been issued).
+
+**A grant is an operator act about a league, not evidence about a person.** S1b creates accounts
+`email_confirm: true` *before* the magic link is known to have sent, so an address nobody controls
+can hold a confirmed account. S4's connect flow writes the same row from the other direction — a user
+claiming their own league — and that is where identity actually gets established.
+
+**"Current season" comes from Sleeper `/v1/state/nfl`**, cached, and the resolver **fails closed**:
+`CURRENT_SEASON` env → fresh cache → Sleeper → stale cache → `None`, where `None` collapses
+visibility to the demo. It must never degrade to "no season filter": an outage that costs a user
+their own league for an hour is an availability bug; one that shows every league to everyone is the
+silent isolation failure S2 exists to prevent. Serving a *stale* season is safe for a directional
+reason — the season only rolls forward, so stale can at worst hide a league that has just become
+current. The last-known-good is a **table**, not a module global, because `min_machines_running = 0`
+erases in-process state on every scale-to-zero — the same reasoning that put the rate limiter in
+Postgres.
+
+**`CURRENT_SEASON` is process-env only, with no `config.py` fallback on purpose.** It exists because
+the corpus tops out at 2025 while Sleeper already reports 2026, so without it the *owned* half of the
+predicate has nothing to bite on and cannot be proven against deployed code. An override that can
+hide in a gitignored file is the failure mode, so it goes in plain `[env]`, and both startup and
+`users.py --list` print the resolved season **and its source**.
+
+**Catalog ordering is the landing rule.** The SPA lands on `leagues[0]`, so "a caller's own leagues
+first, the demo last" is what decides where a signed-in user lands. Two SPA-shaped constraints are
+enforced in `reads.build_catalog` because both fail silently: `/api/leagues` must never 401
+(`loadLeagues` only `console.error`s, leaving a permanent "Loading…") and must never return zero
+leagues (`if (lgs.length)` guards the only slice selection).
 
 ## The client seam
 
@@ -150,3 +198,14 @@ not just sign-in — that event also fires on `TOKEN_REFRESHED`, and a token tha
 republished there starts failing silently about an hour in. Session persistence and refresh are
 supabase-js's own, never hand-rolled: magic-link auth that authenticates but doesn't persist emails
 the user on every visit, which reads as broken.
+
+**S2a made the ORDER load-bearing too.** The catalog effect used to run alongside `getSession()`
+rather than after it — correct while `/api/leagues` was unscoped, and a bug the moment it wasn't:
+`getSession()` is async, so the first catalog request went out with no token and a signed-in user
+landed on the demo until they reloaded. The catalog now waits on an `authReady` flag and refetches
+on identity change — `SIGNED_IN` / `SIGNED_OUT` only, since `TOKEN_REFRESHED` is the same person and
+would otherwise refetch hourly for nothing. Sign-out clears the **selection** (`setActiveSlice({})`,
+`setSlice(null)`), not just the list: a stale `league_id`/`viewer_roster_id` left in `queries.js`
+would keep riding on every request — the previous person's league still on screen. `authReady` also
+flips immediately when `supabase` is null (an unconfigured build), because a permanently-false flag
+would hang every visitor on "Loading…" — auth breaking must not break the app around it.

@@ -2,7 +2,7 @@
 
 **What this is:** SurplusFF — a fantasy-football decision-support dashboard whose unit is the manager's
 *decision*, not the player. Live, single-league, on the server stack.
-**Live at:** https://surplusff.com/ (also https://fantasy-ai-api.fly.dev/) · **Updated:** 2026-08-05
+**Live at:** https://surplusff.com/ (also https://fantasy-ai-api.fly.dev/) · **Updated:** 2026-08-09
 **Name + domain:** the official name is **SurplusFF**, commonly shortened to **Surplus** in speech and
 writing (Will, 2026-08-05); "Gridiron" was a working name — retire it. **surplusff.com** is registered
 (SSL live) and is
@@ -25,10 +25,11 @@ Supabase's redirect allow-list), not a launch dependency.
 
 - A deployed, mobile-responsive React SPA on **FastAPI + Supabase Postgres** (Fly.io, same-origin). Five
   surfaces: **Players, Teams, League, Matchups, Manager Dossier**.
-- **Multi-league, no auth.** All **31 demo league-seasons (12 lineages)** are in the production DB and every
-  read is parameterized on `league_id`(+`season`+`viewer_roster_id`), defaulting to the owner's league with
-  byte-identical parity when omitted. League + season + week selectors re-scope every surface, and the "you"
-  highlight follows the selected league. Verified across all 31 slices × sample weeks, 0 bugs.
+- **Multi-league, and leagues now have owners.** All **31 demo league-seasons (12 lineages)** are still in
+  the production DB — they are engineering fixtures — but the **public catalog is one league**: the demo,
+  plus whatever the signed-in caller owns. Every read is parameterized on
+  `league_id`(+`season`+`viewer_roster_id`) and now defaults to `DEMO_LEAGUE_ID` explicitly. League + week
+  selectors re-scope every surface, and the "you" highlight follows the selected league.
   → *`sessions/v1/P0-Multi_League/` + `sessions/v1/SESSION_B6_VERIFICATION_REPORT.md`.*
 - **The app can now advance week by week (P2/S2).** The loader has a **per-league scoped reload** and a
   **weekly-refresh orchestrator** advances one league to the current week without rebuilding the DB —
@@ -137,31 +138,49 @@ let an attacker reset it by waiting out the idle window. `scripts/invite.py` →
 team members, so without it no friend can receive a link at all.
 → `sessions/v1/P5-Self_Serve/SESSION_P5_S1B_REPORT.md` + `SIGNUP_MODEL_ASSESSMENT.md`.
 
-**Next: P5/S2** (ownership + API-layer per-user isolation — the security session; do not let a fast cadence
-compress it, since isolation bugs fail silently). Two things still queue behind calendar gates, neither
-blocking P5: **loading the first real 2026 league** at Will's draft (~late Aug) — a manual admin load, not
+**P5/S2a done — an account now means something, and the catalog proves it.** `public.user_leagues` gives
+leagues owners; `/api/leagues` was the one unscoped read and now answers per caller — **signed out returns
+exactly the demo, a signed-in user gets the demo plus their own current-season leagues with theirs first,
+and a second account never sees the first's.** Demonstrated with **two real accounts over real HTTP**, in
+both season configurations, and a **revoke bit a token that had already been issued** (ownership is read per
+request, never carried in the JWT). `DEMO_LEAGUE_ID` is config, not a table; "current season" is Sleeper's
+`/v1/state/nfl` and the resolver **fails closed** — env → fresh cache → Sleeper → stale cache → `None`, where
+`None` means demo-only. It never degrades to "no season filter", and a stale season can only ever hide a
+league that has just become current. `application/api/check_ownership.py` is the committed gate: fixture-driven
+so it runs without live accounts, `--live` for the real matrix, and a **prove-it-bites block that re-runs every
+assertion against the pre-S2a catalog and requires all 8 to fail.** Parity: **18/18 read payloads
+value-identical to main** for both the signed-out default and a signed-in user. Honest caveat carried
+forward: `slice_params` defaulting to the demo is **unobservable today** because `DEMO_LEAGUE_ID` *is* the
+is_mine league — it was proven by temporarily repointing the config at Trap 2025 and watching the signed-out
+default follow the config rather than `MY_USERNAME`.
+→ `sessions/v1/P5-Self_Serve/SESSION_P5_S2A_REPORT.md`.
+
+**Next: P5/S2b** — scope the eleven per-panel reads. A caller who already knows a `league_id` can still pass
+it to `/api/players`; only the catalog is closed. S2b moves the predicate into `slice_params`, routes the
+unauthorized case into the existing unknown-`league_id` 404 (a 403 would confirm existence, and Sleeper ids
+are guessable), validates `viewer_roster_id` against a visible slice, moves viewer identity to *user × league*,
+removes the season selector, and spends its whole proof budget on `check_isolation.py` — every read endpoint
+× {signed-out, owner, other user}, with its own prove-bites block. Then **S2c**: make `--emit` emit the RLS
+lines, reorder the signup rate limit so a wrong code can't lock a real person out, and decide whether the
+ownership model cares about confirmed-accounts-with-nobody-behind-them. Two things still queue behind calendar
+gates, neither blocking P5: **loading the first real 2026 league** at Will's draft (~late Aug) — a manual admin load, not
 P5 — which data-proves S2's refresh, S3b's band panel and S4a's regimes at once and **must verify the
 ROS-range panel against real band data**; and **S4b** (market turn-on) post-launch.
 → `ROADMAP.md` + `projects/v1/BUILD_ORDER.md` + `projects/v1/P5_ACCOUNTS_SELF_SERVE_ONBOARDING.md`.
 
-## Decided 2026-08-05 — the demo, visibility, and what a signed-in user sees
+## The demo, visibility, and what a signed-in user sees (decided 2026-08-05; **built in S2a**)
 
-**One public league, everything else private.** Visibility is one predicate: *is the demo* **OR** *owned by
-the caller AND current season*. `DEMO_LEAGUE_ID` is a **config value, not a table** (env-first like
-`ACCESS_CODE`) — it points at real LoRP 2025 today and gets repointed at an anonymized clone later, one
-line. "Current season" comes from Sleeper's `/v1/state/nfl`, not a constant; the demo is the deliberate
-season-independent exception, so visibility must **not** be built as a global `season = current` filter.
-An unowned league returns the **same 404** as a league that does not exist — a 403 would confirm existence,
-and Sleeper league ids are guessable.
+The model is now code — the mechanism lives in `ARCHITECTURE.md` and `appendices/auth.md`, not here. What
+remains outstanding from that decision:
 
-**What people see:** signed out → the demo (which is the landing page until Will writes one); signed in
-with a league → **their own league first**, demo still switchable; signed in with none → the demo as the
-empty state. The **season selector goes** (prior seasons are corpus, not product; `season` is not a SQL
-filter anywhere, so this is frontend + catalog only). The **league** and **week** switchers stay.
-
-**The 31 corpus slices STAY in the database** — they are engineering fixtures (`compute_demo_slices`,
-`build_demo_manifest`, B6's 31/31, `check_scoped_reload`'s parity oracle). Only the *public catalog*
-shrinks to one. Nothing is deleted.
+- **The unowned-league 404 is still S2b.** An unowned `league_id` must return the *same* 404 as a
+  nonexistent one — a 403 would confirm existence, and Sleeper ids are guessable. S2a closed the catalog;
+  the per-panel reads still answer for any catalogued slice.
+- **The season selector still needs removing** (prior seasons are corpus, not product; `season` is not a SQL
+  filter anywhere, so it is frontend + catalog only). The **league** and **week** switchers stay. S2b.
+- **The 31 corpus slices stay in the database** — engineering fixtures for `compute_demo_slices`,
+  `build_demo_manifest`, B6's 31/31 and `check_scoped_reload`'s parity oracle. Only the public catalog
+  shrank. Nothing was deleted.
 
 **The demo league becomes an anonymized clone** of LoRP 2025 at week 5 under a dedicated id, hard-excluded
 from every engine component — real computed data everywhere it exists (including a rest-of-season band
@@ -211,7 +230,7 @@ populated synthetically** and derived from real numbers until P4 ships. **P4 the
   RLS was turned on by hand, then a later `--emit`/`--load` recreated that table without it. Zero practical
   exposure today (the owner role bypasses RLS and the Data API is off), but it shows the general failure:
   **any out-of-band property on a `schema.sql` table is destroyed by the next full load.** The durable fix is
-  to make `--emit` emit the `ALTER TABLE … ENABLE ROW LEVEL SECURITY` lines; **S2 owns it.**
+  to make `--emit` emit the `ALTER TABLE … ENABLE ROW LEVEL SECURITY` lines; **S2c owns it.**
 - **`weekly_refresh._resolve_scoring_key` would silently mis-score a stranger's league** (found in P5/S0).
   A league absent from `demo_manifest` falls back to `data_layer._active_league(season)[1]` — *the owner's*
   scoring key. Every user's league is absent from the catalog until the connect flow catalogs it, so this

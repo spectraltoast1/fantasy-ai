@@ -65,10 +65,10 @@ substrate shared by every league on the same profile, stamped with each slice's 
 engine-improvement **ledger** (predictions / outcomes / resolutions / scorecard) is deliberately **not** in
 the served store — it's the tuning/validation spine. → *see appendix: store-schema, engine-improvement-loop.*
 
-**Plus two auth tables, outside all of that on purpose (P5/S1, S1b).** `serve/schema.sql` is *generated* by
-`--emit` and applied by `--load`, which DROPs every table it names — so `app_users` and `signup_attempts`
-live in hand-written `api/auth_schema.sql` instead, and `init_auth_schema.py --verify` asserts they stay
-absent from the generated DDL. → *see appendix: auth.*
+**Plus four app-side tables, outside all of that on purpose (P5/S1, S1b, S2a).** `serve/schema.sql` is
+*generated* by `--emit` and applied by `--load`, which DROPs every table it names — so `app_users`,
+`signup_attempts`, `user_leagues` and `nfl_state_cache` live in hand-written `api/auth_schema.sql` instead,
+and `init_auth_schema.py --verify` asserts they stay absent from the generated DDL. → *see appendix: auth.*
 
 **The honest-band boundary.** `ros_player_band` is served only from `build_db.FIRST_HONEST_BAND_SEASON`
 (2026) onward. Below it the band belongs to the **frozen corpus** — built at pre-8c `CENTER_SHRINK=1.0` and
@@ -84,16 +84,20 @@ re-backfill — the annual pipeline's job.
 `/api/matchups` · `/api/matchups/{id}` · `/api/leagues` (catalog) · `/api/me` (identity) ·
 `POST /api/signup`. **Read-only apart from those two** — there is no data write/ingest surface.
 Every read takes an optional `?league_id=`(+`?season=`+`?viewer_roster_id=`)
-via the `slice_params` dependency, defaulting to the owner's league (a 404 guards an unknown `league_id`);
-`/api/leagues` is the one unscoped catalog read.
+via the `slice_params` dependency (a 404 guards an unknown `league_id`), **defaulting to `DEMO_LEAGUE_ID`**
+as of P5/S2a — previously it fell through `MY_USERNAME` to whichever league the owner's Sleeper credentials
+named, which made an anonymous visitor land on Will's real league by accident of name resolution rather
+than by decision. Same league today; the point is that it is now the *configured public* one.
 
 **Two non-read endpoints.** `/api/me` takes the `auth.current_user` dependency and returns the verified
 caller (401 on a missing/forged/expired token, 503 when the JWKS can't be reached — denied either way, but
 an outage stays distinguishable from a bad credential). **`POST /api/signup`** is the one *unauthenticated
 write*: it validates the access code, creates the account and sends a magic link, rate-limited by IP and
-email against `public.signup_attempts`. Every read is deliberately still **open**: authentication without
-per-user scoping is a half-gate, so closing and scoping the reads is one change with one proof, and that is
-P5/S2.
+email against `public.signup_attempts`. **`/api/leagues` takes `auth.optional_user`** (P5/S2a) — no
+`Authorization` header is *anonymous*, a present-but-invalid token is *401*, an unreachable verifier is
+*503*; degrading a bad token to anonymous would make a broken verifier, a botched key rotation and a forged
+token all look like an ordinary visit. The eleven per-panel reads are deliberately still **open**; scoping
+them is P5/S2b.
 
 **Two gates, two questions.** `readiness.jsx` answers *"is there enough data yet"* (`Gate` + the `BANDS`
 ladder, keyed to **`weeksOfData`** — weeks with real RESULTS as of the viewed week, from `/api/weeks`'s
@@ -124,10 +128,26 @@ fallback, so the band is the honest, wide, position-typical prior until games sh
 ## Multi-league / multi-user (current state)
 
 - **Multi-league** — live: the store is fully keyed, every read is parameterized on `league_id`(+`season`),
-  and the SPA has league + season selectors (from `/api/leagues`) that switch across the 12 demo lineages.
+  and the SPA has league + season selectors (from `/api/leagues`). The 31 corpus slices all remain in the
+  database as engineering fixtures; since S2a the **public catalog** is one league.
+- **Ownership + visibility — live (P5/S2a).** Visibility is one predicate, in one function
+  (`reads.visible`): `visible(league) = (league_id == DEMO_LEAGUE_ID) OR (owned by caller AND season ==
+  current)`. Ownership is `public.user_leagues` (`user_id` × `league_id`, cascading off `auth.users`), written
+  today by `scripts/users.py --grant` and by S4's connect flow later. **`DEMO_LEAGUE_ID` is config, not a
+  table** — one public league makes a table pure overhead, and repointing the demo at the anonymized clone
+  stays one line. **"Current season" is Sleeper's `/v1/state/nfl`**, not a constant, so it rolls over by
+  itself; the demo is the deliberate season-independent exception, which is why the demo term is evaluated
+  first and separately — as a global `season = current` filter the demo would vanish and read as an auth bug.
+  The resolver **fails closed** (env override → fresh cache → Sleeper → stale cache → `None`, and `None`
+  means demo-only); a stale season can only ever hide a league that just became current, so every fallback
+  narrows. Last-known-good is `public.nfl_state_cache` rather than a module global because
+  `min_machines_running = 0` erases in-process state on every scale-to-zero.
+  The catalog orders **a caller's own leagues first, the demo last** — the SPA lands on `leagues[0]`, so that
+  ordering *is* the landing rule.
 - **Viewer identity** — `viewer_roster_id` (per league, from the catalog) is the "you" seam; a request with no
-  `viewer_roster_id` falls back to `MY_USERNAME`'s roster (the default). The `MY_USERNAME` Fly secret stays as
-  that default resolver.
+  `viewer_roster_id` falls back to `MY_USERNAME`'s roster. The `MY_USERNAME` Fly secret stays as that
+  resolver **and only that** — it is no longer how the default *league* is chosen. Moving viewer identity from
+  a league property to a user × league property is still P5/S2b.
 - **Auth — live, identity only (P5/S1 + S1b).** Supabase Auth, **magic link**, **self-serve signup behind a
   shared access code**. Platform signup is OFF, so there is no public path to account creation except
   `POST /api/signup`, which validates the code **server-side** and then does the admin create + send itself —
@@ -139,10 +159,14 @@ fallback, so the band is the honest, wide, position-typical prior until games sh
   current **publishable/secret** pair — and the secret key now lives in the deployed environment, since the
   API performs admin calls. **Custom SMTP is a hard dependency**: the built-in sender refuses any address
   that isn't a project team member. → *see appendix: auth.*
-- **Per-user isolation — NOT yet.** Every read except `/api/me` is still open, and the app still connects as
-  one owner-role Postgres connection that bypasses RLS. RLS is deny-by-default on every public table and the
-  unused Data API is disabled — defense-in-depth, not authz. Scoping each read to its owner is **P5/S2**, in
-  the API layer, not an RLS-policy build. → `projects/v1/` (P5).
+- **Per-user isolation — half done.** The **catalog** is scoped (S2a): signed out returns exactly the demo,
+  signed in returns the demo plus your own current-season leagues, and a second account never sees the
+  first's. The **eleven per-panel reads are still open** — a caller who already knows a `league_id` can still
+  pass it to `/api/players`. Moving the predicate into `slice_params` so every read inherits it, routing the
+  unauthorized case into the existing unknown-`league_id` 404 (a 403 would confirm existence, and Sleeper ids
+  are guessable), and validating `viewer_roster_id` against a visible slice, is **P5/S2b**. The app still
+  connects as one owner-role Postgres connection that bypasses RLS, so RLS stays defense-in-depth, not authz;
+  isolation is API-layer by decision. → `projects/v1/` (P5).
 
 ## Scope & rules
 
