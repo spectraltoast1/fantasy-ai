@@ -1,4 +1,4 @@
-"""Apply `auth_schema.sql` — the hand-written DDL the loader can't reach (P5/S1, extended S1b).
+"""Apply `auth_schema.sql` — the hand-written DDL the loader can't reach (P5/S1, extended S1b, S2a).
 
 Every other table in this store is created by `build_db.py --emit`/`--load`, which regenerates
 its schema file and DROPs what it names. These tables must outlive that, so they live in their
@@ -19,8 +19,10 @@ from application.api import db
 _SQL_PATH = Path(__file__).resolve().parent / "auth_schema.sql"
 
 # Every table this file owns. S1 hardcoded `app_users` in three places; S1b needed a second
-# table, so the name lives here once instead — adding a third is now one list entry.
-_TABLES = ["app_users", "signup_attempts"]
+# table, so the name lives here once instead — adding a third is now one list entry. S2a added
+# two (`user_leagues`, `nfl_state_cache`) and that is exactly what it cost: two list entries,
+# with the column dump and the absent-from-generated-DDL assertion inherited for free.
+_TABLES = ["app_users", "signup_attempts", "user_leagues", "nfl_state_cache"]
 
 _COLUMNS_SQL = """
 SELECT column_name, data_type, is_nullable

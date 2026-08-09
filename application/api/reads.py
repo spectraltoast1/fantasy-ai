@@ -12,9 +12,13 @@ Store tables map 1:1 to the DuckDB logical names: ``'season.parquet'`` -> ``seas
 
 from __future__ import annotations
 
+import logging
+
 from application.api import calcs, db, projections, settings
 
 POS = ["QB", "RB", "WR", "TE"]
+
+_LOG = logging.getLogger(__name__)
 
 
 # --- the season-replay week seam (queries.js l.632/636), as Postgres fragments ------------
@@ -994,18 +998,118 @@ def _market_panel(panels_market, cross_time_by: dict, league_id: str) -> bool:
     return cross_time is False
 
 
-def load_leagues() -> dict:
-    """The demo catalog: every lineage grouped by its root ``lineage_id`` (a league_id string,
-    NOT a slug), each with its seasons (desc), weeks available, pinned viewer, and panel flags.
+_OWNED_LEAGUES = "SELECT league_id FROM public.user_leagues WHERE user_id = %(uid)s"
 
-    The one deliberately UNSCOPED read — it spans every league, so it does NOT filter on
-    ``settings.league_id()`` like the per-panel reads. ``weeks_available`` is derived at query
-    time from the loaded ``season`` (the PLAYED weeks — the same source ``load_weeks`` uses — so a
-    frozen slice like is_mine 2025 reports [1..4], not the schedule's full forward [1..18]). Name +
-    viewer mirror the manifest exactly (lorp ``viewer_roster_id`` is 8). Shape = the B3 contract.
+
+def owned_league_ids(user_id) -> set[str]:
+    """The league ids granted to one account (P5/S2a). Empty set for an anonymous caller.
+
+    Read per request rather than carried in the token: a revoke has to bite immediately, and a
+    grant baked into a JWT would keep working for the hour until it expired.
+    """
+    if not user_id:
+        return set()
+    return {str(r["league_id"]) for r in db.fetch_all(_OWNED_LEAGUES, {"uid": str(user_id)})}
+
+
+def visible(league_id, season, *, demo_league_id, owned, current_season) -> bool:
+    """THE visibility predicate (P5/S2a) — one function, so there is one place to get it wrong.
+
+        visible(league) = (league_id == DEMO_LEAGUE_ID) OR (owned by caller AND season == current)
+
+    **The demo term comes first and is season-independent, deliberately.** The demo is a 2025
+    league living in the 2026 season; written as a global ``season = current`` filter it would
+    vanish, and a missing demo reads as an auth bug rather than as the filter it actually is.
+
+    **An unresolved ``current_season`` (Sleeper down, nothing cached) denies the owned term.**
+    That is the fail-closed direction: a user briefly not seeing their own league is an
+    availability problem, while everyone seeing every league is the silent isolation failure this
+    session exists to prevent.
+    """
+    if demo_league_id is not None and str(league_id) == str(demo_league_id):
+        return True
+    if str(league_id) not in owned:
+        return False
+    if current_season is None:
+        return False
+    return int(season) == int(current_season)
+
+
+def build_catalog(rows, weeks_by, cross_time_by, *, demo_league_id, owned, current_season) -> dict:
+    """Shape + filter + order the catalog. Pure, so ``check_ownership`` can drive it with fixtures.
+
+    Ordering is not cosmetic: the SPA lands on ``leagues[0]`` and its latest season, so **a
+    caller's own leagues come first and the demo last** is what makes a signed-in user with a
+    league land on THEIR league instead of the demo. Seasons stay DESC for the same reason.
+    """
+    lineages: dict = {}
+    order: list = []
+    owned_lineages: set = set()
+    for r in rows:
+        if not visible(r["league_id"], r["season"], demo_league_id=demo_league_id,
+                       owned=owned, current_season=current_season):
+            continue
+        key = r["lineage_id"]
+        if key not in lineages:
+            lineages[key] = {
+                "lineage_id": r["lineage_id"],
+                "name": r["name"],
+                "scoring_key": r["scoring_key"],
+                "is_mine": bool(r["is_mine"]),
+                "seasons": [],
+            }
+            order.append(key)
+        if str(r["league_id"]) in owned:
+            owned_lineages.add(key)
+        lineages[key]["seasons"].append({
+            "season": int(r["season"]),
+            "league_id": r["league_id"],
+            "weeks_available": weeks_by.get((r["league_id"], int(r["season"])), []),
+            "viewer_roster_id": (int(r["viewer_roster_id"])
+                                 if r["viewer_roster_id"] is not None else None),
+            "panels": {
+                "market": _market_panel(r["panels_market"], cross_time_by, r["league_id"]),
+                "manager": bool(r["panels_manager"]),
+                "ros_synthesis": bool(r["panels_ros"]),
+            },
+        })
+
+    leagues = [lineages[k] for k in order]
+    # Owned first, everything else (i.e. the demo) last; stable within each group. Replaces the
+    # is_mine-first sort, which was a stand-in for "the viewer's league" back when there was only
+    # one viewer. A lineage that is BOTH owned and the demo counts as owned — it is your league.
+    leagues.sort(key=lambda lg: lg["lineage_id"] not in owned_lineages)
+
+    if not leagues:
+        # The SPA's only applySlice call is guarded by `if (lgs.length)`, so an empty catalog is
+        # not a blank slate — it is a permanent "Loading…" with no error state. The demo term is
+        # supposed to make this unreachable, so reaching it means DEMO_LEAGUE_ID is unset or is
+        # missing from demo_manifest. Loud, because the symptom is silent.
+        _LOG.error("EMPTY league catalog — demo_league_id=%r is unset or absent from "
+                   "demo_manifest. The app will hang on 'Loading…' for every visitor.",
+                   demo_league_id)
+    return {"leagues": leagues}
+
+
+def load_leagues(user_id=None) -> dict:
+    """The catalog, scoped to the caller (P5/S2a): the demo always, plus their own current-season
+    leagues. Signed out (``user_id`` None) that is the demo alone.
+
+    Was the one deliberately unscoped read, and it is the right first thing to close: it is the
+    list every other surface is navigated from, and until S2b scopes the individual panels it is
+    also the only thing standing between a visitor and the knowledge that 31 leagues exist.
+
+    ``weeks_available`` is derived at query time from the loaded ``season`` (the PLAYED weeks — the
+    same source ``load_weeks`` uses — so a frozen slice like is_mine 2025 reports [1..4], not the
+    schedule's full forward [1..18]). Name + viewer mirror the manifest exactly. Shape is unchanged
+    from the B3 contract; only the row set and the ordering move.
 
     ``panels.market`` is the ONE flag not taken straight from the manifest — see ``_market_panel``.
     """
+    demo_league_id = settings.demo_league_id()
+    current_season = settings.current_season()
+    owned = owned_league_ids(user_id)
+
     with db.connect() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT lineage_id, league_id, season, name, scoring_key, is_mine, "
@@ -1027,32 +1131,5 @@ def load_leagues() -> dict:
         )
         cross_time_by = {c["league_id"]: bool(c["cross_time"]) for c in cur.fetchall()}
 
-    lineages: dict = {}
-    order: list = []
-    for r in rows:
-        key = r["lineage_id"]
-        if key not in lineages:
-            lineages[key] = {
-                "lineage_id": r["lineage_id"],
-                "name": r["name"],
-                "scoring_key": r["scoring_key"],
-                "is_mine": bool(r["is_mine"]),
-                "seasons": [],
-            }
-            order.append(key)
-        lineages[key]["seasons"].append({
-            "season": int(r["season"]),
-            "league_id": r["league_id"],
-            "weeks_available": weeks_by.get((r["league_id"], int(r["season"])), []),
-            "viewer_roster_id": (int(r["viewer_roster_id"])
-                                 if r["viewer_roster_id"] is not None else None),
-            "panels": {
-                "market": _market_panel(r["panels_market"], cross_time_by, r["league_id"]),
-                "manager": bool(r["panels_manager"]),
-                "ros_synthesis": bool(r["panels_ros"]),
-            },
-        })
-
-    leagues = [lineages[k] for k in order]
-    leagues.sort(key=lambda lg: not lg["is_mine"])   # is_mine first, else manifest order (stable)
-    return {"leagues": leagues}
+    return build_catalog(rows, weeks_by, cross_time_by, demo_league_id=demo_league_id,
+                         owned=owned, current_season=current_season)

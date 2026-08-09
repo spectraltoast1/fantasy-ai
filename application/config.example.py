@@ -42,6 +42,20 @@ SUPABASE_SECRET_KEY = "sb_secret_..."
 # no table to migrate. Pick something sayable out loud — it gets texted, not pasted.
 ACCESS_CODE = "some-sayable-phrase"
 
+# --- Ownership + visibility (P5/S2a) -----------------------------------------------------
+# The ONE public league. Everything else is private and requires an ownership grant
+# (`scripts/users.py --grant`). Config rather than a table: with a single public league a table
+# buys nothing and cannot drift. Points at real LoRP 2025 today; repointing it at the anonymized
+# demo clone later is this one line (or the fly.toml [env] value in production).
+DEMO_LEAGUE_ID = "1182101676608823296"
+
+# NOT settable here, and that is deliberate — documented so you don't go looking.
+# CURRENT_SEASON is a process-ENV-ONLY override for the current season, which otherwise comes from
+# Sleeper's /v1/state/nfl. It exists to run the ownership proofs against real deployed code (the
+# corpus tops out at 2025 while Sleeper says 2026), so it must be visible where it is set — in a
+# shell, or plain [env] in fly.toml. An override that can hide in this gitignored file is exactly
+# the failure mode. See application/api/nfl_state.py.
+
 # Snapshot storage backend for the daily collectors (P1/S1). Defaults to "local" — the laptop
 # writes parquet to application/data/snapshots/ as before. Set to "supabase" ONLY in the hosted
 # collector CI job (via env), where a diskless runner writes to a durable Supabase Storage bucket.

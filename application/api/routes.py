@@ -5,16 +5,22 @@ verbatim (plain dicts/lists, FastAPI auto-JSON; no Pydantic models so nothing co
 reorders the payload). Week-scoped routes take ``?as_of_week=N`` and default to the latest.
 
 Stage-B B4: every read route also accepts an OPTIONAL ``?league_id=`` (+ ``?season=``) via the
-``slice_params`` dependency, defaulting to the is_mine slice (``settings.league_id()``). Omitting
-them reproduces today's behavior byte-for-byte (parity); passing a corpus ``league_id`` scopes the
-read to that slice. An unknown ``league_id`` 404s. ``load_leagues`` is the one unscoped catalog read.
+``slice_params`` dependency. Passing a corpus ``league_id`` scopes the read to that slice; an
+unknown ``league_id`` 404s.
+
+P5/S2a changed two things here. An omitted ``league_id`` now resolves to ``DEMO_LEAGUE_ID``
+explicitly rather than falling through ``MY_USERNAME`` to the is_mine slice — the same league
+today, but decided rather than inherited. And ``/api/leagues``, which was the one unscoped read,
+is now scoped to the caller: the demo always, plus their own current-season leagues. The eleven
+per-panel reads are still open; closing them is S2b, and the split is deliberate so a green run
+can be attributed to one half or the other.
 """
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
-from application.api import auth, db, rate_limit, reads, signup
+from application.api import auth, db, rate_limit, reads, settings, signup
 
 router = APIRouter(prefix="/api")
 
@@ -22,13 +28,27 @@ router = APIRouter(prefix="/api")
 def slice_params(league_id: str | None = None, season: int | None = None,
                  viewer_roster_id: int | None = None) -> dict:
     """The optional slice selector shared by every read route. Validates a non-None ``league_id``
-    against the demo_manifest catalog (404 on an unknown slice); ``None`` → the is_mine default
-    (resolved inside each ``load_*``). ``season`` is carried for validation/future dynasty, never a
-    SQL filter (a redraft ``league_id`` already pins one ``(league, season)`` slice).
-    ``viewer_roster_id`` (Stage-B B5) selects the "you" roster; ``None`` → ``MY_USERNAME``'s roster
-    (parity). Returned as a kwargs dict so routes forward it with ``**slice``."""
+    against the demo_manifest catalog (404 on an unknown slice). ``season`` is carried for
+    validation/future dynasty, never a SQL filter (a redraft ``league_id`` already pins one
+    ``(league, season)`` slice). ``viewer_roster_id`` (Stage-B B5) selects the "you" roster;
+    ``None`` → ``MY_USERNAME``'s roster (parity). Returned as a kwargs dict so routes forward it
+    with ``**slice``.
+
+    **P5/S2a — an omitted ``league_id`` now resolves to the DEMO explicitly.** It used to fall
+    through to ``settings.league_id()`` inside each ``load_*``, i.e. to whichever league the owner's
+    Sleeper credentials happened to name: an anonymous visitor landed on Will's real league by
+    accident of name resolution rather than by anyone deciding they should. The default is now the
+    one league that is deliberately public. ``MY_USERNAME`` stays, but only as the resolver for
+    Will's own viewer seat (``reads.resolve_viewer``), which is what it was always for.
+
+    Note this is *default resolution*, not authorization — a caller can still ask for any catalogued
+    ``league_id`` here. Moving the visibility predicate into this function so every read inherits it
+    is S2b; keeping the two changes separate is what lets each one's proof mean something.
+    """
     if league_id is not None and not reads.slice_exists(league_id):
         raise HTTPException(status_code=404, detail=f"unknown league_id {league_id}")
+    if league_id is None:
+        league_id = settings.demo_league_id()
     return {"league_id": league_id, "season": season, "viewer_roster_id": viewer_roster_id}
 
 
@@ -147,6 +167,16 @@ def matchup_detail(matchup_id: int, as_of_week: int | None = None,
 
 
 @router.get("/leagues")
-def leagues() -> dict:
-    # The lineage catalog (Stage-B B3) — unscoped; feeds the B5 league/season switcher.
-    return reads.load_leagues()
+def leagues(user: dict | None = Depends(auth.optional_user)) -> dict:
+    """The lineage catalog (Stage-B B3), scoped to the caller as of P5/S2a.
+
+    Signed out → the demo alone. Signed in → the demo plus your own current-season leagues, yours
+    first. This was the ONE unscoped read, and it is the catalog, so it is the right first thing
+    to close: every other surface is navigated from this list.
+
+    Two properties the SPA depends on, both easy to break and neither loud when broken:
+    it must never 401 (``loadLeagues()`` only console.errors, leaving a permanent "Loading…"),
+    and it must never return zero leagues (``if (lgs.length)`` guards the only slice selection).
+    The demo term is what guarantees the second — see ``reads.build_catalog``.
+    """
+    return reads.load_leagues(user_id=(user or {}).get("id"))

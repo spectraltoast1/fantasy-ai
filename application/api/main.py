@@ -23,19 +23,45 @@ Endpoints:
 
 from __future__ import annotations
 
+import contextlib
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from application.api import db
+from application.api import db, nfl_state, settings
 from application.api.routes import router as api_router
+
+_LOG = logging.getLogger(__name__)
+
+@contextlib.asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """State the two values the visibility rule turns on, once, at boot (P5/S2a).
+
+    An operator override that nobody can see is the failure mode `nfl_state` is written around, so
+    the resolved season AND its source go in the log — a `CURRENT_SEASON` left set after a proof
+    run is then one grep away instead of a silent policy change.
+
+    Wrapped, because this reaches Sleeper and Postgres: a config/third-party problem must be LOUD
+    but never FATAL. A startup that died here would take the public demo down with it, which is
+    the same rule S1 wrote for auth misconfiguration.
+    """
+    try:
+        demo = settings.demo_league_id()
+        _LOG.warning("demo league: %s", demo or "UNSET — the public catalog will be EMPTY")
+        _LOG.warning("%s", nfl_state.describe())
+    except Exception as exc:  # noqa: BLE001 — never let a log line stop the app booting
+        _LOG.error("could not resolve the visibility config at startup: %s", exc)
+    yield
+
 
 app = FastAPI(
     title="fantasy-ai",
     description="Same-origin app on Fly.io <-> Supabase: serves the SPA at / and /api read endpoints.",
     version="1.0.0",
+    lifespan=_lifespan,
 )
 
 # The Players + Teams + League + Matchups read endpoints (Sessions 3-4), backed by the
