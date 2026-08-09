@@ -56,6 +56,8 @@ export default function App() {
   const [switching, setSwitching] = useState(false);
   const [session, setSession] = useState(null);   // the Supabase session (P5/S1), null = signed out
   const [signInOpen, setSignInOpen] = useState(false);
+  const [authReady, setAuthReady] = useState(false);   // has the stored session been resolved yet?
+  const [identityEpoch, setIdentityEpoch] = useState(0);  // bumps on sign-in/out → refetch catalog
 
   // Apply a slice: publish it to queries.js SYNCHRONOUSLY (so the reloads below scope to it),
   // clear the drill-down, then reload the new slice's weeks and snap the week to its latest.
@@ -80,30 +82,51 @@ export default function App() {
   // onAuthStateChange also fires for TOKEN_REFRESHED, and a token that stops being republished
   // there silently starts failing about an hour after sign-in. Publishing is synchronous and
   // happens before any dependent reload, mirroring applySlice's ordering rule above.
-  // This effect deliberately does NOT gate the catalog load below — the public demo stays
-  // browsable signed out, so signing in ADDS your leagues (S2) rather than unlocking the app.
-  // `supabase` is null when the build has no Supabase config: sign-in is then unavailable and
-  // says so, while the demo carries on. Auth breaking must not break the app around it.
+  //
+  // P5/S2a made the ORDER load-bearing. This effect used to run alongside the catalog load below
+  // rather than before it, which was correct while /api/leagues was unscoped and became a bug the
+  // moment it wasn't: `getSession()` is async, so the first catalog request went out with no token
+  // and a signed-in user landed on the DEMO instead of their own league until they reloaded.
+  // So the catalog now waits for `authReady`, and refetches whenever the IDENTITY changes —
+  // SIGNED_IN and SIGNED_OUT only. TOKEN_REFRESHED is the same person with a fresher token; treating
+  // it as a change would refetch the catalog every hour for no reason.
+  //
+  // `supabase` is null when the build has no Supabase config: sign-in is then unavailable and says
+  // so, and `authReady` flips immediately so the public demo still loads. Auth breaking must not
+  // break the app around it — a permanently-false authReady would hang every visitor on "Loading…".
   useEffect(() => {
-    if (!supabase) return;
+    if (!supabase) { setAuthReady(true); return; }
     supabase.auth.getSession().then(({ data }) => {
       setAuthToken(data.session?.access_token);
       setSession(data.session ?? null);
+      setAuthReady(true);
     });
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, next) => {
       setAuthToken(next?.access_token);
       setSession(next ?? null);
       if (next) setSignInOpen(false);
+      if (event === 'SIGNED_IN' || event === 'SIGNED_OUT') {
+        // Clear the SELECTION, not just the list. A stale `league_id`/`viewer_roster_id` left in
+        // queries.js would keep riding on every request after sign-out — the previous person's
+        // league still on screen, which is the bug this session exists to prevent the API version of.
+        setActiveSlice({});
+        setSlice(null);
+        setIdentityEpoch((n) => n + 1);
+      }
     });
     return () => sub.subscription.unsubscribe();
   }, []);
 
   const signOut = () => supabase?.auth.signOut();
 
-  // Startup: load the catalog, then default to the is_mine lineage's latest season (the catalog
-  // lists is_mine first). Setting this default slice explicitly is parity-safe — its league_id +
-  // viewer resolve to exactly the server's is_mine default.
+  // Load the catalog once the session is known, and again on every identity change. Default to the
+  // FIRST entry's latest season: the server orders a caller's own leagues first and the demo last,
+  // so "first entry" is what makes a signed-in user land on their own league, a signed-out visitor
+  // on the demo, and a signed-in user with no league on the demo as their empty state.
+  // Until this resolves `slice` is null, so the surfaces render "Loading…" rather than flashing the
+  // demo — a wrong state that would also hide this bug's return.
   useEffect(() => {
+    if (!authReady) return;
     loadLeagues()
       .then((data) => {
         const lgs = data.leagues || [];
@@ -112,7 +135,7 @@ export default function App() {
       })
       .catch((e) => console.error('Could not load leagues', e));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [authReady, identityEpoch]);
 
   // League chrome (format label / record / myOwner) is real data and follows the active week AND
   // slice (the leagueId dep re-fires it on a switch even when the latest week is unchanged).

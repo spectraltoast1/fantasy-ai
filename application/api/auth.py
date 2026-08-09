@@ -109,3 +109,27 @@ def current_user(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="invalid token") from exc
 
     return {"id": claims["sub"], "email": claims.get("email"), "claims": claims}
+
+
+def optional_user(request: Request) -> dict | None:
+    """FastAPI dependency: the verified caller, or ``None`` when nobody is signed in (P5/S2a).
+
+    The catalog has to answer both audiences from one route — the public demo must stay browsable
+    signed out, and a signed-in caller must additionally see their own leagues — so it needs a
+    dependency that can say "anonymous" without saying "denied".
+
+    The distinction that matters, and it is a security one:
+
+    - **No ``Authorization`` header at all → anonymous.** A visitor is not an error.
+    - **A header that is present but invalid, expired or forged → 401**, exactly as
+      ``current_user``. Degrading a bad token to "anonymous" would be strictly friendlier and
+      strictly worse: it turns a broken verifier, a botched key rotation and an attacker probing
+      with a forged token into the same silent "here is the demo" response. A gate whose failures
+      are indistinguishable from its successes cannot be observed to be working.
+    - **Verifier unreachable → 503**, likewise inherited. Denied, but still distinguishable from a
+      bad credential — the S1 rule. Anonymous callers are unaffected, since nothing is verified
+      for them, so a Supabase outage does not take the public demo down.
+    """
+    if bearer_token(request) is None:
+        return None
+    return current_user(request)
