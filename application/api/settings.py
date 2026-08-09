@@ -23,6 +23,14 @@ depends on it (the env var wins there).
   That is a real posture change — an admin-grade credential is now reachable from the API — and
   it is the price of the gate being un-bypassable. The alternative (gating in the SPA) was
   measured to be no gate at all. Still never in git, the SPA bundle, or the image itself.
+- ``demo_league_id()`` — the ONE public league (P5/S2a). Config rather than a table: one public
+  league makes a table pure overhead, and a config value cannot be silently recreated-without-its
+  properties by the next full loader run the way a `schema.sql` table can.
+- ``current_season()`` — a thin seam over ``nfl_state``, which resolves Sleeper's ``/v1/state/nfl``
+  with a persisted last-known-good and **fails closed** (unresolved → only the demo is visible).
+  Its ``CURRENT_SEASON`` override is process-env-only, with **no config.py fallback on purpose** —
+  it is a temporary operational override and one that could hide in a gitignored file is the
+  failure mode.
 - ``access_code()`` — the shared access code (P5/S1b). Required on **every** sign-in request,
   from everyone, which is what makes "no valid code, no email is ever sent" a hard property
   rather than a policy. Rotation is one config change: set it here (or the Fly secret) and the
@@ -86,3 +94,34 @@ def supabase_publishable_key() -> str | None:
 def access_code() -> str | None:
     """The shared access code required on every sign-in request (P5/S1b)."""
     return os.environ.get("ACCESS_CODE") or _config_attr("ACCESS_CODE")
+
+
+def demo_league_id() -> str | None:
+    """The ONE public league (P5/S2a) — the league half of the visibility predicate.
+
+    Config, not a table, and that is the decision rather than an implementation detail: with
+    exactly one public league a table buys nothing, cannot drift from a loader-generated artifact,
+    and needs no migration. It points at real LoRP 2025 today and gets repointed at the anonymized
+    clone when that exists — one value, here or in ``fly.toml``'s ``[env]``.
+
+    Note it happens to equal ``league_id()`` today (the demo IS the is_mine league), which is why
+    making the signed-out default explicit is behaviour-identical right now. That coincidence is
+    temporary and must not be relied on — see ``routes.slice_params``.
+    """
+    env = os.environ.get("DEMO_LEAGUE_ID")
+    if env:
+        return env
+    cfg = _config_attr("DEMO_LEAGUE_ID")
+    return str(cfg) if cfg is not None else None
+
+
+def current_season() -> int | None:
+    """The current NFL season, or None when it cannot be resolved (→ demo-only visibility).
+
+    The resolution rules, the persisted last-known-good and the fail-closed behaviour live in
+    ``nfl_state`` — this is only the seam so callers have one place to ask. Imported lazily
+    because ``nfl_state`` reaches Postgres, and ``settings`` is imported by things that must stay
+    DB-free at import time (``check_signup``, ``scripts/users.py``).
+    """
+    from application.api import nfl_state
+    return nfl_state.current_season()

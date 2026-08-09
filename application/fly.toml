@@ -25,8 +25,21 @@ primary_region = "iad"
 # check caught. Declared here rather than as a Fly secret because it is not secret (it is in
 # every URL the browser hits) and a declared value keeps a bare `fly deploy` correct.
 # The genuinely secret values (DATABASE_URL, MY_USERNAME, LEAGUE_ID) remain Fly secrets.
+#
+# DEMO_LEAGUE_ID (P5/S2a) is the ONE public league — the only slice a signed-out visitor can see,
+# and the landing page until there is a real one. Declared here for the same reason as above: it
+# is not a secret (it is a Sleeper league id), and a declared value keeps a bare `fly deploy`
+# correct. Repointing the demo at the anonymized clone is this one line.
+#
+# CURRENT_SEASON is deliberately ABSENT. It is a process-env-only override for the season the
+# visibility rule compares against, used to run the S2a ownership matrix against deployed code
+# (the corpus tops out at 2025 while Sleeper reports 2026, so the owned half of the predicate has
+# nothing to bite on otherwise). It is set here TEMPORARILY and removed in the same session — a
+# deploy that still carries it is a deploy showing users prior-season leagues. Plain [env] rather
+# than a Fly secret on purpose: an override nobody can see is the failure mode.
 [env]
   SUPABASE_URL = "https://llanqdqzgncekvybasyd.supabase.co"
+  DEMO_LEAGUE_ID = "1182101676608823296"
 
 [http_service]
   internal_port = 8080
