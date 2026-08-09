@@ -1,7 +1,8 @@
 # V1 · Project 5 · Session S2 — Ownership + API-layer isolation — a brief for Code
 
-**Last reviewed:** 2026-08-05 (rewritten against the demo/visibility model settled with Will that day) ·
-**Status:** S2a ready to run · **Owner:** Code drives; Will supplies a second test email.
+**Last reviewed:** 2026-08-09 — see **the AMENDMENT at the foot of this file**, which supersedes
+parts of the S2a paste-block and gotcha #1 (original body written 2026-08-05 against the settled model) ·
+**Status:** S2a running (Code) · **Owner:** Code drives; Will supplies a second test email.
 **Project:** `projects/v1/P5_ACCOUNTS_SELF_SERVE_ONBOARDING.md` ·
 **Prior:** `SESSION_P5_S1B_AUDIT.md` (its findings are this session's inbox) ·
 **Companion:** `SESSION_P5_DEMO_LEAGUE_CLONE.md` (the demo league itself — separate, not a blocker).
@@ -206,3 +207,105 @@ to reach"; a hard-coded list asserted against the router's registered routes can
 - **Do not let the fast cadence compress this.** An isolation bug does not announce itself — the app looks
   perfect while showing the wrong person's data. The adversarial matrix in S2b is the deliverable, not a
   formality around it.
+
+---
+
+# AMENDMENT — 2026-08-09 — Code's three S2a questions, answered
+
+**These decisions supersede the corresponding lines above.** Written the same turn they were made
+(CODING_BIBLE §7). Code raised all three from inside the worktree; the PM had independently found #1 and
+the `is_mine` coincidence in #4.
+
+## 1. The current-season term has no data to bite on — env-first override, matrix runs twice
+
+**The problem.** Sleeper `/v1/state/nfl` returns `season: "2026"` (fetched live 2026-08-09). The corpus tops
+out at **2025** — all 31 slices in `demo_slate.csv` are 2020–2025. So `visible = demo OR (owned AND season
+== current)` collapses today, for every caller, to `visible = demo`. Proof steps 2 and 3 and DoD 3/5 are
+unprovable as written, and **gotcha #1 above ("grant user B a corpus league") contradicts the season term —
+ignore that line.**
+
+**Decision: `current_season()` resolves env `CURRENT_SEASON` first, then Sleeper `/v1/state/nfl` (cached)** —
+the same env-first idiom as `ACCESS_CODE` and `DEMO_LEAGUE_ID`. Rejected: a test-only monkeypatch, because
+it leaves the owned-league path never exercised against deployed code, and *that path is the entire session*.
+
+Conditions on the override — all of them are part of DoD:
+
+- **It is process env only.** Never a request parameter, header, query string, or cookie. Assert this.
+- **The Sleeper failure mode must be specified and proven, and it must fail CLOSED.** If Sleeper is
+  unreachable and there is no cached value, the resolver must not degrade to "any season" — visibility drops
+  to demo-only. An outage that costs a user their own league for an hour is an availability bug; one that
+  makes every league visible is the exact silent isolation failure this session exists to prevent. Persist a
+  last-known-good value, prove the outage path with a simulated failure.
+- **Startup logs the resolved season and its source** (`env` / `sleeper` / `cache`); `scripts/users.py
+  --list` prints the same line. An override left set must be impossible to miss.
+- **Plain `[env]` in fly.toml, not a Fly secret** — this is config, and hiding it is the failure mode.
+- **Exercise it on the deployed app, then remove it.** Set `CURRENT_SEASON=2025` on prod, deploy, run the
+  full A/B matrix against https://surplusff.com/, then unset, redeploy, and show the resolved season is 2026
+  from Sleeper with the override absent. Two extra deploys is the right price in the security session.
+- **The session ends with the override unset, demonstrated** — not merely "we didn't set it."
+
+Run the matrix twice, same accounts, same grants, one variable changed:
+
+| | `CURRENT_SEASON=2025` | unset (Sleeper → 2026) |
+|---|---|---|
+| signed out | demo only | demo only |
+| user A | demo + Trap 2025, **A's league first** | demo only |
+| user B | demo + YPFL 2025, **never Trap** | demo only |
+| A also granted Trap **2024** | hidden — the term bites | hidden |
+| demo | visible | visible — **survives the season term** |
+
+Grants: **A → Trap 2025 `1207735666645946368`** · **B → YPFL 2025 `1257433118135037952`** ·
+**prior-season fixture → Trap 2024 `1051229073923584000`** to A.
+
+## 2. The `App.jsx` catalog race — fix it in S2a, bounded
+
+**Decision: fix it here.** DoD 5 ("a signed-in user with a league gets their own first") and DoD 8 (live
+confirmation on surplusff.com) are *product* claims. Proven by `curl` they demonstrate the API and leave the
+deployed site showing a signed-in user the demo — a visibly wrong landing state shipped by the session whose
+job is to make an account mean something.
+
+**In scope:** resolve the session before the first catalog fetch; refetch on `SIGNED_IN`; on `SIGNED_OUT`
+refetch **and clear the selected `league_id` and `viewer_roster_id`, not just the list**; render a loading
+state rather than defaulting to the demo while the session resolves — a flash of the demo is both a wrong
+state and the symptom that would hide this regression's return. Handle `TOKEN_REFRESHED` without a refetch
+storm.
+
+**The sign-out half gets its own proof, and it is the more serious one:** sign in as A, confirm A's league
+is selected, sign out **without a page reload**, show catalog *and* selection both revert to demo-only. A
+stale catalog surviving sign-out is a previous-person's-data-still-on-screen bug.
+
+**Out of scope, still S2b:** removing the season selector, flattening the lineage→seasons grouping, any
+other `App.jsx` restructuring. **If the change exceeds ~40 lines of `App.jsx`, stop and report rather than
+growing** — an unbounded frontend rewrite inside the security session is how the proof budget gets spent on
+the wrong thing.
+
+## 3. Test accounts — two disposable `+tags`, and Will's real account as the untouched third state
+
+**Decision: two new addresses** — `willdaniel.wrd+s2a-a@gmail.com` and `willdaniel.wrd+s2a-b@gmail.com` —
+**both deleted at the end**, which is also how DoD 7 (`ON DELETE CASCADE` leaves no orphan `user_leagues`
+rows) gets demonstrated.
+
+Rejected "Will's real account as A": the realism it buys is small — Code mints both sessions via admin
+`generate_link` + `/auth/v1/verify` either way, so a pre-existing A does not exercise the signup flow. The
+cost is real: it writes a live grant onto the account that serves as the human baseline, and A cannot be
+deleted, so every later session's "what does Will actually see" starts contaminated.
+
+**The addition that makes this better than either option: Will's real account, with zero grants, is the
+fixture for the one state the A/B matrix cannot cover** — *signed in, no league yet → the demo as the empty
+state*, a row in the settled model's table that nothing else in the proof touches. **That is the live
+eyeball for S2a**: after the final deploy, Will signs in at https://surplusff.com/ and gets the demo empty
+state, not a 404, not a blank surface.
+
+Any script minting sessions with the service-role key must not commit the key and must skip cleanly when it
+is absent.
+
+## 4. Unasked — decision #5 is currently unobservable, and would be reported as proven
+
+`DEMO_LEAGUE_ID` = `1182101676608823296` = LoRP 2025 = `config.SLEEPER_LEAGUE_ID`, flagged `is_mine=true` in
+`demo_slate.csv`. So decision #5 above — signed-out resolves to the demo *explicitly* rather than falling
+through `MY_USERNAME` to the is_mine league — **produces the identical league before and after the fix.** A
+report saying "signed-out now resolves to the demo, demonstrated" would be true and would prove nothing.
+
+**Prove it by temporarily pointing `DEMO_LEAGUE_ID` at a non-mine league** (Trap 2025) and showing the
+signed-out default follows the config, not the username. Restore it afterwards. Say so explicitly in the
+report — this is precisely the "check the report's strongest verb" case.
