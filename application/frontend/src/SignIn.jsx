@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { authConfigured } from './supabase.js';
 import { requestSignInLink } from './queries.js';
+import { track } from './analytics.js';
 
 // The sign-in overlay (P5/S1, re-pointed in S1b). A modal sibling of <main>, not a gate around
 // the app: the public demo stays browsable signed-out, so signing in ADDS your leagues rather
@@ -28,12 +29,20 @@ export default function SignIn({ onClose }) {
   const submit = async (e) => {
     e.preventDefault();
     if (!email.trim() || !code.trim() || state === 'sending') return;
+    // The sign-in funnel (appendices/analytics.md). Parameterless by design — no reason, no
+    // address. The server's refusal is deliberately uniform (it is not an enumeration oracle),
+    // and a finer-grained reason in a third-party stream would quietly undo that.
+    track('sign_in_submitted');
     setState('sending');
     setError(null);
     try {
       await requestSignInLink(email.trim(), code.trim());
+      track('sign_in_link_sent');
       setState('sent');
     } catch (err) {
+      // Any throw: a refused code, but also a network failure or a cold API machine. The event
+      // means "the attempt did not succeed", not "the server said no".
+      track('sign_in_refused');
       setError(err.message);
       setState('error');
     }

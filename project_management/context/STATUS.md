@@ -36,10 +36,11 @@ Supabase's redirect allow-list), not a launch dependency.
   proven on prod by advancing the owner's 2025 league Week 4 → 5 (the un-freeze). Ready for live 2026 at
   kickoff. → *see below + `sessions/v1/P2-Go_Live_2026/`.*
 - Fully migrated off in-browser DuckDB-WASM (Stage A complete); the client is now a thin API client.
-- **Web analytics — GA4, briefed 2026-08-10, NOT yet installed.** The gtag tag goes in the SPA's one
-  `index.html` shell, plus app-sent virtual pageviews (no router → GA can't otherwise tell one surface
-  from another) and five sign-in-funnel events. Measurement only: no read, number or pixel changes.
-  → *see appendix: analytics.*
+- **Web analytics — GA4, installed 2026-08-10.** The gtag tag sits in the SPA's one `index.html` shell
+  with `send_page_view:false`; `src/analytics.js` sends the virtual pageviews (no router → GA can't
+  otherwise tell one surface from another) and five sign-in-funnel events. All eight surfaces proven,
+  no hit for `/`, and no GA request carries an `@` or any id. Measurement only: no read, number or
+  pixel changes. `signed_in` is the one event awaiting a real prod sign-in. → *see appendix: analytics.*
 
 ## The engine
 

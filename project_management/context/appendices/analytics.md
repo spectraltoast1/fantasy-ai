@@ -4,8 +4,8 @@
 **Scope:** how Surplus measures usage. This is the **install brief Code executes** (one-off sidebar,
 briefed 2026-08-10 by the PM session) and, once it lands, the standing description of the analytics
 layer. Read it before touching `index.html`'s `<head>`, `src/analytics.js`, or any `track()` call.
-**Status: BRIEFED — not installed.** Nothing described below is live yet. Code flips this line, the
-STATUS bullet and the ARCHITECTURE bullet at closedown — see *Closedown*.
+**Status: INSTALLED 2026-08-10.** Everything below is live. Verification results and the corrections
+the install turned up are in *What the install found*, near the bottom.
 
 > **Deliberately outside the V1 project spine.** This is not P3/P4/P5 work and does not block or
 > reorder anything. It touches no read, no transform, no number, and no rendered pixel. It is here
@@ -212,9 +212,10 @@ Per `CODING_BIBLE` §5 and the session guide: verify it yourself and show the ar
 to check.
 
 ```bash
-# exactly one tag; the ID appearing TWICE inside it (src + config) is expected, not a duplicate
+# exactly one tag; the ID appearing THREE times inside it (comment + src + config) is expected, not
+# a duplicate. The tag count is the check that matters — the ID count is a weaker smoke test.
 grep -c 'googletagmanager.com/gtag/js' application/frontend/index.html   # -> 1
-grep -c 'G-J1F0BE5ZW4'                 application/frontend/index.html   # -> 2
+grep -c 'G-J1F0BE5ZW4'                 application/frontend/index.html   # -> 3
 # the charset declaration still lands inside the spec's 1024-byte window
 head -c 1024 application/frontend/index.html | grep -c 'charset'          # -> 1
 # nothing outside the module touches the vendor global
@@ -247,6 +248,61 @@ Then in the browser (`npm run dev`, DevTools Network filtered to `collect`, or t
   them in place, **don't add a second note.**
 - **No session doc.** A four-file measurement change does not earn a narrative in `sessions/`; this
   appendix is the record. One commit is enough — the 3-commit cap is a ceiling, not a target.
+
+## What the install found (2026-08-10)
+
+Verified against the dev server with a recorder over `sendBeacon`/`fetch`/`XHR`/`Image`, because GA4
+**batches** several events into one POST — the request URL alone under-reports, and reading only
+resource-timing entries would have shown three hits for eight pageviews.
+
+**Proven.** Eight distinct virtual pageviews, right paths, **zero hits for `/`** — so
+`send_page_view:false` does what it was chosen to do. All four funnel events in order
+(`sign_in_opened` → `sign_in_submitted` → `sign_in_refused`, then `sign_in_link_sent`). The
+**PII oracle passed decisively**: with `ga-install-test@example.com` typed into the form and rendered
+on screen, **no captured request contained an `@`**, an id, or a `league_id`. With `window.gtag`
+deleted, the player card rendered in full, zero sends, no console error — the ad-blocker path is
+genuinely safe.
+
+**Four corrections to the brief above.** They change the verification walk, not the design:
+
+1. **The dossier has exactly one entry point** — `TeamDetail.jsx`'s Manager Dossier button. The brief
+   said "from Teams and from TeamDetail"; `Teams.jsx` never receives `onOpenDossier`. The flat-`DETAILS`
+   reasoning still holds, because the *player card* really does have two entry points.
+2. **`/matchup-detail` is unreachable from the Matchups tab on desktop.** `Matchups.jsx` gates on
+   `useIsMobile` (≤768px) and otherwise selects the two-pane's right side without touching the stack.
+   Both real paths were verified: `TeamDetail`'s matchup button at desktop width, and a card tap at
+   375px. Anyone re-running the eight-surface walk on a wide window will come up one short and it is
+   not a bug.
+3. **There is no `SIGNED_IN` branch** in `onAuthStateChange` — the real code is a combined
+   `SIGNED_IN || SIGNED_OUT` branch that clears the slice. `signed_in` is a standalone line above it.
+4. **The DoD's `grep -c 'G-J1F0BE5ZW4'` expected 2 but the brief's own comment carries the ID a third
+   time.** Corrected to 3 above. `grep -c` on the tag URL is the check that actually means "one tag".
+
+**Two additions.**
+
+- **`pageView` dedupes on the last path sent.** supabase-js can report a tab *refocus* as `SIGNED_IN`,
+  which nulls the slice and re-fires the effect for a surface the user never left. No legitimate
+  in-app transition repeats a path consecutively (drill-downs are one level deep and no detail type
+  can open itself), so the guard only ever suppresses a spurious re-fire.
+- **`sign_in_refused` is broader than its name.** `SignIn.jsx`'s `catch` swallows any throw, so a
+  network failure or a cold Fly machine records it too. It means *"the attempt did not succeed"*, not
+  *"the server said no"*. Still parameterless, so the no-enumeration-oracle property is intact.
+
+**`signed_in` is installed but NOT yet proven, by construction.** S1b removed `emailRedirectTo`, so the
+magic link always lands on Supabase's Site URL — a sign-in started on localhost completes on
+**production**. The event is therefore unobservable in dev, and the brief's "reload while signed in"
+test is also the wrong test: supabase-js 2.111.0 emits `INITIAL_SESSION` on a stored-session load, and
+the live over-fire risk is **tab refocus**. Oracle needing no extra code: `SIGNED_IN` clears the slice
+and bumps `identityEpoch`, firing a fresh `GET /api/leagues` and a "Loading…" flash. **On the next real
+prod sign-in: blur the tab, wait ~15s, refocus. A second `/api/leagues` means it over-fires → delete
+`signed_in` and make `sign_in_link_sent` terminal.** The pageview side of that is already absorbed by
+the dedupe guard; the accompanying pop-out of an open drill-down is a pre-existing `App.jsx` bug,
+unrelated to analytics.
+
+**One thing GA does that this brief does not control.** Enhanced measurement is on for the property, so
+GA4 sends its own `scroll` / outbound-click events — and they carry the **browser** URL (`/`), not the
+virtual path, because they never pass through `analytics.js`. Harmless (the `page_view` stream is
+clean), but "which surface was scrolled" is not a question this install can answer.
 
 ## Known limits — read before trusting a number
 
