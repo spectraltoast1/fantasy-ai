@@ -23,7 +23,7 @@ in `sessions/` and `_deprecated/`; deep mechanism rationale lives in `context/ap
 - **Analytics** — GA4 (`G-J1F0BE5ZW4`): the gtag tag in the SPA's single `index.html`, with
   `src/analytics.js` the only module that touches `window.gtag` (views call `pageView`/`track`).
   Write-only telemetry — **not** a data seam, and every call no-ops when the tag is blocked.
-  *Briefed 2026-08-10, not yet installed.* → *see appendix: analytics.*
+  *Installed 2026-08-10.* → *see appendix: analytics.*
 
 ## The two seams (non-negotiable — enforced by the Coding Bible)
 

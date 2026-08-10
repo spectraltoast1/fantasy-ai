@@ -13,6 +13,7 @@ import League from './League.jsx';
 import Matchups from './Matchups.jsx';
 import MatchupDetail from './MatchupDetail.jsx';
 import { weeksOfData } from './readiness.jsx';
+import { pageView, track } from './analytics.js';
 
 // Gridiron app shell. Owns the global state the whole app reads:
 //   tab      — the active surface (league / matchups / teams / players)
@@ -28,6 +29,25 @@ const TABS = [
   { id: 'teams', label: 'Teams' },
   { id: 'players', label: 'Players' },
 ];
+
+// What GA is told a "page" is (appendices/analytics.md). The SPA has no router, so the app
+// reports the surface itself; without this GA sees one pageview per visit and eight minutes in
+// Matchups is indistinguishable from a bounce.
+const SURFACES = {
+  league:   { path: '/league',   title: 'League' },
+  matchups: { path: '/matchups', title: 'Matchups' },
+  teams:    { path: '/teams',    title: 'Teams' },
+  players:  { path: '/players',  title: 'Players' },
+};
+// Drill-downs are FLAT, not nested under the tab they were opened from: a player card opens from
+// Players and from TeamDetail. Nesting would split one thing's usage across several rows and make
+// the ranking — the whole point — harder to read.
+const DETAILS = {
+  player:  { path: '/player-card',    title: 'Player card' },
+  team:    { path: '/team-detail',    title: 'Team detail' },
+  dossier: { path: '/dossier',        title: 'Manager dossier' },
+  matchup: { path: '/matchup-detail', title: 'Matchup detail' },
+};
 
 // The demo catalog groups seasons under a lineage; the latest season is first (seasons desc).
 const latestSeason = (lineage) => lineage.seasons[0];
@@ -105,6 +125,7 @@ export default function App() {
       setAuthToken(next?.access_token);
       setSession(next ?? null);
       if (next) setSignInOpen(false);
+      if (event === 'SIGNED_IN') track('signed_in');
       if (event === 'SIGNED_IN' || event === 'SIGNED_OUT') {
         // Clear the SELECTION, not just the list. A stale `league_id`/`viewer_roster_id` left in
         // queries.js would keep riding on every request after sign-out — the previous person's
@@ -146,6 +167,20 @@ export default function App() {
       .catch((e) => console.error('Could not load league meta', e));
   }, [asOfWeek, slice?.leagueId]);
 
+  // Virtual pageviews — the only thing that makes GA able to tell one surface from another here.
+  // `ready` is `!!slice` and deliberately NOT `!!slice && !switching`: applySlice sets `switching`
+  // before `slice`, so `switching` is a pure proxy for "the slice is changing" — gating on it would
+  // fire a pageview on every league AND season switch for a surface the user never left, which is
+  // the same reason `slice.leagueId` is absent from the deps.
+  // `detail?.type`, never `detail.id`: the id is a sleeper_id or a roster_id, and in a 12-team
+  // league a roster id names a person. It must never leave the browser.
+  const ready = !!slice;
+  useEffect(() => {
+    if (!ready) return;   // don't count the pre-catalog "Loading…" state as a page
+    const view = detail?.type ? DETAILS[detail.type] : SURFACES[tab];
+    if (view) pageView(view.path, view.title);
+  }, [tab, detail?.type, ready]);
+
   const goTab = (id) => {
     setTab(id);
     setStack([]);
@@ -185,7 +220,7 @@ export default function App() {
         onLeague={switchLeague}
         onSeason={switchSeason}
         session={session}
-        onSignIn={() => setSignInOpen(true)}
+        onSignIn={() => { track('sign_in_opened'); setSignInOpen(true); }}
         onSignOut={signOut}
       />
       {signInOpen && <SignIn onClose={() => setSignInOpen(false)} />}
