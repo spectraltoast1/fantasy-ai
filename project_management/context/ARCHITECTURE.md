@@ -3,7 +3,7 @@
 **What this is:** the current technical design of fantasy-ai — the system **as it is today**. History lives
 in `sessions/` and `_deprecated/`; deep mechanism rationale lives in `context/appendices/`. The rules for
 *changing* code are in `CODING_BIBLE.md`.
-**Updated:** 2026-07-31
+**Updated:** 2026-08-10
 
 ---
 
@@ -20,6 +20,10 @@ in `sessions/` and `_deprecated/`; deep mechanism rationale lives in `context/ap
   scale-to-zero.
 - **Data / compute** — **polars only** (no pandas); numpy for the Monte-Carlo simulation; nflreadpy for NFL
   stats; `math.erf` for the normal CDF.
+- **Analytics** — GA4 (`G-J1F0BE5ZW4`): the gtag tag in the SPA's single `index.html`, with
+  `src/analytics.js` the only module that touches `window.gtag` (views call `pageView`/`track`).
+  Write-only telemetry — **not** a data seam, and every call no-ops when the tag is blocked.
+  *Briefed 2026-08-10, not yet installed.* → *see appendix: analytics.*
 
 ## The two seams (non-negotiable — enforced by the Coding Bible)
 

@@ -2,7 +2,7 @@
 
 **What this is:** SurplusFF — a fantasy-football decision-support dashboard whose unit is the manager's
 *decision*, not the player. Live, single-league, on the server stack.
-**Live at:** https://surplusff.com/ (also https://fantasy-ai-api.fly.dev/) · **Updated:** 2026-08-09
+**Live at:** https://surplusff.com/ (also https://fantasy-ai-api.fly.dev/) · **Updated:** 2026-08-10
 **Name + domain:** the official name is **SurplusFF**, commonly shortened to **Surplus** in speech and
 writing (Will, 2026-08-05); "Gridiron" was a working name — retire it. **surplusff.com** is registered
 (SSL live) and is
@@ -36,6 +36,10 @@ Supabase's redirect allow-list), not a launch dependency.
   proven on prod by advancing the owner's 2025 league Week 4 → 5 (the un-freeze). Ready for live 2026 at
   kickoff. → *see below + `sessions/v1/P2-Go_Live_2026/`.*
 - Fully migrated off in-browser DuckDB-WASM (Stage A complete); the client is now a thin API client.
+- **Web analytics — GA4, briefed 2026-08-10, NOT yet installed.** The gtag tag goes in the SPA's one
+  `index.html` shell, plus app-sent virtual pageviews (no router → GA can't otherwise tell one surface
+  from another) and five sign-in-funnel events. Measurement only: no read, number or pixel changes.
+  → *see appendix: analytics.*
 
 ## The engine
 
