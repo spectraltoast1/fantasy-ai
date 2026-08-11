@@ -1,5 +1,10 @@
 # V1 · The demo league — an anonymized clone — a brief for Code
 
+**2026-08-11 — NO LONGER DEFERRED.** Runs as **S2d** (`SESSION_P5_S2D_DEMO_CLONE_AND_SELECTOR.md`), which owns the ordering and the reason: audit
+F3 — the demo shares a lineage with Will's own league, so it needs its own identity **before**
+the season selector is removed. Deadline is Gate A. **Part 1 (re-key the data under a new
+`league_id` + `lineage_id`) is what S2d needs; the anonymization below can follow.**
+
 **Last reviewed:** 2026-08-05 · **Status:** ready, **DEFERRED by Will 2026-08-05** — S2 goes first ·
 **Owner:** Code drives; Will approves the team names and the look.
 **Related:** `SESSION_P5_S2_OWNERSHIP_AND_ISOLATION.md` (which consumes `DEMO_LEAGUE_ID`).

@@ -1,22 +1,23 @@
-# V1 · Project 5 · Session S2 — Ownership + API-layer isolation — a brief for Code
+# V1 · P5 · Session S2a — Ownership + the scoped catalog — the brief that was run
 
-**Last reviewed:** 2026-08-09 — see **the AMENDMENT at the foot of this file**, which supersedes
-parts of the S2a paste-block and gotcha #1 (original body written 2026-08-05 against the settled model) ·
-**Status:** S2a running (Code) · **Owner:** Code drives; Will supplies a second test email.
-**Project:** `projects/v1/P5_ACCOUNTS_SELF_SERVE_ONBOARDING.md` ·
-**Prior:** `SESSION_P5_S1B_AUDIT.md` (its findings are this session's inbox) ·
-**Companion:** `SESSION_P5_DEMO_LEAGUE_CLONE.md` (the demo league itself — separate, not a blocker).
+**Status: SHIPPED + AUDITED + DEPLOYED 2026-08-09 — ENDORSED.** Kept as the record of what was executed.
+**Report:** `SESSION_P5_S2A_REPORT.md` · **Audit:** `SESSION_P5_S2A_AUDIT.md` (7 findings, none blocking;
+they are distributed across S2b / S2c / S2d).
+**Was** `SESSION_P5_S2_OWNERSHIP_AND_ISOLATION.md`, which bundled four sessions into one file. Split
+2026-08-11 (Will): **one brief per session.** → `SESSION_P5_S2B_SCOPED_READS.md` ·
+`SESSION_P5_S2C_PUNCH_LIST.md` · `SESSION_P5_S2D_DEMO_CLONE_AND_SELECTOR.md`.
+**Project:** `projects/v1/P5_ACCOUNTS_SELF_SERVE_ONBOARDING.md` · **Prior:** `SESSION_P5_S1B_AUDIT.md`.
 
 > **What this session does:** makes an account *mean* something. S1/S1b built a front door; every read
 > behind it is still open to everyone, and an unauthenticated request still resolves to **Will's real
 > league** by name-resolution accident. S2 gives leagues owners, scopes every read to the caller, and
 > proves a stranger cannot reach someone else's league.
 
-> **Why it is split.** This is the security session and the project's standing instruction is *do not let
+> **Why it was split.** This is the security work, and the standing instruction is *do not let
 > a fast cadence compress it — isolation bugs fail silently.* One session that both invents the ownership
 > model and rewrites every read's authorization ends with a green run and no way to tell which half the
-> green came from. **S2a builds the model and proves the catalog. S2b scopes the reads and spends its
-> whole proof budget on an adversarial matrix. S2c is a punch list.** Run them in order.
+> green came from. **S2a built the model and closed the catalog — that is *discovery*. S2b closes the
+> eleven per-panel reads — that is *access*.**
 
 ---
 
@@ -153,37 +154,6 @@ model is a stack-level fact), then close/merge/push. This touches application/ap
 REDEPLOY and a live confirmation on https://surplusff.com/. A merged-but-undeployed change has bitten this
 project (P0/B3) and a session forgot the deploy line as recently as 2026-08-05.
 ```
-
-## S2b — sketch now, paste-block written after S2a lands
-
-Deliberately not written in full: its authorization call sites depend on the shape S2a actually ships, and
-writing a detailed brief against an assumed shape is how S1 went wrong.
-
-**Scope:** move the visibility predicate into `slice_params` so every read inherits it; route the
-unauthorized case into the existing unknown-`league_id` 404; validate `viewer_roster_id` against a visible
-slice; move viewer identity from a *league* property to a **user × league** property; **remove the season
-selector** from the frontend and flatten the catalog's lineage→seasons grouping.
-
-**Its whole proof budget goes to one artifact:** a committed `application/api/check_isolation.py` running
-**every read endpoint × {signed-out, owner, other user}** and asserting the matrix — the `check_signup` /
-`check_matchup_result` precedent, so isolation gets a re-runnable gate rather than a one-off transcript.
-It must include a **prove-bites** block: run the checks against the *unscoped* behaviour and require every
-one to fail. An isolation check that has never failed has not been tested.
-
-**Name the endpoints explicitly in the matrix.** "All reads" in a report means "the ones the loop happened
-to reach"; a hard-coded list asserted against the router's registered routes cannot silently skip one.
-
-## S2c — punch list (can ride with S2b or go alone)
-
-1. **`--emit` must emit `ALTER TABLE … ENABLE ROW LEVEL SECURITY`** for every table it names, so an
-   out-of-band property stops being destroyed by the next full load; then `ros_player_band` regains RLS.
-   *Prove it bites: drop RLS by hand, re-run `--emit`/`--load`, show it comes back.*
-2. **Reorder the signup rate limit** (S1b audit): validate the access code **before** the email counter, so
-   five garbage-code attempts against a known address cannot lock a real person out of sign-in for an hour.
-   Keep counting failures by email and IP; never let a *correct* code be refused by the email counter.
-3. **Confirmed accounts with nobody behind them** — `signup.py` creates with `email_confirm: true` before
-   the link is known to send, so a mailer failure leaves a confirmed account. Decide whether the ownership
-   model cares; if not, write down that it doesn't.
 
 ## Definition of done (S2a)
 
