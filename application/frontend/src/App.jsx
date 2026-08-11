@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { loadWeeks, loadLeagueMeta, loadLeagues, setActiveSlice, setAuthToken } from './queries.js';
+import { loadWeeks, loadLeagueMeta, loadLeagues, setActiveSlice, setAuthToken,
+         setOnAuthRejected } from './queries.js';
 import { supabase } from './supabase.js';
 import SignIn from './SignIn.jsx';
 import { TAB_ICONS, IconChevronLeft } from './icons.jsx';
@@ -116,11 +117,18 @@ export default function App() {
   // break the app around it — a permanently-false authReady would hang every visitor on "Loading…".
   useEffect(() => {
     if (!supabase) { setAuthReady(true); return; }
+    // P5/S2b: when the server refuses our token, queries.js has already dropped it and retried
+    // anonymously — but the active slice still names a league an anonymous caller cannot see, so
+    // that retry 404s. Signing out properly is what actually rescues the app: it fires SIGNED_OUT
+    // below, which clears the slice and refetches the catalog, landing on the public demo.
+    setOnAuthRejected(() => supabase.auth.signOut());
     supabase.auth.getSession().then(({ data }) => {
       setAuthToken(data.session?.access_token);
       setSession(data.session ?? null);
       setAuthReady(true);
-    });
+    // A rejection here would otherwise leave authReady false forever, which is the same permanent
+    // "Loading…" the `!supabase` guard above exists to prevent — carry on as a visitor instead.
+    }).catch(() => setAuthReady(true));
     const { data: sub } = supabase.auth.onAuthStateChange((event, next) => {
       setAuthToken(next?.access_token);
       setSession(next ?? null);

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import math
 
-from application.api import calcs, db, reads, settings
+from application.api import calcs, db, reads
 
 POS = ["QB", "RB", "WR", "TE"]
 
@@ -134,7 +134,7 @@ def target_week_for(as_of_week, conn=None, lid=None):
         return int(as_of_week) + 1
 
     sql = "SELECT max(week) AS w FROM season WHERE league_id = %(lid)s"
-    params = {"lid": lid or settings.league_id()}
+    params = {"lid": reads._require_league(lid)}
     if conn is not None:
         with conn.cursor() as cur:
             cur.execute(sql, params)
@@ -159,7 +159,7 @@ def team_projections(as_of_week, target_week, lid=None, viewer=None) -> dict:
     ``viewer`` is the resolved "you" roster_id (from the caller's ``resolve_viewer``) — ``isMe`` is
     ``rid == viewer``. When ``viewer`` is None (no viewer in this league) nothing is flagged "me".
     """
-    lid = lid or settings.league_id()
+    lid = reads._require_league(lid)
 
     with db.connect() as conn:
         def q(sql, params):
@@ -259,7 +259,7 @@ def team_matchup_summary(roster_id, as_of_week, lid=None):
     the is_mine league (parity) when None.
     """
     rid = int(roster_id)
-    lid = lid or settings.league_id()
+    lid = reads._require_league(lid)
     target_week = target_week_for(as_of_week, lid=lid)
     if target_week is None:
         return None

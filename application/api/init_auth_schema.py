@@ -40,8 +40,23 @@ def apply() -> None:
     print(f"applied {_SQL_PATH.name}")
 
 
+# Columns this file adds by ALTER rather than by CREATE, and which therefore have to be checked
+# rather than assumed. `CREATE TABLE IF NOT EXISTS` is a no-op on an existing table, so a column
+# declared inside it never appears in a database that already has the table — the S2a-audit F2 trap,
+# one level up. Listing them here means the assertion is inherited the same way the table list is.
+_ALTERED_COLUMNS = [("user_leagues", "roster_id")]
+
+
 def verify() -> bool:
     ok = True
+    for table, column in _ALTERED_COLUMNS:
+        cols = {c["column_name"] for c in db.fetch_all(_COLUMNS_SQL, {"t": table})}
+        if column in cols:
+            print(f"  ok  public.{table}.{column} present (added by ALTER, so it is checked)")
+        else:
+            print(f"✗ public.{table}.{column} is MISSING — the ALTER never ran on this database")
+            ok = False
+
     for table in _TABLES:
         cols = db.fetch_all(_COLUMNS_SQL, {"t": table})
         if not cols:

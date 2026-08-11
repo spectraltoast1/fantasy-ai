@@ -33,23 +33,73 @@ export function setAuthToken(token) {
   _token = token || null;
 }
 
+// Called when the server REJECTS our token (401), after this module has already dropped it and
+// retried anonymously. App wires it to supabase.auth.signOut() — see the retry in `apiGet` for why
+// clearing the token here is not enough on its own.
+let _onAuthRejected = null;
+export function setOnAuthRejected(fn) {
+  _onAuthRejected = fn;
+}
+
 // GET `${API}${path}` with the active slice + per-call `params` as the query string. `as_of_week`
 // (or any null/undefined param) is OMITTED so the server applies its "latest week" default — the
 // old `n == null → latest` seam; unset slice fields drop the same way. Per-call params win on a key
 // collision. Throws on a non-2xx, mirroring the DuckDB-era `query()` so views' existing
 // loading/error states keep working. Returns the parsed JSON (which may be `null` — e.g. an
 // unknown roster/matchup — matching the old loaders).
-// The bearer token rides along when signed in. Every read endpoint is still OPEN this session
-// (S1 is identity; scoping is S2), so a signed-out request is unchanged and the public demo
-// keeps working exactly as before — sending the header is forward-wiring, not a gate.
+//
+// P5/S2b retired the assumption this function was written under. It used to say "every read
+// endpoint's error is a developer problem the user never sees", which was true while reads could
+// not fail for auth reasons. Now EVERY read is scoped, so a stale token turns all twelve into
+// failures at once — and the app-shell loaders only console.error, which means a permanent
+// "Loading…" rather than an error.
+//
+// So: on 401, drop the token and retry ONCE anonymously. That alone does not rescue the app — the
+// active slice still names a league the anonymous caller cannot see, so the retry 404s — which is
+// why we also tell App, via `setOnAuthRejected`, to sign out properly. That transition clears the
+// slice and refetches the catalog, and landing on the public demo is the whole point: strictly less
+// access than the user had, never more, and the server still refuses the bad token either way.
+//
+// 503 is deliberately treated differently: it is retried anonymously (so the demo still renders)
+// but the token is KEPT and nobody is signed out. A verifier outage or a Fly cold-start is
+// transient, and signing someone out over it would be a worse bug than the one being handled.
 async function apiGet(path, params = {}) {
   const qs = Object.entries({ ..._slice, ...params })
     .filter(([, v]) => v != null)
     .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
     .join('&');
-  const res = await fetch(`${API}${path}${qs ? `?${qs}` : ''}`,
-    _token ? { headers: { Authorization: `Bearer ${_token}` } } : undefined);
-  if (!res.ok) throw new Error(`GET ${path} → ${res.status}`);
+  const url = `${API}${path}${qs ? `?${qs}` : ''}`;
+  // Snapshot the token: a background TOKEN_REFRESHED landing mid-flight must not have its fresh
+  // token discarded by our retry, and `retried` (not "is _token null now?") is what bounds this to
+  // one extra request.
+  const sent = _token;
+  let res = await fetch(url, sent ? { headers: { Authorization: `Bearer ${sent}` } } : undefined);
+
+  const rejected = Boolean(sent) && res.status === 401;      // our credential was refused
+  const unavailable = Boolean(sent) && res.status === 503;   // the verifier was, transiently
+  if (rejected || unavailable) {
+    const authStatus = res.status;
+    if (rejected && _token === sent) setAuthToken(null);
+    res = await fetch(url);
+    // Sign out ONLY for a genuine 401, and only once the anonymous retry shows the server is
+    // reachable — otherwise an outage would sign everyone out on its way past.
+    if (rejected && res.status !== 401 && _onAuthRejected) _onAuthRejected();
+    if (!res.ok) {
+      // Report the status that actually explains it. Without this the console says "unknown
+      // league_id" for a league the user owns, which is the most misleading message available.
+      const err = new Error(`GET ${path} → ${authStatus} (anonymous retry → ${res.status})`);
+      err.status = authStatus;
+      err.retriedAnonymously = true;
+      throw err;
+    }
+    return res.json();
+  }
+
+  if (!res.ok) {
+    const err = new Error(`GET ${path} → ${res.status}`);
+    err.status = res.status;   // `apiPost` has always done this; callers could not branch without it
+    throw err;
+  }
   return res.json();
 }
 
