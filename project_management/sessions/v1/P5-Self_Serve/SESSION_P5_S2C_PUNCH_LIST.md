@@ -18,7 +18,10 @@
 3. **Confirmed accounts with nobody behind them** — `signup.py` creates with `email_confirm: true` before
    the link is known to send, so a mailer failure leaves a confirmed account. Decide whether the
    ownership model cares; if it does not, write down that it does not.
-4. **(Audit F1) The catalog must not be able to kill the app.** `/api/leagues` can now 401 or 503, and
+4. **(Audit F1 — the TOKEN half moved to S2b 2026-08-11; what remains here is the COPY.)** S2b puts
+   `optional_user` on `slice_params`, so *every* read can 401 on a bad token, not just the catalog —
+   S2b therefore carries the mechanical fix (`apiGet` clears the token and retries once anonymously).
+   **Left here:** the user-facing error state. `/api/leagues` can now 401 or 503, and
    `App.jsx` only `console.error`s — leaving a permanent "Loading…" for signed-in users on an expired
    token, a deleted account, or a Supabase outage. On 401/503: **drop the token, retry once anonymously,
    show the demo, and flash an error** — "We couldn't restore your session — showing the public demo",
