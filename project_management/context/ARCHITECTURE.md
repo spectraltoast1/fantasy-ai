@@ -69,10 +69,12 @@ substrate shared by every league on the same profile, stamped with each slice's 
 engine-improvement **ledger** (predictions / outcomes / resolutions / scorecard) is deliberately **not** in
 the served store — it's the tuning/validation spine. → *see appendix: store-schema, engine-improvement-loop.*
 
-**Plus four app-side tables, outside all of that on purpose (P5/S1, S1b, S2a).** `serve/schema.sql` is
+**Plus three app-side tables, outside all of that on purpose (P5/S1, S1b, S2a).** `serve/schema.sql` is
 *generated* by `--emit` and applied by `--load`, which DROPs every table it names — so `app_users`,
-`signup_attempts`, `user_leagues` and `nfl_state_cache` live in hand-written `api/auth_schema.sql` instead,
-and `init_auth_schema.py --verify` asserts they stay absent from the generated DDL. → *see appendix: auth.*
+`signup_attempts` and `user_leagues` live in hand-written `api/auth_schema.sql` instead, and
+`init_auth_schema.py --verify` asserts they stay absent from the generated DDL, that the FKs to
+`auth.users` really carry `ON DELETE CASCADE`, and that no grant outlives its account. (A fourth,
+`nfl_state_cache`, was retired in S2c with the Sleeper call it cached.) → *see appendix: auth.*
 
 **The honest-band boundary.** `ros_player_band` is served only from `build_db.FIRST_HONEST_BAND_SEASON`
 (2026) onward. Below it the band belongs to the **frozen corpus** — built at pre-8c `CENTER_SHRINK=1.0` and
@@ -142,13 +144,16 @@ fallback, so the band is the honest, wide, position-typical prior until games sh
   current)`. Ownership is `public.user_leagues` (`user_id` × `league_id`, cascading off `auth.users`), written
   today by `scripts/users.py --grant` and by S4's connect flow later. **`DEMO_LEAGUE_ID` is config, not a
   table** — one public league makes a table pure overhead, and repointing the demo at the anonymized clone
-  stays one line. **"Current season" is Sleeper's `/v1/state/nfl`**, not a constant, so it rolls over by
-  itself; the demo is the deliberate season-independent exception, which is why the demo term is evaluated
-  first and separately — as a global `season = current` filter the demo would vanish and read as an auth bug.
-  The resolver **fails closed** (env override → fresh cache → Sleeper → stale cache → `None`, and `None`
-  means demo-only); a stale season can only ever hide a league that just became current, so every fallback
-  narrows. Last-known-good is `public.nfl_state_cache` rather than a module global because
-  `min_machines_running = 0` erases in-process state on every scale-to-zero.
+  stays one line. **"Current season" is derived locally** (`settings.current_season`, S2c): the calendar
+  year, or the year before it until **August 1** — a boundary that deliberately *leads* Sleeper's own flip,
+  because flipping early drops last season's league from a catalog slightly sooner than necessary while
+  flipping late hides a league somebody has just connected. It is pure, total and does no I/O, so nothing
+  on a read path can be slow or fail; `CURRENT_SEASON` is the documented manual lever, process-env-only.
+  Sleeper is an **assertion, not a dependency** — `check_ownership` asks `/v1/state/nfl` once and fails
+  loudly on disagreement. `/health` publishes the resolved season *and its source*, so an override left set
+  cannot hide. The demo is the deliberate season-independent exception, which is why the demo term is
+  evaluated first and separately — as a global `season = current` filter the demo would vanish and read as
+  an auth bug.
   The catalog orders **a caller's own leagues first, the demo last** — the SPA lands on `leagues[0]`, so that
   ordering *is* the landing rule.
 - **Viewer identity** — `viewer_roster_id` (per league, from the catalog) is the "you" seam; a request with no
