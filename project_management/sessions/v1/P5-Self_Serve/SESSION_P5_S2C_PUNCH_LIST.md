@@ -151,3 +151,80 @@ files at closedown; that is now a recurring step on this repo.
   it. Prove both halves — a refusal alone proves nothing.
 - **Items are independent.** If one turns out to be bigger than it looks, land the others and say which one
   you stopped on. Nine small fixes bundled into one commit is how a green run stops meaning anything.
+
+---
+
+# AMENDMENT — 2026-08-11 — Code's four S2c questions, answered
+
+**These are decisions, not suggestions.** Written the same turn they were made (CODING_BIBLE §7).
+
+## 1. Where the season derivation lands — `settings.py`. Delete `nfl_state.py`.
+
+After the change the value is **env-first with a computed default**, which is structurally identical to
+`access_code()` and `demo_league_id()` — the idiom `settings.py` already exists to hold. A module named
+after a third party that no longer touches that third party is a name that will mislead somebody.
+
+- `settings.current_season(today=None)` — `CURRENT_SEASON` env first, else derive from `today` (defaulting
+  to the system date). **The injectable `today` is required, not optional polish:** the DoD asks for a date
+  table spanning the August boundary in both directions, and you cannot table-test a function that reads
+  the clock itself.
+- **The lazy import goes with it.** `settings.current_season` is imported lazily today only because
+  `nfl_state` reaches Postgres and `settings` must stay DB-free at import. No DB, no reason.
+- **Sleeper's fetch moves into `check_ownership.py`** — ~10 lines of stdlib `urllib`, used only by the
+  agreement assertion. It is the last consumer.
+- **Delete with the module:** `check_fails_closed` and the `nfl_state` monkeypatching at
+  `check_ownership.py:157-178`, the `resolve`/`env_override` signature inspection at :249 (re-point it at
+  `settings.current_season`), `nfl_state_cache` from `init_auth_schema._TABLES`, `main.py`'s
+  `nfl_state.describe()` startup line (keep the log, move the function), `users.py`'s `_season_line`, and
+  the pointer in `config.example.py:57`.
+
+## 2. How far the live signup proof goes — all the way, **in this order**, because it can lock Will out
+
+Both halves, against production. The order is not stylistic:
+
+1. **Five bad codes** against `willdaniel.wrd+s2c-a@gmail.com` → all refused, no mail sent.
+2. **Immediately, the correct code for the same address** → accepted, link sent. **This is the proof the
+   lockout is gone**, and it doubles as the front-door check. **Will clicks the link and lands signed in
+   before you go any further.**
+3. **Only then, the IP half.** `_MAX_PER_IP = 15` per 60 minutes, so exhausting it **locks the originating
+   IP out of signup for an hour** — and if you run this from Will's machine, that is *his* house, right
+   when he is meant to be testing sign-in. Prove it last, and prove it bites on a *correct* code too (an
+   IP-limited caller is limited regardless of what they know — that is the brute-force defense).
+4. **Clean up.** Delete the test rows from `public.signup_attempts` at the end and say so in the report;
+   it is a table this project owns and leaving a poisoned counter behind is not a result.
+
+## 3. Item 9 — the answer is "no, and here is what would change it"
+
+**The ownership model does not care.** An account confers nothing on its own: visibility requires a grant,
+a grant is an operator act about a league, and signing up never creates one. So a confirmed account with
+nobody behind it is **inert** — nobody can sign into it (that needs the mailbox), and if they could they
+would see the demo, which is public anyway. `appendices/auth.md` already reasons this way; make it explicit
+rather than implied.
+
+**Write down the tripwire, not just the verdict** — a decision without its expiry condition is how a
+resolved question comes back as a surprise:
+
+> This stops being true the moment an account can claim a league **by itself**. If S4's connect flow ever
+> grants ownership without an operator in the loop, "confirmed" starts to carry weight and the
+> create-before-send ordering becomes a real defect. Revisit at S4.
+
+Two places, no code: `appendices/auth.md`, and one line at the `email_confirm: true` site in `signup.py`
+so the next reader of that line does not re-raise it. **Build nothing.**
+
+## 4. Keep the `current_season is None` branch — and rewrite its reason
+
+**Keep it.** Three reasons, in order:
+
+1. **"Unreachable" is a claim about EVERY caller**, and this project has already paid for that inference
+   once (`PM_SESSION_STARTUP.md`, "Where the PM was wrong"). `visible()` is pure, public, and has just
+   acquired call sites; its contract is its signature, not today's callers.
+2. **The failure mode of deleting it is not a clean error.** `int(season) == int(None)` raises TypeError
+   *inside an authorization predicate* — a 500 on a read path, from a function whose whole job is to
+   answer yes or no.
+3. Two lines keep the predicate **total**, and the deny direction is the safe one.
+
+**But the comment must change, and this is the actual work in this item.** It currently explains
+fail-closed-during-a-Sleeper-outage — a scenario item 1 deletes. Leaving it is the same defect as
+`/api/me`'s stale docstring in item 8, committed in the same session that fixes it. Replace the rationale
+with the contract: *an unresolvable season denies the owned term; the predicate stays total and the deny
+direction is the safe one.* No mention of Sleeper, caches or outages — none of them exist any more.
