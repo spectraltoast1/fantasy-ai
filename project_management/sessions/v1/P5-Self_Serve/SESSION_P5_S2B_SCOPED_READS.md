@@ -28,10 +28,10 @@ closed by S2a. `/api/me` (S1) and `POST /api/signup` (S1b) are not slice reads a
 
 ## Your part, Will — spelled out
 
-**Before it starts — one thing, 10 seconds.** Confirm Code may reuse the S2a pattern: two disposable
-accounts `willdaniel.wrd+s2b-a@gmail.com` and `willdaniel.wrd+s2b-b@gmail.com`, minted by Code via admin
-`generate_link`, deleted at the end. (S2a deleted its pair to prove the cascade, so it cannot reuse them.)
-Your real account is **not** in the matrix — it stays the clean baseline.
+**Before it starts — nothing. CONFIRMED by Will 2026-08-11:** Code uses two disposable accounts,
+`willdaniel.wrd+s2b-a@gmail.com` and `willdaniel.wrd+s2b-b@gmail.com`, minted via admin `generate_link`
+and **deleted at the end**. (S2a deleted its pair to prove the cascade, so it cannot reuse them.) Will's
+real account is **not** in the matrix — it stays the clean baseline.
 
 **Right now, before Code starts — see the bug exist (30 seconds).** Open this in your browser:
 

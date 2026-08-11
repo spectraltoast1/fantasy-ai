@@ -37,6 +37,12 @@ bundle can survive a deploy (see `PM_SESSION_STARTUP.md`); trust `/api/*` JSON a
 - **Something is deployed and wrong** → `fly deploy` from `application/` (build context is that
   directory). A merged-but-undeployed change has bitten this project before, so confirm the deploy, not
   the merge.
+- **Sleeper is down and the site has gone slow** → set `CURRENT_SEASON = "2026"` in `fly.toml` `[env]`
+  and deploy. The resolver checks the env override **first** and returns before it touches the cache or
+  the network, so this eliminates every outbound Sleeper call in one line. Remove it once Sleeper is back.
+  Needed only until S2c lands, which deletes the network call entirely. **S2b made this eleven endpoints
+  wide** — an owned-league read pays a 5s timeout, so a long outage can starve the single machine's
+  workers and take the public demo down with it.
 - **The visibility rule is misbehaving** → `CURRENT_SEASON` and `DEMO_LEAGUE_ID` are plain `[env]` values
   in `fly.toml`, not secrets, and are the two levers over what anyone can see. `CURRENT_SEASON` should
   normally be **absent**.

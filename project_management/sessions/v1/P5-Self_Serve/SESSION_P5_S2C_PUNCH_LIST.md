@@ -36,8 +36,13 @@
 6. **(Audit F5) A refusal alone proves nothing.** `check_anonymous_is_not_denied` passes on 401 **or**
    503, so on a machine with no Supabase config it goes green having never verified a token. Record
    which code came back; make the `--live` run require 401 specifically.
-7. **(Audit F6 — SETTLED 2026-08-11, Will) Own the current season; take Sleeper out of the request
-   path.** Derive it locally — *season = year, or year − 1 before August 1* — and delete
+7. **(Audit F6 — SETTLED 2026-08-11, Will. ELEVEN TIMES BIGGER since S2b — this is why S2c must not
+   slip behind S2d.)** `slice_params` now resolves the season on every *owned* read, so a >12h Sleeper
+   outage costs 5s per read instead of one. S2b narrowed it (signed-out demo traffic and both refusal
+   branches never call Sleeper) but did not fix it. On one 256mb machine the real risk is **worker
+   exhaustion**, not slow pages — blocked workers are shared across visitors, so it can take the public
+   demo down. Stopgap until this lands: set `CURRENT_SEASON` in `fly.toml` (`context/OPERATIONS.md`).
+   **Own the current season; take Sleeper out of the request path.** Derive it locally — *season = year, or year − 1 before August 1* — and delete
    `nfl_state_cache`, the 5s timeout, the stale-value path and the fail-closed branch, none of which
    have anything to do left once the network call is gone. **Sleeper moves to a check**, not the hot
    path: `check_ownership` asks once and fails loudly if the derived value disagrees.
@@ -60,6 +65,11 @@
    duplicate pageview) rather than the cause. **Fix: bump `identityEpoch` only when the user id actually
    changes**, not on every `SIGNED_IN` event — which also retires the pageview de-dupe. Same file and
    same effect as item 4; do them together. Invisible today only because almost nobody is signed in.
+
+10. **(S2b audit A) `/api/me`'s docstring misdescribes the security posture.** `routes.py:92` still says
+   "Every OTHER read stays open this session, deliberately" — true when S1 wrote it, **false since S2b
+   merged**. A docstring on the auth endpoint telling the next reader the reads are open is worse than the
+   same drift in a project doc, because whoever reads it is deciding whether something is protected.
 
 ## Scope guard
 
