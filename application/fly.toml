@@ -31,12 +31,16 @@ primary_region = "iad"
 # is not a secret (it is a Sleeper league id), and a declared value keeps a bare `fly deploy`
 # correct. Repointing the demo at the anonymized clone is this one line.
 #
-# CURRENT_SEASON is deliberately ABSENT. It is a process-env-only override for the season the
-# visibility rule compares against, used to run the S2a ownership matrix against deployed code
-# (the corpus tops out at 2025 while Sleeper reports 2026, so the owned half of the predicate has
-# nothing to bite on otherwise). It is set here TEMPORARILY and removed in the same session — a
-# deploy that still carries it is a deploy showing users prior-season leagues. Plain [env] rather
-# than a Fly secret on purpose: an override nobody can see is the failure mode.
+# CURRENT_SEASON is deliberately ABSENT, and normally stays that way. The season derives from the
+# calendar (`settings.current_season`: the year, or the year before it until August 1), so there is
+# nothing to configure in the ordinary case.
+#
+# It is the documented MANUAL LEVER (P5/S2c promoted it from a temporary proof hack): set it to run
+# the ownership matrix against deployed code (the corpus tops out at 2025), or to move the rollover
+# by hand if the calendar rule ever disagrees with the real season. Set it TEMPORARILY and remove it
+# in the same session — a deploy that still carries it is a deploy showing users prior-season
+# leagues. Plain [env] rather than a Fly secret on purpose: an override nobody can see is the
+# failure mode, and `/health` reports the value AND its source so a stray one cannot hide.
 [env]
   SUPABASE_URL = "https://llanqdqzgncekvybasyd.supabase.co"
   DEMO_LEAGUE_ID = "1182101676608823296"

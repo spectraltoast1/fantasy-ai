@@ -112,28 +112,14 @@ ALTER TABLE public.user_leagues ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_leagues ADD COLUMN IF NOT EXISTS roster_id int;
 
 
--- Last-known-good NFL season (P5/S2a) — the persistence behind `settings.current_season()`.
+-- RETIRED IN P5/S2c: `public.nfl_state_cache`.
 --
--- The season comes from Sleeper's /v1/state/nfl rather than a constant, so it rolls over by itself
--- during the preseason. That makes a third-party outage part of the visibility path, and the
--- resolver must fail CLOSED: with no value at all, visibility collapses to the demo. It must never
--- degrade to "no season filter" — an outage that costs a user their own league for an hour is an
--- availability bug; one that makes every league visible is the silent isolation failure S2 exists
--- to prevent.
+-- S2a resolved the current season from Sleeper's /v1/state/nfl and persisted a last-known-good
+-- here, because `min_machines_running = 0` erases an in-process cache on every scale-to-zero. The
+-- cache existed to survive a Sleeper outage; S2c derives the season from the calendar instead
+-- (`settings.current_season`), so there is no outage left to survive and nothing left to cache.
 --
--- WHY A TABLE AND NOT AN IN-PROCESS CACHE: `min_machines_running = 0`, so an in-memory value dies
--- on every scale-to-zero — exactly the reasoning that put the rate limiter in Postgres above. A
--- cache that is empty every cold start is not a last-known-good.
---
--- Serving a STALE value during an outage is safe in one direction only, which is why it is
--- allowed: the season only rolls forward, so a stale value can at worst hide a league that just
--- became current. Narrowing, never widening.
---
--- One row, enforced by the primary key + CHECK rather than by convention.
-CREATE TABLE IF NOT EXISTS public.nfl_state_cache (
-    only_row    boolean PRIMARY KEY DEFAULT true CHECK (only_row),
-    season      int NOT NULL,
-    fetched_at  timestamptz NOT NULL DEFAULT now()
-);
-
-ALTER TABLE public.nfl_state_cache ENABLE ROW LEVEL SECURITY;
+-- Dropped here rather than by hand so the cleanup is idempotent, re-runnable and reviewable — the
+-- same reason every other statement in this file is. Its only reader was deleted in the same
+-- commit. Safe to delete this block once every environment has run it.
+DROP TABLE IF EXISTS public.nfl_state_cache;

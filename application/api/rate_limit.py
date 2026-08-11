@@ -6,12 +6,13 @@ resistance first, protection of the email send budget second. Custom SMTP raises
 ceiling to 30 messages/hour, and exhausting that is a denial-of-sign-in against real users, so
 both jobs matter.
 
-**Why the state is in Postgres and not a dict.** `fly.toml` runs TWO machines with
-`min_machines_running = 0` and `auto_stop_machines = "stop"`. In-process state would be split
-across both (an attacker gets ~double the budget, and the count is nondeterministic, which also
-makes "the limit bites" flaky to demonstrate) and, worse, ERASED whenever a machine stops — so
-the limiter could be reset by waiting out the idle window. A limiter you defeat by being patient
-is not a limiter. One extra round-trip on a rare endpoint is a cheap price for one that works.
+**Why the state is in Postgres and not a dict.** `fly.toml` sets `min_machines_running = 0` and
+`auto_stop_machines = "stop"`, so in-process state is ERASED whenever the machine stops — the
+limiter could be reset by simply waiting out the idle window, and a limiter you defeat by being
+patient is not a limiter. Any machine count above one splits the budget on top of that, and the
+count is a deploy-time property (`fly scale show`) rather than something this file declares — the
+scale-to-zero argument alone is what decides it. One extra round-trip on a rare endpoint is a
+cheap price for a limiter that works.
 
 **Fail open, deliberately, and only here.** If the attempt log is unreachable the request is
 allowed rather than refused: this is a *nuisance* control, not an authorization control, and the
@@ -58,27 +59,70 @@ def client_ip(request: Request) -> str | None:
     return ip or (request.client.host if request.client else None)
 
 
-def check(request: Request, email: str) -> None:
-    """Raise 429 if this email or IP has attempted too often. Silent when under the limit."""
-    ip = client_ip(request)
+def counts(request: Request, email: str, *, counts_fn=None) -> dict:
+    """Both counts for this caller, from ONE query, read at the same instant.
+
+    Split from enforcement in P5/S2c because the two limits are now applied at different points
+    in the request — the IP limit before the access code is validated, the email limit only after
+    (see `routes.signup_request`). Counting once and enforcing twice keeps that ordering without
+    paying a second round trip, and means both numbers describe the same moment.
+
+    `counts_fn` is injectable so `check_signup` can drive the whole ordering from fixtures — the
+    same reason `reads.authorize_slice` takes its `lookup`. A limiter you can only exercise
+    against a live database is one whose ordering nobody re-checks.
+
+    Fails OPEN: an unreachable attempt log returns zero counts, so nothing is refused. See the
+    module docstring — this is a nuisance control, not an authorization control.
+    """
+    fn = counts_fn or (lambda params: db.fetch_all(_COUNTS, params)[0])
     try:
-        row = db.fetch_all(_COUNTS, {"email": email, "ip": ip, "mins": _WINDOW_MINUTES})[0]
+        row = fn({"email": email, "ip": client_ip(request), "mins": _WINDOW_MINUTES})
     except Exception:      # noqa: BLE001 — see the module docstring: fail OPEN here, only here
-        return
-    over_email = (row["by_email"] or 0) >= _MAX_PER_EMAIL
-    over_ip = (row["by_ip"] or 0) >= _MAX_PER_IP
-    if over_email or over_ip:
-        # The same message either way: which limit was hit is itself a signal about what else
-        # has been tried from this address.
-        raise HTTPException(
-            status_code=429,
-            detail="Too many sign-in attempts. Try again in an hour.",
-            headers={"Retry-After": str(_WINDOW_MINUTES * 60)},
-        )
+        return {"by_email": 0, "by_ip": 0}
+    return {"by_email": row["by_email"] or 0, "by_ip": row["by_ip"] or 0}
 
 
-def record(request: Request, email: str, *, ok: bool) -> None:
-    """Log an attempt. Never raises — a failure to record must not fail the request."""
+def _too_many() -> HTTPException:
+    # The same message either way: which limit was hit is itself a signal about what else has
+    # been tried from this address.
+    return HTTPException(
+        status_code=429,
+        detail="Too many sign-in attempts. Try again in an hour.",
+        headers={"Retry-After": str(_WINDOW_MINUTES * 60)},
+    )
+
+
+def enforce_ip(counted: dict) -> None:
+    """Raise 429 if this IP has attempted too often.
+
+    Applied FIRST, and safe there: it is keyed on the caller's own address rather than on anything
+    they can name, so it cannot be aimed at somebody else. It is also the limit that actually stops
+    the access code being brute-forced, which is why it must not sit behind the code check.
+    """
+    if counted["by_ip"] >= _MAX_PER_IP:
+        raise _too_many()
+
+
+def enforce_email(counted: dict) -> None:
+    """Raise 429 if this address has attempted too often — applied ONLY after a valid access code.
+
+    **The rule this endpoint is built on: the email counter only ever counts requests that
+    presented a valid code** (S1b audit). The email is caller-supplied, so counting bad-code
+    attempts against it let a stranger who knew nothing but somebody's address spend that person's
+    allowance and lock them out of sign-in for an hour — the limiter handing out the exact harm it
+    was built to prevent. Mailbox-flood protection survives for people who do hold the code.
+    """
+    if counted["by_email"] >= _MAX_PER_EMAIL:
+        raise _too_many()
+
+
+def record(request: Request, email: str | None, *, ok: bool) -> None:
+    """Log an attempt. Never raises — a failure to record must not fail the request.
+
+    `email=None` is the bad-code case, and is the whole mechanism behind the rule above: a NULL
+    email is invisible to `count(*) FILTER (WHERE email = …)` while the IP filter still counts it.
+    So a wrong code costs the caller their own IP budget and costs the address nothing.
+    """
     try:
         db.execute(_RECORD, {"email": email, "ip": client_ip(request), "ok": ok})
     except Exception:      # noqa: BLE001

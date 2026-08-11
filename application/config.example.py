@@ -50,11 +50,12 @@ ACCESS_CODE = "some-sayable-phrase"
 DEMO_LEAGUE_ID = "1182101676608823296"
 
 # NOT settable here, and that is deliberate — documented so you don't go looking.
-# CURRENT_SEASON is a process-ENV-ONLY override for the current season, which otherwise comes from
-# Sleeper's /v1/state/nfl. It exists to run the ownership proofs against real deployed code (the
-# corpus tops out at 2025 while Sleeper says 2026), so it must be visible where it is set — in a
-# shell, or plain [env] in fly.toml. An override that can hide in this gitignored file is exactly
-# the failure mode. See application/api/nfl_state.py.
+# CURRENT_SEASON is a process-ENV-ONLY override for the current season, which otherwise derives
+# from the calendar (the year, or the year before it until August 1). It is the documented manual
+# lever — for running the ownership proofs against real deployed code (the corpus tops out at 2025),
+# or for forcing the rollover by hand — so it must be visible where it is set: in a shell, or plain
+# [env] in fly.toml. An override that can hide in this gitignored file is exactly the failure mode.
+# See settings.current_season in application/api/settings.py.
 
 # Snapshot storage backend for the daily collectors (P1/S1). Defaults to "local" — the laptop
 # writes parquet to application/data/snapshots/ as before. Set to "supabase" ONLY in the hosted

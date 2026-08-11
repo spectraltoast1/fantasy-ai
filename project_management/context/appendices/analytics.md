@@ -280,10 +280,13 @@ genuinely safe.
 
 **Two additions.**
 
-- **`pageView` dedupes on the last path sent.** supabase-js can report a tab *refocus* as `SIGNED_IN`,
-  which nulls the slice and re-fires the effect for a surface the user never left. No legitimate
-  in-app transition repeats a path consecutively (drill-downs are one level deep and no detail type
-  can open itself), so the guard only ever suppresses a spurious re-fire.
+- **~~`pageView` dedupes on the last path sent.~~ REMOVED in P5/S2c.** The guard existed for one
+  reason: supabase-js reports a tab *refocus* as `SIGNED_IN`, `App.jsx` treated that as an identity
+  change, and nulling the slice re-fired the effect for a surface the user never left. S2c fixed
+  that at the source — the identity epoch now bumps only when the user id actually changes — so the
+  guard was suppressing a re-fire that no longer happens while quietly hiding any future one.
+  Measured after the change: **five consecutive refocuses fire zero pageviews; three real tab clicks
+  fire exactly three, all distinct.**
 - **`sign_in_refused` is broader than its name.** `SignIn.jsx`'s `catch` swallows any throw, so a
   network failure or a cold Fly machine records it too. It means *"the attempt did not succeed"*, not
   *"the server said no"*. Still parameterless, so the no-enumeration-oracle property is intact.

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { loadWeeks, loadLeagueMeta, loadLeagues, setActiveSlice, setAuthToken,
          setOnAuthRejected } from './queries.js';
 import { supabase } from './supabase.js';
@@ -78,7 +78,13 @@ export default function App() {
   const [session, setSession] = useState(null);   // the Supabase session (P5/S1), null = signed out
   const [signInOpen, setSignInOpen] = useState(false);
   const [authReady, setAuthReady] = useState(false);   // has the stored session been resolved yet?
-  const [identityEpoch, setIdentityEpoch] = useState(0);  // bumps on sign-in/out → refetch catalog
+  const [identityEpoch, setIdentityEpoch] = useState(0);  // bumps on a real identity CHANGE → refetch
+  const [sessionLost, setSessionLost] = useState(false);  // our token was rejected → say so (S2c)
+  const [catalogError, setCatalogError] = useState(null); // /api/leagues failed → say so, don't spin
+  // The last user id we have SEEN, not the last one we rendered. A ref, because the subscription
+  // below has `[]` deps and its closure would capture `session` as null forever. `undefined` means
+  // "no auth event yet" and is distinct from `null` (signed out) on purpose — see the handler.
+  const lastUserId = useRef(undefined);
 
   // Apply a slice: publish it to queries.js SYNCHRONOUSLY (so the reloads below scope to it),
   // clear the drill-down, then reload the new slice's weeks and snap the week to its latest.
@@ -108,9 +114,14 @@ export default function App() {
   // rather than before it, which was correct while /api/leagues was unscoped and became a bug the
   // moment it wasn't: `getSession()` is async, so the first catalog request went out with no token
   // and a signed-in user landed on the DEMO instead of their own league until they reloaded.
-  // So the catalog now waits for `authReady`, and refetches whenever the IDENTITY changes —
-  // SIGNED_IN and SIGNED_OUT only. TOKEN_REFRESHED is the same person with a fresher token; treating
-  // it as a change would refetch the catalog every hour for no reason.
+  // So the catalog now waits for `authReady`, and refetches whenever the IDENTITY changes.
+  //
+  // P5/S2c: "identity changed" means the USER ID changed — not "an event named SIGNED_IN arrived".
+  // supabase-js reports a tab REFOCUS as SIGNED_IN, so keying off the event name meant switching
+  // away and back cleared the slice and refetched the catalog: league, season, week and the whole
+  // drill-down stack, gone, for a person who did nothing. Comparing ids also subsumes what the old
+  // event filter was for — TOKEN_REFRESHED is the same person, and now that is a fact about the id
+  // rather than a list of event names to keep in sync with the library.
   //
   // `supabase` is null when the build has no Supabase config: sign-in is then unavailable and says
   // so, and `authReady` flips immediately so the public demo still loads. Auth breaking must not
@@ -119,29 +130,50 @@ export default function App() {
     if (!supabase) { setAuthReady(true); return; }
     // P5/S2b: when the server refuses our token, queries.js has already dropped it and retried
     // anonymously — but the active slice still names a league an anonymous caller cannot see, so
-    // that retry 404s. Signing out properly is what actually rescues the app: it fires SIGNED_OUT
+    // that retry 404s. Signing out properly is what actually rescues the app: the id goes to null
     // below, which clears the slice and refetches the catalog, landing on the public demo.
-    setOnAuthRejected(() => supabase.auth.signOut());
+    //
+    // P5/S2c adds the half that was missing: SAYING so. The rescue worked and was completely
+    // silent — a signed-in user was dropped to the public demo with no explanation. This flag is
+    // set only here, i.e. only when a token was actually PRESENT and the server rejected it (see
+    // `apiGet`); a visitor who was never signed in is in a normal state, not an error state.
+    setOnAuthRejected(() => { setSessionLost(true); supabase.auth.signOut(); });
     supabase.auth.getSession().then(({ data }) => {
       setAuthToken(data.session?.access_token);
       setSession(data.session ?? null);
+      // Seed the identity we booted with, so the subscription below compares against it instead
+      // of treating the first event as a change. Belt AND braces with the `undefined` sentinel
+      // there: whichever of these two async paths lands first records the boot identity, and
+      // neither refetches the catalog — the `authReady` effect already does that once.
+      lastUserId.current = data.session?.user?.id ?? null;
       setAuthReady(true);
     // A rejection here would otherwise leave authReady false forever, which is the same permanent
     // "Loading…" the `!supabase` guard above exists to prevent — carry on as a visitor instead.
-    }).catch(() => setAuthReady(true));
+    }).catch(() => { lastUserId.current = null; setAuthReady(true); });
     const { data: sub } = supabase.auth.onAuthStateChange((event, next) => {
+      // Unconditional, and it must stay that way: TOKEN_REFRESHED carries a fresh token roughly
+      // hourly, and a token that stops being republished silently starts failing.
       setAuthToken(next?.access_token);
       setSession(next ?? null);
       if (next) setSignInOpen(false);
       if (event === 'SIGNED_IN') track('signed_in');
-      if (event === 'SIGNED_IN' || event === 'SIGNED_OUT') {
-        // Clear the SELECTION, not just the list. A stale `league_id`/`viewer_roster_id` left in
-        // queries.js would keep riding on every request after sign-out — the previous person's
-        // league still on screen, which is the bug this session exists to prevent the API version of.
-        setActiveSlice({});
-        setSlice(null);
-        setIdentityEpoch((n) => n + 1);
-      }
+
+      const nextId = next?.user?.id ?? null;
+      const first = lastUserId.current === undefined;
+      const changed = !first && nextId !== lastUserId.current;
+      lastUserId.current = nextId;
+      // The FIRST event only records who we are. The `authReady` effect below already loads the
+      // catalog once on boot, so bumping here too would just fetch it twice.
+      if (!changed) return;
+      if (nextId) setSessionLost(false);   // a real sign-in resolves the "we lost your session" state
+      // Clear the SELECTION, not just the list. A stale `league_id`/`viewer_roster_id` left in
+      // queries.js would keep riding on every request after sign-out — the previous person's
+      // league still on screen, which is the bug this session exists to prevent the API version of.
+      // Sign-out reaches here as a change to `null`, which is what keeps the rejected-token rescue
+      // above working: it depends on this branch clearing the poisoned slice.
+      setActiveSlice({});
+      setSlice(null);
+      setIdentityEpoch((n) => n + 1);
     });
     return () => sub.subscription.unsubscribe();
   }, []);
@@ -154,15 +186,22 @@ export default function App() {
   // on the demo, and a signed-in user with no league on the demo as their empty state.
   // Until this resolves `slice` is null, so the surfaces render "Loading…" rather than flashing the
   // demo — a wrong state that would also hide this bug's return.
+  //
+  // P5/S2c: a failure here used to only console.error, which left `slice` null forever and the
+  // whole app on a permanent "Loading…" — a spinner that will never resolve, describing an error
+  // as progress. S2a's audit (F1) called this out as the reason the route must never 401; the
+  // route holding that property is not a reason for the client to have no answer when it does not.
   useEffect(() => {
     if (!authReady) return;
+    setCatalogError(null);
     loadLeagues()
       .then((data) => {
         const lgs = data.leagues || [];
         setLeagues(lgs);
         if (lgs.length) applySlice(sliceFrom(lgs[0], latestSeason(lgs[0])));
+        else setCatalogError(new Error('The catalog came back empty.'));
       })
-      .catch((e) => console.error('Could not load leagues', e));
+      .catch((e) => { console.error('Could not load leagues', e); setCatalogError(e); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authReady, identityEpoch]);
 
@@ -232,8 +271,21 @@ export default function App() {
         onSignOut={signOut}
       />
       {signInOpen && <SignIn onClose={() => setSignInOpen(false)} />}
+      {sessionLost && (
+        <SessionLost
+          onSignIn={() => { track('sign_in_opened'); setSignInOpen(true); }}
+          onDismiss={() => setSessionLost(false)}
+        />
+      )}
       <main className="gr-main">
-        {!slice || switching ? (
+        {catalogError ? (
+          <div className="gr-view">
+            <div className="gr-state error">
+              Couldn’t load your leagues.
+              <pre>{String(catalogError.message || catalogError)}</pre>
+            </div>
+          </div>
+        ) : !slice || switching ? (
           <div className="gr-view"><div className="gr-state">Loading…</div></div>
         ) : (
           <Surface
@@ -356,6 +408,24 @@ function TopBar({ tab, onTab, weeks, asOfWeek, onWeek, league, leagues, slice, l
 
       <Account session={session} league={league} onSignIn={onSignIn} onSignOut={onSignOut} />
     </header>
+  );
+}
+
+// The one thing S2b's rescue was missing: telling the person it happened (P5/S2c, S2a audit F1).
+//
+// Shown ONLY when a token was present and the server rejected it — `apiGet` distinguishes that
+// from "no token was ever sent", and a visitor who was never signed in is in a normal state, not
+// an error state. Deliberately a banner rather than a modal: the app underneath is working, on the
+// public demo, which is the accurate thing to convey. Dismissible for the same reason.
+function SessionLost({ onSignIn, onDismiss }) {
+  return (
+    <div className="gr-notice" role="status">
+      <span className="gr-notice-text">
+        We couldn’t restore your session — showing the public demo.
+      </span>
+      <button className="gr-notice-action" onClick={onSignIn}>Sign in again</button>
+      <button className="gr-notice-close" onClick={onDismiss} aria-label="Dismiss">×</button>
+    </div>
   );
 }
 

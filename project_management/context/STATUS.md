@@ -2,7 +2,7 @@
 
 **What this is:** SurplusFF — a fantasy-football decision-support dashboard whose unit is the manager's
 *decision*, not the player. Live, single-league, on the server stack.
-**Live at:** https://surplusff.com/ (also https://fantasy-ai-api.fly.dev/) · **Updated:** 2026-08-10
+**Live at:** https://surplusff.com/ (also https://fantasy-ai-api.fly.dev/) · **Updated:** 2026-08-11
 **Name + domain:** the official name is **SurplusFF**, commonly shortened to **Surplus** in speech and
 writing (Will, 2026-08-05); "Gridiron" was a working name — retire it. **surplusff.com** is registered
 (SSL live) and is
@@ -150,10 +150,8 @@ the **eleven per-panel reads**, so knowing a `league_id` is no longer enough to 
 Visibility is one predicate in one function, applied at one seam (`slice_params` → `reads.authorize_slice`);
 no route repeats the check. **An unowned league returns byte-identical bytes to a nonexistent one** — a 403
 would confirm existence and Sleeper ids are guessable — while a broken deploy raises a **503** instead, so an
-outage is never disguised as somebody probing. `DEMO_LEAGUE_ID` is config, not a table; "current season" is
-Sleeper's `/v1/state/nfl` and the resolver **fails closed** (env → fresh cache → Sleeper → stale cache →
-`None`, where `None` means demo-only). It never degrades to "no season filter", and a stale season can only
-hide a league that has just become current. The **viewer seat is now a user × league property**
+outage is never disguised as somebody probing. `DEMO_LEAGUE_ID` is config, not a table (for "current
+season", see S2c below — S2a's Sleeper-backed resolver is gone). The **viewer seat is now a user × league property**
 (`user_leagues.roster_id`, emitted by the catalog so the client actually uses it). Ownership is read per
 request, so **a revoke bit a token that had already been issued**.
 
@@ -161,23 +159,29 @@ Two committed gates, both fixture-driven so they run without live accounts, both
 `check_ownership.py` (catalog, 8/8 fail pre-S2a) and `check_isolation.py` (every endpoint × every role,
 **82 assertions fail against the real pre-S2b binary**). Proven with **two real accounts over real HTTP** —
 165 live requests, all as specified — and **19/19 demo payloads value-identical**, so nothing a visitor sees
-moved. An **expired token now lands on the public demo** instead of a permanent "Loading…" (audit F1's token
-half). Honest caveat carried forward: `slice_params` defaulting to the demo is **unobservable today** because
+moved. Honest caveat carried forward: `slice_params` defaulting to the demo is **unobservable today** because
 `DEMO_LEAGUE_ID` *is* the is_mine league — S2a proved it by temporarily repointing the config at Trap 2025.
 → `sessions/v1/P5-Self_Serve/SESSION_P5_S2A_REPORT.md` + `SESSION_P5_S2B_REPORT.md`.
 
-**Known regression S2b introduced, and did not fix — audit F6, now eleven times bigger.** `slice_params`
-resolves the season on every read, so during a **>12h Sleeper outage** an owned-league read pays the 5s
-timeout, on eleven endpoints instead of one. S2b narrowed it (the season resolves last, so signed-out demo
-traffic and both refusal branches never call Sleeper at all) but the real fix is **S2c #7**: derive the season
-locally and take the network call out of the request path entirely.
+**P5/S2c done — the punch list, and audit F6 with it.** Nine loop-closers; no open security hole among
+them. **The current season is now derived locally** (calendar year, or the year before it until **August 1**,
+a boundary that deliberately *leads* Sleeper's flip). `nfl_state.py`, `nfl_state_cache`, the 5s timeout and
+both fallback branches are **deleted** — they existed only to survive a Sleeper outage, which S2b had made
+eleven endpoints wide, and removing the failure beat handling it. Sleeper is now an assertion in
+`check_ownership`, not a dependency; **`/health` publishes the season + its source** (F7), still DB-free.
+The rest: the signup limiter's **email counter only counts requests bearing a valid code** (five bad codes
+used to lock a real address out for an hour); `verify()` asserts the FKs really carry `ON DELETE CASCADE`
+and counts orphans (F2); `--live` requires **401**, not "401 or 503" (F5); a rejected token now *says* the
+session was lost instead of silently signing you out, and a failed catalog shows an error rather than a
+permanent "Loading…" (F1); a **tab refocus no longer resets league, week and drill-down** (which also
+retired the pageview de-dupe); and the `email_confirm`-before-send question is decided — the ownership model
+does not care, since an account confers nothing without an operator's grant.
+→ `sessions/v1/P5-Self_Serve/SESSION_P5_S2C_REPORT.md` + *appendix: auth*.
 
-**Next: P5/S2c** — the punch list: `--emit` must emit the RLS lines; reorder the signup rate limit so a wrong
-code can't lock a real person out; own the current season locally (above); publish season + source on
-`/health`; the user-facing copy for a rejected token; and stop treating a **tab refocus** as an identity
-change (supabase-js reports it as `SIGNED_IN`, so it currently resets your league, week and drill-down).
-Then **S2d**, which has the nearer deadline: clone the demo away from Will's lineage **before** Gate A, then
-remove the season selector. Two things still queue behind calendar
+**Next: P5/S2d**, which has the nearer deadline: clone the demo away from Will's lineage **before** Gate A,
+then remove the season selector. It also inherits the **`--emit` RLS fix** (below), deliberately moved out of
+S2c: its prove-it-bites needs a `--load`, which DROPs tables on the one production database, so it is a
+scheduled event rather than a punch-list line. Two things still queue behind calendar
 gates, neither blocking P5: **loading the first real 2026 league** at Will's draft (~late Aug) — a manual admin load, not
 P5 — which data-proves S2's refresh, S3b's band panel and S4a's regimes at once and **must verify the
 ROS-range panel against real band data**; and **S4b** (market turn-on) post-launch.
@@ -246,7 +250,9 @@ populated synthetically** and derived from real numbers until P4 ships. **P4 the
   RLS was turned on by hand, then a later `--emit`/`--load` recreated that table without it. Zero practical
   exposure today (the owner role bypasses RLS and the Data API is off), but it shows the general failure:
   **any out-of-band property on a `schema.sql` table is destroyed by the next full load.** The durable fix is
-  to make `--emit` emit the `ALTER TABLE … ENABLE ROW LEVEL SECURITY` lines; **S2c owns it.**
+  to make `--emit` emit the `ALTER TABLE … ENABLE ROW LEVEL SECURITY` lines. **Moved out of S2c to S2d (or
+  its own slot):** proving it bites means re-running `--load`, which DROPs every table it names against the
+  single Supabase project that also serves production — a scheduled event, not a punch-list line.
 - **`weekly_refresh._resolve_scoring_key` would silently mis-score a stranger's league** (found in P5/S0).
   A league absent from `demo_manifest` falls back to `data_layer._active_league(season)[1]` — *the owner's*
   scoring key. Every user's league is absent from the catalog until the connect flow catalogs it, so this

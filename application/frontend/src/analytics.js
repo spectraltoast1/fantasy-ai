@@ -11,19 +11,16 @@ const send = (...args) => {
   try { window.gtag(...args); } catch { /* telemetry never breaks a render */ }
 };
 
-// The last path sent, so a repeat is dropped. Not defensive clutter: App.jsx's pageview effect
-// keys off `slice`, and supabase-js can report a tab REFOCUS as SIGNED_IN, which nulls the slice
-// and re-fires the effect for a surface the user never left. No legitimate in-app transition
-// repeats a path consecutively (drill-downs are one level deep and no detail type can open
-// itself), so this only ever suppresses a spurious re-fire.
-let lastPath = null;
-
 // A virtual pageview. The SPA has no router, so GA cannot see navigation and is told the path
 // explicitly. page_location must be ABSOLUTE — GA derives its page dimensions from it, and a
 // relative value leaves the real (unchanging) URL in the report.
+//
+// P5/S2c removed a `lastPath` de-dupe from here. It existed for one reason: supabase-js reports a
+// tab REFOCUS as SIGNED_IN, App.jsx treated that as an identity change, and nulling the slice
+// re-fired the pageview effect for a surface the user never left. S2c fixed that at the source —
+// the identity epoch now bumps only when the user id actually changes — so the guard was
+// suppressing a re-fire that no longer happens, while quietly hiding any future one.
 export function pageView(path, title) {
-  if (path === lastPath) return;
-  lastPath = path;
   send('event', 'page_view', {
     page_location: window.location.origin + path,
     page_title: title,

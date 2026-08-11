@@ -20,9 +20,10 @@ _SQL_PATH = Path(__file__).resolve().parent / "auth_schema.sql"
 
 # Every table this file owns. S1 hardcoded `app_users` in three places; S1b needed a second
 # table, so the name lives here once instead — adding a third is now one list entry. S2a added
-# two (`user_leagues`, `nfl_state_cache`) and that is exactly what it cost: two list entries,
-# with the column dump and the absent-from-generated-DDL assertion inherited for free.
-_TABLES = ["app_users", "signup_attempts", "user_leagues", "nfl_state_cache"]
+# two and that is exactly what it cost: two list entries, with the column dump and the
+# absent-from-generated-DDL assertion inherited for free. S2c removed one of them again
+# (`nfl_state_cache`, retired with the Sleeper call it cached) — one list entry, same seam.
+_TABLES = ["app_users", "signup_attempts", "user_leagues"]
 
 _COLUMNS_SQL = """
 SELECT column_name, data_type, is_nullable
@@ -46,9 +47,76 @@ def apply() -> None:
 # one level up. Listing them here means the assertion is inherited the same way the table list is.
 _ALTERED_COLUMNS = [("user_leagues", "roster_id")]
 
+# Foreign keys that must exist AND cascade on delete (S2a audit F2, closed in S2c). Deleting an
+# account has to take its grants with it; if the FK is missing or its delete action is anything
+# but CASCADE, a deleted user's rows survive and `user_leagues` starts granting leagues to ids
+# that no longer name anybody.
+#
+# S2b DELETED two accounts and counted zero leftover rows, which is a fine measurement and not an
+# invariant: `CREATE TABLE IF NOT EXISTS` is a no-op on an existing table, so a database that
+# already had these tables in another shape keeps that shape and nothing notices — the same F2
+# trap `_ALTERED_COLUMNS` exists for, one level down at the constraint instead of the column.
+_CASCADE_FKS = [("user_leagues", "user_id"), ("app_users", "id")]
+
+# `confdeltype` is the ON DELETE action: 'c' = CASCADE, 'a' = NO ACTION, 'r' = RESTRICT,
+# 'n' = SET NULL, 'd' = SET DEFAULT. Reading pg_constraint directly because information_schema
+# reports the action as prose that varies by server version.
+_FK_SQL = """
+SELECT c.conname, c.confdeltype, a.attname AS column_name
+FROM pg_constraint c
+JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+WHERE c.contype = 'f' AND c.conrelid = ('public.' || %(t)s)::regclass
+"""
+
+_ORPHANS_SQL = """
+SELECT count(*)::int AS n
+FROM public.{table} t LEFT JOIN auth.users u ON u.id = t.{column}
+WHERE u.id IS NULL
+"""
+
+
+def _verify_cascades() -> bool:
+    """Assert the constraint, not just the column — and then count what it is supposed to prevent."""
+    ok = True
+    for table, column in _CASCADE_FKS:
+        try:
+            fks = db.fetch_all(_FK_SQL, {"t": table})
+        except Exception as exc:  # noqa: BLE001 — a missing table is reported by the loop below
+            print(f"✗ could not read the foreign keys on public.{table}: {exc}")
+            ok = False
+            continue
+        cascading = [f for f in fks
+                     if f["column_name"] == column and f["confdeltype"] == "c"]
+        present = [f for f in fks if f["column_name"] == column]
+        if cascading:
+            print(f"  ok  public.{table}.{column} → auth.users ON DELETE CASCADE "
+                  f"({cascading[0]['conname']})")
+        elif present:
+            print(f"✗ public.{table}.{column} has a foreign key ({present[0]['conname']}) but its "
+                  f"ON DELETE action is {present[0]['confdeltype']!r}, not 'c' (CASCADE) — "
+                  "deleting an account would leave its rows behind")
+            ok = False
+        else:
+            print(f"✗ public.{table}.{column} has NO foreign key to auth.users — nothing makes "
+                  "a deleted account's rows go away")
+            ok = False
+
+        try:
+            n = db.fetch_all(_ORPHANS_SQL.format(table=table, column=column))[0]["n"]
+        except Exception as exc:  # noqa: BLE001 — the API role may not be able to read auth.users
+            print(f"  ??  orphan count for public.{table} UNAVAILABLE ({exc}) — the cascade is "
+                  "asserted above, but nothing counted what it prevents")
+            continue
+        if n == 0:
+            print(f"  ok  public.{table}: 0 rows point at a user that no longer exists")
+        else:
+            print(f"✗ public.{table}: {n} ORPHAN row(s) — grants outliving their account")
+            ok = False
+    return ok
+
 
 def verify() -> bool:
-    ok = True
+    ok = _verify_cascades()
     for table, column in _ALTERED_COLUMNS:
         cols = {c["column_name"] for c in db.fetch_all(_COLUMNS_SQL, {"t": table})}
         if column in cols:

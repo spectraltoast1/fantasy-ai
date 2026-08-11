@@ -87,17 +87,19 @@ ON CONFLICT (id) DO NOTHING
 
 @router.get("/me")
 def me(user: dict = Depends(auth.current_user)) -> dict:
-    """The authenticated caller's identity — the one endpoint S1 gates.
+    """The authenticated caller's identity — the one endpoint that REQUIRES a token.
 
-    Every OTHER read stays open this session, deliberately. Authentication without per-user
-    scoping is a half-gate that looks like security while every caller still sees every
-    league; closing and scoping the reads is one coherent change with one coherent proof, and
-    that is S2.
+    Not the only protected one. Every read is scoped as of S2a/S2b: the catalog shows you only
+    the demo plus what you own, and all eleven per-panel reads authorize at ``slice_params``. What
+    is different here is the failure mode — the reads take ``optional_user`` and serve the public
+    demo to an anonymous caller, while this one takes ``current_user`` and 401s. If you are
+    reading this to decide whether something is protected, the answer lives in
+    ``reads.authorize_slice``, not here.
 
     Recording the profile row here — rather than in a database trigger on ``auth.users`` — keeps
     the behavior in reviewable code instead of invisible DDL, and costs one no-op INSERT per
-    call. Deliberately narrow: id and email only, because the user→league ownership model is
-    S2's and inventing it early guarantees rework.
+    call. Deliberately narrow: id and email only. Ownership is a separate table
+    (``public.user_leagues``, S2a), written by an operator rather than inferred from a sign-in.
     """
     db.execute(_UPSERT_APP_USER, {"id": user["id"], "email": user["email"]})
     return {"id": user["id"], "email": user["email"]}
@@ -115,15 +117,38 @@ def signup_request(request: Request, body: dict = Body(...)) -> dict:
 
     The response is the same whether or not the address already had an account, so it can't be
     used to enumerate who is registered.
+
+    **The order of the checks below is the fix S1b's audit asked for, and it is a rule rather than
+    a reordering: the email counter only ever counts requests that presented a VALID access code.**
+    Until S2c the email limit was applied first, keyed on a caller-supplied address — so five
+    requests carrying somebody's address and any garbage code locked that person out of sign-in
+    for an hour. The limiter was handing out the exact harm it exists to prevent, and it needed no
+    access code to do it.
+
+    So: IP first (it is keyed on the caller's own address, cannot be aimed at anyone else, and is
+    what actually bounds brute-forcing the code), then the code, then the email counter. A wrong
+    code is recorded against the IP alone. A stranger can no longer spend a real person's
+    allowance; mailbox-flood protection survives for people who do hold the code.
     """
     email = str(body.get("email") or "").strip().lower()
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="Enter a valid email address.")
 
-    # Check the limit BEFORE doing any work, then record the attempt whatever the outcome — so a
-    # wrong code still counts against the budget. Recording only successes would leave the
-    # brute-force door open, which is the main thing this is defending.
-    rate_limit.check(request, email)
+    # An unconfigured server must say so rather than refusing everyone as a bad code.
+    signup.ensure_configured()
+
+    # One query, two enforcement points — so both numbers describe the same instant and the
+    # ordering below costs no extra round trip.
+    counted = rate_limit.counts(request, email)
+    rate_limit.enforce_ip(counted)
+
+    if not signup.code_matches(body.get("code")):
+        # IP budget only. Recording nothing at all would leave brute-forcing unbounded; recording
+        # it against the email is what created the targeted lockout.
+        rate_limit.record(request, None, ok=False)
+        raise HTTPException(status_code=403, detail=signup.REFUSED)
+
+    rate_limit.enforce_email(counted)
     try:
         signup.request_link(email, body.get("code"))
     except Exception:

@@ -11,7 +11,8 @@ Run locally:
     In the image the built SPA lives at /app/static, so ``/`` serves index.html.
 
 Endpoints:
-    GET /health    -> pure liveness (no DB). Always 200 while the process is up.
+    GET /health    -> liveness + the resolved season and its source (no DB). Always 200 while
+                      the process is up.
     GET /health/db -> opens a Supabase connection and runs SELECT 1.
                       200 {"db": "ok", "result": 1} on success, 503 on failure.
     GET /api/*     -> the ported read endpoints (Sessions 3-4).
@@ -31,7 +32,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from application.api import db, nfl_state, settings
+from application.api import db, settings
 from application.api.routes import router as api_router
 
 _LOG = logging.getLogger(__name__)
@@ -40,18 +41,20 @@ _LOG = logging.getLogger(__name__)
 async def _lifespan(_app: FastAPI):
     """State the two values the visibility rule turns on, once, at boot (P5/S2a).
 
-    An operator override that nobody can see is the failure mode `nfl_state` is written around, so
-    the resolved season AND its source go in the log — a `CURRENT_SEASON` left set after a proof
-    run is then one grep away instead of a silent policy change.
+    An operator override that nobody can see is the failure mode `settings.current_season` is
+    written around, so the resolved season AND its source go in the log — a `CURRENT_SEASON` left
+    set after a proof run is then one grep away instead of a silent policy change. Since S2c the
+    same pair is on `/health`, so it is checkable from outside at any time rather than only in a
+    log line somebody read once (S2a audit F7).
 
-    Wrapped, because this reaches Sleeper and Postgres: a config/third-party problem must be LOUD
-    but never FATAL. A startup that died here would take the public demo down with it, which is
-    the same rule S1 wrote for auth misconfiguration.
+    Still wrapped: `demo_league_id()` can import `config.py`. A config problem must be LOUD but
+    never FATAL — a startup that died here would take the public demo down with it, which is the
+    same rule S1 wrote for auth misconfiguration.
     """
     try:
         demo = settings.demo_league_id()
         _LOG.warning("demo league: %s", demo or "UNSET — the public catalog will be EMPTY")
-        _LOG.warning("%s", nfl_state.describe())
+        _LOG.warning("%s", settings.describe_season())
     except Exception as exc:  # noqa: BLE001 — never let a log line stop the app booting
         _LOG.error("could not resolve the visibility config at startup: %s", exc)
     yield
@@ -92,8 +95,17 @@ async def _no_shared_caching_of_api(request, call_next):
 
 @app.get("/health")
 def health() -> dict:
-    """Liveness only — does not touch the database."""
-    return {"status": "ok"}
+    """Liveness, plus the resolved season and where it came from (P5/S2c, S2a audit F7).
+
+    **Still DB-free, and that is the property the runbook depends on** — `/health` up while the
+    app is broken means Supabase; `/health` down means Fly. It stays DB-free by construction now:
+    `season_and_source` is `os.environ` plus the calendar, with no I/O of any kind.
+
+    Publishing the season leaks nothing (Sleeper publishes it too), and it turns "the override is
+    gone" from a startup log line read once into a property anyone can check at any time.
+    """
+    season, source = settings.season_and_source()
+    return {"status": "ok", "season": season, "season_source": source}
 
 
 @app.get("/health/db")

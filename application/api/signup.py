@@ -40,7 +40,9 @@ _TIMEOUT_S = 20
 # One message for every refusal a caller can cause. A distinct "that code is wrong" would confirm
 # a guess was structurally right, and a distinct "unknown address" would confirm registration —
 # the enumeration oracle S1 deliberately avoided. Same words, whatever happened.
-_REFUSED = "That access code isn't right."
+# Public since S2c: the route raises this refusal itself now, because whether the code was valid
+# decides which rate-limit budget the attempt is charged to.
+REFUSED = "That access code isn't right."
 
 
 def _post(path: str, body: dict, *, key: str, base: str) -> tuple[int, dict]:
@@ -76,28 +78,52 @@ def code_matches(supplied: str | None) -> bool:
     return hmac.compare_digest(supplied.strip(), expected.strip())
 
 
+def ensure_configured() -> tuple[str, str]:
+    """``(base, secret)``, or 503. Called by the route before anything else (P5/S2c).
+
+    A deploy problem, not a caller problem — loud and distinct, because the alternative is every
+    signup silently reading as a bad code for as long as nobody checks the env. It runs first so
+    that an unconfigured server still says so rather than returning 403 to everyone, which is
+    what the pre-S2c ordering did by having this check live inside `request_link`.
+    """
+    base = settings.supabase_url()
+    secret = settings.supabase_secret_key()
+    if not base or not secret:
+        raise HTTPException(status_code=503,
+                            detail="signup is not configured on this server")
+    return base, secret
+
+
 def request_link(email: str, code: str | None) -> None:
     """Validate the code, ensure the account exists, and send a magic link. Raises on refusal.
 
     The ordering matters: the code is checked *before* anything is created or sent, so an
     invalid attempt costs nothing but a row in the attempt log.
+
+    The route validates the code before calling this — it has to, because whether the code was
+    valid decides which rate-limit budget the attempt is charged to. This keeps its OWN check
+    anyway: a duplicated `compare_digest` is free, and it means this function can never be
+    called without one.
     """
-    base = settings.supabase_url()
-    secret = settings.supabase_secret_key()
-    if not base or not secret:
-        # A deploy problem, not a caller problem — loud and distinct, because the alternative is
-        # every signup silently reading as a bad code for as long as nobody checks the env.
-        raise HTTPException(status_code=503,
-                            detail="signup is not configured on this server")
+    base, secret = ensure_configured()
 
     if not code_matches(code):
-        raise HTTPException(status_code=403, detail=_REFUSED)
+        raise HTTPException(status_code=403, detail=REFUSED)
 
     # Create the account if it isn't there. This is the admin call that makes platform-signup-OFF
     # workable without a human: it bypasses `disable_signup`, which a public `/otp` cannot.
     # `email_confirm: true` matters — an unconfirmed account still reads as a *signup* to GoTrue,
     # so a later magic link would be refused while signups are off. That exact dead end cost an
     # hour during S1.
+    #
+    # This creates a CONFIRMED account before the link is known to have sent, so a mailer failure
+    # can leave one behind for an address nobody controls. DECIDED, P5/S2c: the ownership model
+    # does not care, and nothing is built for it. An account confers nothing on its own —
+    # visibility needs a grant, a grant is an operator act about a league, and signing up never
+    # creates one, so an orphan account reads exactly what a signed-out visitor reads. This stops
+    # being true the moment an account can claim a league BY ITSELF: if S4's connect flow ever
+    # grants ownership without an operator in the loop, "confirmed" starts to carry weight and
+    # this ordering becomes a real defect. Revisit at S4. → context/appendices/auth.md.
     status, body = _post("/admin/users", {"email": email, "email_confirm": True},
                          key=secret, base=base)
     already = status == 422 and "already" in json.dumps(body).lower()

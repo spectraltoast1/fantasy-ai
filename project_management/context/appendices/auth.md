@@ -1,10 +1,12 @@
 # Appendix — Auth (how the front door actually works)
 
-**Current as of:** 2026-08-11.
+**Current as of:** 2026-08-11 (re-stamped by S2c).
 **Scope:** the mechanism behind ARCHITECTURE's Auth and Ownership bullets. Read this when touching
 sign-in, keys, the deploy plumbing, or the app-side tables. Shipped P5/S1, signup model corrected in
-**S1b** (2026-08-03), ownership + the scoped catalog added in **S2a** (2026-08-09); the session
-reports in `sessions/v1/P5-Self_Serve/` carry the narratives and proofs, and
+**S1b** (2026-08-03), ownership + the scoped catalog added in **S2a** (2026-08-09), the reads scoped
+in **S2b** (2026-08-10), and the punch list closed in **S2c** (2026-08-11: the season derived
+locally, the signup check order, the constraint assertions, the client's session-lost copy); the
+session reports in `sessions/v1/P5-Self_Serve/` carry the narratives and proofs, and
 `SIGNUP_MODEL_ASSESSMENT.md` records why the signup model changed.
 
 ---
@@ -42,16 +44,44 @@ control rather than an authorization one and a database hiccup should not mean n
 
 ### The rate limiter is in Postgres because it has to be
 
-`fly.toml` runs **two** machines with `min_machines_running = 0` and `auto_stop_machines = "stop"`.
-In-process state would be split across both (an attacker gets ~double the budget) and, worse,
-**erased whenever a machine stops** — so the limiter could be reset by waiting out the idle window.
-A limiter you defeat by being patient is not a limiter. Hence `public.signup_attempts`, and hence
-the check that it still bites from a brand-new process.
+`fly.toml` sets `min_machines_running = 0` and `auto_stop_machines = "stop"`, so in-process state is
+**erased whenever the machine stops** — the limiter could be reset by simply waiting out the idle
+window, and a limiter you defeat by being patient is not a limiter. On top of that the budget would
+be **split across machines**, and there are **two** (measured 2026-08-11: `fly scale show` →
+`app │ 2 │ … │ iad(2)`) — so an attacker would get roughly double, non-deterministically, which also
+makes "the limit bites" flaky to demonstrate. The count is a **deploy-time property, not something
+`fly.toml` declares**: this appendix used to cite `fly.toml` for it, the S1b audit correctly called
+that citation wrong, and S2c finally ran the command. Hence `public.signup_attempts`, and hence the
+check that it still bites from a brand-new process.
 
 What it is actually defending: the code is chosen to be sayable out loud, so it is low-entropy by
 construction. **Brute-force resistance is the first job**, protecting the email send budget the
 second. Client IP comes from Fly's `Fly-Client-IP` header — `request.client.host` is Fly's proxy,
 identical for every caller, so limiting on it would throttle all users as one.
+
+### The order of the checks, which is the rule (S2c)
+
+**The email counter only ever counts requests that presented a VALID access code.**
+
+S1b applied the email limit *first*, keyed on the caller-supplied address, and recorded every
+attempt regardless of outcome. So five requests carrying somebody's address and any garbage code
+locked that person out of sign-in for an hour — no access code required. The limiter was handing
+out the exact harm it exists to prevent, and it is the reason this is stated as a rule rather than
+as a reordering.
+
+`POST /api/signup` now runs: **config gate (503) → IP limit → validate the code → email limit →
+send.** The IP limit is safe to apply first precisely because it is keyed on the caller's own
+address: it cannot be aimed at anyone else, and it is the limit that actually bounds brute-forcing
+a low-entropy code. A wrong code is recorded with a **NULL email**, which is invisible to
+`count(*) FILTER (WHERE email = …)` while the IP filter still counts it — that single detail is the
+whole mechanism. Both counts come from one query, so the two enforcement points describe the same
+instant and cost no extra round trip.
+
+The trade-off, accepted knowingly: someone holding a valid code can spend send budget, backstopped
+by Supabase's own hourly ceiling and its per-address minimum interval. `check_signup` asserts both
+halves from fixtures — including that a **correct** code from a rate-limited IP is still refused,
+since knowing the code must not be a bypass — and re-runs them against the pre-S2c ordering, where
+the victim gets a 429 while holding the right code.
 
 ## Custom SMTP is a hard dependency, not a nicety
 
@@ -129,17 +159,30 @@ There is **no migration mechanism in this project**. The only DDL is `serve/sche
 `build_db --emit` rewrites wholesale and `--load` applies after DROPping every table it names. An
 auth table listed there would be dropped by the next full reload.
 
-So they live in hand-written `api/auth_schema.sql` — `app_users`, S1b's `signup_attempts`, and
-S2a's `user_leagues` + `nfl_state_cache` — applied by `api/init_auth_schema.py`, whose `--verify`
-**asserts they are absent from the generated DDL**: the guarantee is tested, not documented. Adding
-a table is one entry in `_TABLES` and it inherits both the column dump and the leak check. The
-`app_users` row is written on first authenticated `/api/me` call rather than by a database trigger,
-keeping the behaviour in reviewable code instead of invisible DDL.
+So they live in hand-written `api/auth_schema.sql` — `app_users`, S1b's `signup_attempts` and S2a's
+`user_leagues` — applied by `api/init_auth_schema.py`, whose `--verify` **asserts they are absent
+from the generated DDL**: the guarantee is tested, not documented. Adding a table is one entry in
+`_TABLES` and it inherits the column dump and the leak check; S2c removed one the same way
+(`nfl_state_cache`, retired with the Sleeper call it cached, dropped by an idempotent statement in
+the same file rather than by hand). The `app_users` row is written on first authenticated `/api/me`
+call rather than by a database trigger, keeping the behaviour in reviewable code instead of
+invisible DDL.
+
+**`--verify` asserts constraints, not just columns (S2c, S2a audit F2).** The FKs on
+`user_leagues.user_id` and `app_users.id` must exist *and* carry `ON DELETE CASCADE`
+(`pg_constraint.confdeltype = 'c'`), and orphan rows are counted. S2b deleted two accounts and
+observed zero leftover rows, which is a measurement; `CREATE TABLE IF NOT EXISTS` is a no-op on an
+existing table, so a database that already had these tables in another shape keeps that shape and
+nothing notices. Same trap as `_ALTERED_COLUMNS`, one level down.
 
 **The hazard is not theoretical:** `ros_player_band` has RLS **off** while the other 13 served
 tables have it on, because RLS was enabled by hand and a later `--emit`/`--load` recreated the table
 without it. Any out-of-band property on a `schema.sql` table — RLS, a grant, a trigger, an FK — is
-destroyed by the next full load. The durable fix is to make `--emit` emit the RLS lines (**S2c**).
+destroyed by the next full load. The durable fix is to make `--emit` emit the RLS lines.
+**That fix is NOT S2c's** (an earlier version of this appendix said it was): proving it bites means
+re-running `--load`, which DROPs every table it names against the single Supabase project that also
+serves production. It is a scheduled event, not a punch-list line — it rides with **S2d**, the other
+store-touching session, or takes its own slot.
 
 ## Ownership and visibility (S2a)
 
@@ -164,21 +207,48 @@ already been issued).
 can hold a confirmed account. S4's connect flow writes the same row from the other direction — a user
 claiming their own league — and that is where identity actually gets established.
 
-**"Current season" comes from Sleeper `/v1/state/nfl`**, cached, and the resolver **fails closed**:
-`CURRENT_SEASON` env → fresh cache → Sleeper → stale cache → `None`, where `None` collapses
-visibility to the demo. It must never degrade to "no season filter": an outage that costs a user
-their own league for an hour is an availability bug; one that shows every league to everyone is the
-silent isolation failure S2 exists to prevent. Serving a *stale* season is safe for a directional
-reason — the season only rolls forward, so stale can at worst hide a league that has just become
-current. The last-known-good is a **table**, not a module global, because `min_machines_running = 0`
-erases in-process state on every scale-to-zero — the same reasoning that put the rate limiter in
-Postgres.
+> **Decided, S2c: the ownership model does not care, and nothing is built for it.** An account
+> confers nothing on its own. Visibility needs a grant, a grant is an operator act, and signing up
+> never creates one — so a confirmed account with nobody behind it holds zero grants and reads
+> exactly what a signed-out visitor reads: the demo. Reordering create-after-send would not be a
+> reorder anyway (`/otp` with `create_user: false` refuses an address with no account), so it would
+> be real machinery for a non-problem.
+>
+> **The tripwire, which is the part worth keeping:** this stops being true the moment an account can
+> claim a league **by itself**. If S4's connect flow ever grants ownership without an operator in
+> the loop, "confirmed" starts to carry weight and the create-before-send ordering becomes a real
+> defect. **Revisit at S4.** The same note sits at the `email_confirm: true` call site in
+> `api/signup.py`, so the next reader of that line does not re-raise it from scratch.
 
-**`CURRENT_SEASON` is process-env only, with no `config.py` fallback on purpose.** It exists because
-the corpus tops out at 2025 while Sleeper already reports 2026, so without it the *owned* half of the
-predicate has nothing to bite on and cannot be proven against deployed code. An override that can
-hide in a gitignored file is the failure mode, so it goes in plain `[env]`, and both startup and
-`users.py --list` print the resolved season **and its source**.
+**"Current season" is derived locally (S2c) — there is no third party on the request path.** It is
+the calendar year, or the year before it until **August 1**, from `settings.current_season`. The
+boundary deliberately **leads** Sleeper's own flip by a few days because the error directions are
+not symmetric: flipping early drops last season's league from a catalog slightly sooner than
+necessary, which nobody notices; flipping late hides the league somebody has just connected.
+
+Until S2c this resolved Sleeper's `/v1/state/nfl` through a `public.nfl_state_cache` last-known-good
+and failed closed. That whole apparatus — the 5s timeout, the 12h TTL, the stale-cache branch, the
+unresolved branch, the table — existed to survive a Sleeper outage, and S2b had put it on **eleven**
+endpoints (audit F6). On a single 256mb machine with shared workers the realistic failure was worker
+exhaustion taking the public demo down, not slow pages. Deleting a fail-closed path would normally
+be alarming; it is right here, because **removing the failure beats handling it** — after this there
+is no third party to fail. What remains fail-closed is the predicate's own contract: `reads.visible`
+still denies the owned term on an unresolvable season, kept because the function is pure, public and
+holds eleven call sites, so its contract is its signature rather than today's callers.
+
+**Sleeper is now an assertion, not a dependency.** `check_ownership` fetches `/v1/state/nfl` once and
+fails loudly if it disagrees with the derived value, so drift is still caught — just not by every
+page load. Unreachable is a failure there rather than a skip: a gate reporting agreement it never
+checked is green having verified nothing.
+
+**`CURRENT_SEASON` is the documented manual lever**, process-env only, with no `config.py` fallback
+on purpose. It is how the ownership proofs run against deployed code (the corpus tops out at 2025),
+and how the rollover gets moved by hand if the calendar rule ever disagrees with the real season. An
+override that can hide in a gitignored file is the failure mode, so it goes in plain `[env]` — and
+**`/health` publishes the resolved season and its source** (S2a audit F7), so a stray override
+cannot hide behind a startup log line nobody re-reads. `/health` stays DB-free, which the runbook
+depends on, and after S2c it is DB-free *by construction*: the derivation is `os.environ` plus the
+calendar.
 
 **Catalog ordering is the landing rule.** The SPA lands on `leagues[0]`, so "a caller's own leagues
 first, the demo last" is what decides where a signed-in user lands. Two SPA-shaped constraints are
@@ -209,10 +279,10 @@ answering "unknown league_id" would hide an outage behind an authorization messa
 looked.
 
 **The season resolves last.** `visible` short-circuits — the demo needs no season, an unowned league
-needs no season — so signed-out demo traffic never calls Sleeper, and neither refusal branch does
-either (which is also what keeps them timing-identical). This is call ordering, **not** a fix for
-audit F6: an owned-league read during a >12h Sleeper outage still pays the 5s timeout, on eleven
-endpoints now rather than one. S2c owns the real fix.
+needs no season — which is what keeps the two refusal branches timing-identical. S2b was right that
+this was call ordering rather than a fix for audit F6; **S2c fixed F6 at the source** by making the
+season a local derivation with no I/O, so the ordering is no longer load-bearing for latency. It
+stays because the timing symmetry of the two refusals still is.
 
 **The viewer seat became a user × league property**: `user_leagues.roster_id`, added by an explicit
 `ALTER TABLE … ADD COLUMN IF NOT EXISTS` (a column inside `CREATE TABLE IF NOT EXISTS` would never
@@ -247,8 +317,21 @@ the user on every visit, which reads as broken.
 rather than after it — correct while `/api/leagues` was unscoped, and a bug the moment it wasn't:
 `getSession()` is async, so the first catalog request went out with no token and a signed-in user
 landed on the demo until they reloaded. The catalog now waits on an `authReady` flag and refetches
-on identity change — `SIGNED_IN` / `SIGNED_OUT` only, since `TOKEN_REFRESHED` is the same person and
-would otherwise refetch hourly for nothing. Sign-out clears the **selection** (`setActiveSlice({})`,
+on identity change. **"Identity changed" means the USER ID changed — not that an event named
+`SIGNED_IN` arrived (S2c).** supabase-js reports a tab **refocus** as `SIGNED_IN`, so keying off the
+event name meant switching tabs and coming back cleared the slice and refetched: league, season,
+week and the whole drill-down stack, gone, for a person who did nothing. A `useRef` holds the
+last-seen id (the subscription's `[]`-deps closure would capture `session` as `null` forever), the
+first event only records it, and `SIGNED_OUT` counts as a change *to null* — which is what keeps the
+rejected-token rescue below working, since it depends on this branch clearing the poisoned slice.
+Comparing ids also subsumes the old event filter: `TOKEN_REFRESHED` is the same person, and that is
+now a fact about the id rather than a list of event names to keep in sync with the library.
+
+That fix also **retired the `lastPath` de-dupe in `analytics.js`** — it existed only to swallow the
+duplicate pageview the spurious refetch caused. Measured after the change: five consecutive
+refocuses fire **zero** pageviews, three real tab clicks fire exactly three.
+
+Sign-out clears the **selection** (`setActiveSlice({})`,
 `setSlice(null)`), not just the list: a stale `league_id`/`viewer_roster_id` left in `queries.js`
 would keep riding on every request — the previous person's league still on screen. `authReady` also
 flips immediately when `supabase` is null (an unconfigured build), because a permanently-false flag
@@ -263,5 +346,18 @@ a league the anonymous caller cannot see, so the retry 404s. So it also calls `s
 `App` wires to `supabase.auth.signOut()` — that fires `SIGNED_OUT`, which clears the slice and refetches
 the catalog, and *that* is what lands the visitor on the public demo. Strictly less access than they
 had, never more, and the server still refuses the bad token either way. A **503** is retried once but
-never signs anyone out: a verifier outage or a Fly cold start is not a bad credential. The user-facing
-copy for this is S2c — today the transition is silent.
+never signs anyone out: a verifier outage or a Fly cold start is not a bad credential.
+
+**S2c gave the transition a voice** (S2a audit F1's remaining half). The rescue worked and said
+nothing — a signed-in person was dropped onto the public demo with no explanation. A banner now
+reads *"We couldn't restore your session — showing the public demo"* with a sign-in prompt. It is
+keyed on the discriminator `apiGet` already computed, `Boolean(sent) && res.status === 401`, where
+`sent` is the token snapshot taken *before* the fetch — so it fires only when a token was actually
+present and rejected. **A visitor who was never signed in is in a normal state, not an error state**,
+and sees nothing. It is a dismissible banner rather than a modal because the app underneath is
+genuinely working, on the demo, which is what the copy says.
+
+S2c also gave `loadLeagues` a real failure state. Its rejection only `console.error`d, so `slice`
+stayed `null` and the shell rendered "Loading…" **forever** — a spinner that will never resolve,
+describing an error as progress. `/api/leagues` never 401ing is a property `build_catalog` enforces;
+it is not a reason for the client to have no answer when the call fails anyway.

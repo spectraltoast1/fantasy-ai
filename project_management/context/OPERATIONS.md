@@ -6,10 +6,14 @@ project that hasn't run yet. Keep it short enough to read at 2am. Building the g
 
 ## The shape of the risk — read this once, calmly
 
-- **There is no runaway-bill path.** One Fly machine (`shared-cpu-1x`, 256mb), **no autoscaling
-  configured**, scale-to-zero when idle — so compute is capped by there being nothing to scale into. And
-  the Supabase project is on the **free tier, which cannot bill: it pauses instead.** Deliberate (Will),
-  not accidental. *Re-verify the machine count with `fly scale show` if this ever feels wrong.*
+- **There is no runaway-bill path.** **Two** Fly machines (`shared-cpu-1x`, 256mb, both `iad`),
+  **no autoscaling configured**, scale-to-zero when idle — so compute is capped by there being nothing to
+  scale into. And the Supabase project is on the **free tier, which cannot bill: it pauses instead.**
+  Deliberate (Will), not accidental.
+  *Measured 2026-08-11 (S2c): `fly scale show` → `app │ 2 │ shared │ 1 │ 256 MB │ iad(2)`.* This page said
+  "one machine" and `appendices/auth.md` said "`fly.toml` runs two"; the S1b audit was right that
+  **`fly.toml` declares no count** — it is a deploy-time property — and nobody had actually run the
+  command. Two is the number. Re-check with `fly scale show` rather than reading it off a doc.
 - **So the only real failure is "the site is down," and it comes in two flavours.** One recovers by
   itself. One does not, and that is the one worth knowing about before it happens.
 
@@ -26,6 +30,11 @@ accident of design is the diagnostic:
 - **`/health` responds, but the app is broken or empty** → **Supabase**. Fly is fine; the database is not.
 - **`/health` does not respond at all** → **Fly**. The machine is saturated, stopped, or the deploy is bad.
 
+It also answers a third question for free (S2c): `{"status":"ok","season":2026,"season_source":"derived"}`
+— so "which season is this deploy actually serving, and is an override set?" is one curl, not a log grep.
+Adding that kept the DB-free property, which is why the season is derived from the calendar rather than
+looked up.
+
 Check it directly: `https://surplusff.com/health`. Do not diagnose from the rendered page — a stale
 bundle can survive a deploy (see `PM_SESSION_STARTUP.md`); trust `/api/*` JSON and `/health`.
 
@@ -37,15 +46,16 @@ bundle can survive a deploy (see `PM_SESSION_STARTUP.md`); trust `/api/*` JSON a
 - **Something is deployed and wrong** → `fly deploy` from `application/` (build context is that
   directory). A merged-but-undeployed change has bitten this project before, so confirm the deploy, not
   the merge.
-- **Sleeper is down and the site has gone slow** → set `CURRENT_SEASON = "2026"` in `fly.toml` `[env]`
-  and deploy. The resolver checks the env override **first** and returns before it touches the cache or
-  the network, so this eliminates every outbound Sleeper call in one line. Remove it once Sleeper is back.
-  Needed only until S2c lands, which deletes the network call entirely. **S2b made this eleven endpoints
-  wide** — an owned-league read pays a 5s timeout, so a long outage can starve the single machine's
-  workers and take the public demo down with it.
-- **The visibility rule is misbehaving** → `CURRENT_SEASON` and `DEMO_LEAGUE_ID` are plain `[env]` values
-  in `fly.toml`, not secrets, and are the two levers over what anyone can see. `CURRENT_SEASON` should
-  normally be **absent**.
+- **Sleeper is down** → nothing to do. **No request path calls Sleeper any more (S2c).** The season is
+  derived from the calendar, so a Sleeper outage no longer costs a read anything. This entry used to be a
+  button (`CURRENT_SEASON` in `[env]`, to skip the network call); it is kept only so that anyone
+  remembering that button knows why it is gone.
+- **The visibility rule is misbehaving, or the season is wrong** → `CURRENT_SEASON` and `DEMO_LEAGUE_ID`
+  are plain `[env]` values in `fly.toml`, not secrets, and are the two levers over what anyone can see.
+  `CURRENT_SEASON` should normally be **absent** — it is the manual override for the derived season
+  (the calendar year, or the year before it until August 1). **`https://surplusff.com/health` reports the
+  resolved season and its source**, so check there first: `"season_source": "env"` means an override is
+  set and probably shouldn't be.
 
 ## What actually consumes the free tier — and therefore what prevents the pause
 
