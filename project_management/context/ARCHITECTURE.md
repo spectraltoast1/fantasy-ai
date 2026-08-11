@@ -88,10 +88,13 @@ re-backfill — the annual pipeline's job.
 `/api/matchups` · `/api/matchups/{id}` · `/api/leagues` (catalog) · `/api/me` (identity) ·
 `POST /api/signup`. **Read-only apart from those two** — there is no data write/ingest surface.
 Every read takes an optional `?league_id=`(+`?season=`+`?viewer_roster_id=`)
-via the `slice_params` dependency (a 404 guards an unknown `league_id`), **defaulting to `DEMO_LEAGUE_ID`**
-as of P5/S2a — previously it fell through `MY_USERNAME` to whichever league the owner's Sleeper credentials
-named, which made an anonymous visitor land on Will's real league by accident of name resolution rather
-than by decision. Same league today; the point is that it is now the *configured public* one.
+via the `slice_params` dependency, **defaulting to `DEMO_LEAGUE_ID`** as of P5/S2a — previously it fell
+through `MY_USERNAME` to whichever league the owner's Sleeper credentials named, which made an anonymous
+visitor land on Will's real league by accident of name resolution rather than by decision. Same league today;
+the point is that it is now the *configured public* one. As of **P5/S2b that dependency also authorizes**:
+it takes `auth.optional_user` and applies the visibility predicate, so every read inherits it from one place
+and none repeats it. The loaders no longer default a missing `league_id` to anything — they raise, because a
+silent default inside a function whose authorization happens elsewhere is how the hole reopens.
 
 **Two non-read endpoints.** `/api/me` takes the `auth.current_user` dependency and returns the verified
 caller (401 on a missing/forged/expired token, 503 when the JWKS can't be reached — denied either way, but
@@ -163,14 +166,21 @@ fallback, so the band is the honest, wide, position-typical prior until games sh
   current **publishable/secret** pair — and the secret key now lives in the deployed environment, since the
   API performs admin calls. **Custom SMTP is a hard dependency**: the built-in sender refuses any address
   that isn't a project team member. → *see appendix: auth.*
-- **Per-user isolation — half done.** The **catalog** is scoped (S2a): signed out returns exactly the demo,
-  signed in returns the demo plus your own current-season leagues, and a second account never sees the
-  first's. The **eleven per-panel reads are still open** — a caller who already knows a `league_id` can still
-  pass it to `/api/players`. Moving the predicate into `slice_params` so every read inherits it, routing the
-  unauthorized case into the existing unknown-`league_id` 404 (a 403 would confirm existence, and Sleeper ids
-  are guessable), and validating `viewer_roster_id` against a visible slice, is **P5/S2b**. The app still
-  connects as one owner-role Postgres connection that bypasses RLS, so RLS stays defense-in-depth, not authz;
-  isolation is API-layer by decision. → `projects/v1/` (P5).
+- **Per-user isolation — closed, discovery and access (S2a + S2b).** The catalog is scoped, so you cannot
+  *find* another user's league; and **all eleven per-panel reads inherit the predicate**, so knowing a
+  `league_id` is no longer enough to *read* one. One seam: `routes.slice_params` (the FastAPI adapter) over
+  `reads.authorize_slice` (pure, injectable, so the isolation matrix runs from fixtures). Existence + season
+  come from `teams`, **not** `demo_manifest` — catalog membership used to double as the authorization
+  boundary, which held only while the manifest happened to contain exactly the demo set.
+  **An unowned league is byte-identical to a nonexistent one** (same status, body and headers; the 404 detail
+  is a constant that interpolates nothing) because a 403 — or any response that varies — confirms existence,
+  and Sleeper ids are guessable. A misconfigured demo or a league with two seasons raises **503** instead, so
+  a deploy failure is never dressed as a caller problem. `viewer_roster_id` is validated against the league,
+  strictly *after* the visibility decision, or it would answer "is roster N in league X" for invisible
+  leagues. `/api` responses carry `Vary: Authorization` + `Cache-Control: private, no-store`, since the same
+  URL now answers differently per caller. The app still connects as one owner-role Postgres connection that
+  bypasses RLS, so RLS stays defense-in-depth, not authz; isolation is API-layer by decision.
+  → `projects/v1/` (P5).
 
 ## Scope & rules
 

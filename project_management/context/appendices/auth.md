@@ -1,6 +1,6 @@
 # Appendix — Auth (how the front door actually works)
 
-**Current as of:** 2026-08-09.
+**Current as of:** 2026-08-11.
 **Scope:** the mechanism behind ARCHITECTURE's Auth and Ownership bullets. Read this when touching
 sign-in, keys, the deploy plumbing, or the app-side tables. Shipped P5/S1, signup model corrected in
 **S1b** (2026-08-03), ownership + the scoped catalog added in **S2a** (2026-08-09); the session
@@ -186,6 +186,50 @@ enforced in `reads.build_catalog` because both fail silently: `/api/leagues` mus
 (`loadLeagues` only `console.error`s, leaving a permanent "Loading…") and must never return zero
 leagues (`if (lgs.length)` guards the only slice selection).
 
+## Scoping the reads — the seam, and why it is shaped this way (S2b)
+
+S2a closed *discovery*. S2b closed *access*: every one of the eleven per-panel reads now inherits the
+predicate from **one** place, `routes.slice_params`, which is a thin adapter over the pure
+`reads.authorize_slice`. Pure and injectable on purpose — `check_ownership` is a gate people actually
+run because it needs no server and no accounts, and burying the decision inside a FastAPI dependency
+would have made the isolation matrix runnable only against two live Supabase users.
+
+**Existence and season come from `teams`, not `demo_manifest`.** `slice_exists` read the catalog, which
+made *catalog membership* double as the authorization boundary — true only because the manifest happens
+to hold exactly the demo set, and false the moment S4 gives a real user a league that has data before it
+is catalogued. One combined query answers existence, season, ownership and the granted seat, which is
+also what makes the work symmetric: a nonexistent league and an existing-but-unowned one cost the same
+lookups, so the response time cannot leak what the status code does not.
+
+**The refusal is one exception type, and the 404 detail is a constant.** It used to echo the
+`league_id`, which meant an unowned 404 and a nonexistent 404 could never be the same bytes — the whole
+no-enumeration design rested on a comparison nobody could make. `SliceUnavailable` (503) is deliberately
+separate: an unset `DEMO_LEAGUE_ID`, or a league with two seasons in the store, is a deploy problem, and
+answering "unknown league_id" would hide an outage behind an authorization message for as long as nobody
+looked.
+
+**The season resolves last.** `visible` short-circuits — the demo needs no season, an unowned league
+needs no season — so signed-out demo traffic never calls Sleeper, and neither refusal branch does
+either (which is also what keeps them timing-identical). This is call ordering, **not** a fix for
+audit F6: an owned-league read during a >12h Sleeper outage still pays the 5s timeout, on eleven
+endpoints now rather than one. S2c owns the real fix.
+
+**The viewer seat became a user × league property**: `user_leagues.roster_id`, added by an explicit
+`ALTER TABLE … ADD COLUMN IF NOT EXISTS` (a column inside `CREATE TABLE IF NOT EXISTS` would never
+appear on a database that already has the table — the F2 trap), asserted by `verify()`, settable as
+`--grant EMAIL LEAGUE_ID [ROSTER_ID]`. The load-bearing part is that **`build_catalog` emits it**: the
+client sends back whatever the catalog told it, and `authorize_slice` honours a caller-supplied seat, so
+a grant that only changed the server's fallback would have shipped and never fired. Caller-supplied
+still wins, because viewing your own league *as* another manager is a feature the dossiers depend on;
+what was ever the bug is reaching into a league you cannot see.
+
+**Denied reads are counted and nothing acts on the count** (settled with Will). No cap: blind
+enumeration of 19-digit ids is implausible, the realistic attacker knows one id and needs one request,
+and a limiter keyed on caller-supplied input is the S1b bug. It is an in-process integer, not a row,
+because a DB write on an unauthenticated path is attacker-triggerable write amplification — and because
+a counter that fired on *unowned* but not on *nonexistent* would rebuild the timing oracle the single
+lookup exists to prevent.
+
 ## The client seam
 
 The bearer token attaches in exactly one place: `queries.js`'s `apiGet`, as a module-level
@@ -209,3 +253,15 @@ would otherwise refetch hourly for nothing. Sign-out clears the **selection** (`
 would keep riding on every request — the previous person's league still on screen. `authReady` also
 flips immediately when `supabase` is null (an unconfigured build), because a permanently-false flag
 would hang every visitor on "Loading…" — auth breaking must not break the app around it.
+
+**S2b had to make a rejected token survivable, because it multiplied the exposure by eleven.** Before
+it, only `/api/leagues` could 401; after it every read can, and `apiGet` threw on any non-2xx while the
+app-shell loaders only `console.error` — i.e. a permanent "Loading…" for signed-in users on an expired
+token, a deleted account, or a Supabase outage. `apiGet` now attaches `err.status` and, on a **401**,
+drops the token and retries once anonymously. That alone does not rescue anything: `_slice` still names
+a league the anonymous caller cannot see, so the retry 404s. So it also calls `setOnAuthRejected`, which
+`App` wires to `supabase.auth.signOut()` — that fires `SIGNED_OUT`, which clears the slice and refetches
+the catalog, and *that* is what lands the visitor on the public demo. Strictly less access than they
+had, never more, and the server still refuses the bad token either way. A **503** is retried once but
+never signs anyone out: a verifier outage or a Fly cold start is not a bad credential. The user-facing
+copy for this is S2c — today the transition is silent.
