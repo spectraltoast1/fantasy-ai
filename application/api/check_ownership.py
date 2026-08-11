@@ -394,7 +394,14 @@ def check_override_is_process_env_only() -> None:
     # asserted by `check_season_derivation` — one place, next to the values it produces.
 
 
-def check_anonymous_is_not_denied() -> None:
+def check_anonymous_is_not_denied(*, require_401: bool = False) -> None:
+    """A bad token must be refused — and S2c cares WHICH refusal (S2a audit F5).
+
+    This used to accept 401 **or** 503, so on a machine with no Supabase config it went green
+    having never verified a token at all: `auth.current_user` raises 503 before it looks at the
+    credential. A refusal alone proves nothing about the verifier. The code is now recorded either
+    way, and `--live` — where the config is by definition present — requires 401 specifically.
+    """
     print("\nanonymous must mean anonymous, and a bad token must NOT")
     class _Req:
         def __init__(self, authz=None):
@@ -411,8 +418,14 @@ def check_anonymous_is_not_denied() -> None:
               "identical to a working one")
     except Exception as exc:                       # HTTPException (401) or 503 if unconfigured
         code = getattr(exc, "status_code", None)
-        if code in (401, 503):
-            _ok(f"a present-but-invalid token is refused ({code}), not downgraded to anonymous")
+        if code == 401:
+            _ok("a present-but-invalid token is refused 401 — the VERIFIER ran and rejected it")
+        elif code == 503 and require_401:
+            _fail("a bad token got 503, not 401: auth is unconfigured on this machine, so the "
+                  "verifier never ran. Under --live that is a failure, not a pass.")
+        elif code == 503:
+            _ok("a present-but-invalid token is refused 503 — but note this machine has no "
+                "Supabase config, so the verifier did NOT run. Only --live proves the 401.")
         else:
             _fail(f"unexpected failure for a bad token: {type(exc).__name__} {exc}")
 
@@ -551,7 +564,7 @@ def main() -> int:
     check_ordering()
     check_never_empty_or_duplicated()
     check_override_is_process_env_only()
-    check_anonymous_is_not_denied()
+    check_anonymous_is_not_denied(require_401=a.live)
     check_prove_bites()
     if a.live:
         check_live(a.base_url, a.current_season, a.user_a, a.user_b)
