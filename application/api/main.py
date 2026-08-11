@@ -69,6 +69,27 @@ app = FastAPI(
 app.include_router(api_router)
 
 
+@app.middleware("http")
+async def _no_shared_caching_of_api(request, call_next):
+    """Keep a cache from serving one caller's league to another (P5/S2b).
+
+    Until S2b every ``/api`` response was the same bytes for everyone, so caching was a non-issue.
+    It isn't now: the *same URL* returns data to its owner and a 404 to everyone else, and the only
+    thing that distinguishes them is a request header. Any intermediary that caches on URL alone —
+    a browser's bfcache, a corporate proxy, or the Cloudflare layer already planned for P6/S4 —
+    would eventually hand a cached league to the wrong person. That is the failure this session
+    exists to prevent, arriving through the one door the API layer doesn't control.
+
+    Cheaper to declare now than to remember when the CDN lands. Applied uniformly, so the unowned
+    and nonexistent 404s still carry byte-identical headers.
+    """
+    response = await call_next(request)
+    if request.url.path.startswith("/api"):
+        response.headers["Cache-Control"] = "private, no-store"
+        response.headers["Vary"] = "Authorization"
+    return response
+
+
 @app.get("/health")
 def health() -> dict:
     """Liveness only — does not touch the database."""

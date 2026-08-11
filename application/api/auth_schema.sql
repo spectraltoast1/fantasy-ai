@@ -96,6 +96,21 @@ CREATE TABLE IF NOT EXISTS public.user_leagues (
 -- this denies nothing to this API. Per-user isolation here is API-layer, by design (P5 settled).
 ALTER TABLE public.user_leagues ENABLE ROW LEVEL SECURITY;
 
+-- The viewer seat, as a USER × LEAGUE property (P5/S2b). Which roster is "you" was a property of
+-- the *league* (`demo_manifest.viewer_roster_id`) — fine with one viewer, wrong the moment two
+-- people share a league and each need their own highlight.
+--
+-- Nullable: a grant without a seat is normal (the operator may not know it, and S4's connect flow
+-- learns it from Sleeper). Null falls back to `MY_USERNAME`, which is what keeps the demo's
+-- behaviour exactly as it was.
+--
+-- THIS MUST BE AN EXPLICIT ALTER. `CREATE TABLE IF NOT EXISTS` above is a no-op on an existing
+-- table, so a column added to that statement would silently never appear in any database that
+-- already has the table — which is every database that matters. That is the S2a-audit F2 trap
+-- ("a table that already existed in another shape keeps its old shape and nothing notices"), and
+-- `init_auth_schema.verify()` now asserts this column is really present rather than trusting it.
+ALTER TABLE public.user_leagues ADD COLUMN IF NOT EXISTS roster_id int;
+
 
 -- Last-known-good NFL season (P5/S2a) — the persistence behind `settings.current_season()`.
 --

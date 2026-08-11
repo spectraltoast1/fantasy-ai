@@ -56,24 +56,43 @@ def _as_of_pinned_to_production(n):
     return "as_of_week = %(n)s"
 
 
+def _require_league(lid):
+    """The league id, or a loud failure — never a silent default (P5/S2b).
+
+    Every loader used to open with ``lid = league_id or settings.league_id()``: a missing league
+    quietly became *whichever league the owner's Sleeper credentials name*. That was harmless only
+    because ``DEMO_LEAGUE_ID`` and ``SLEEPER_LEAGUE_ID`` are the same string today — and S2d
+    repoints the demo at the anonymised clone, at which point every one of these paths would have
+    started resolving to **Will's real, private league**. That is precisely the bug S2a's
+    ``slice_params`` docstring claims to have fixed, re-entering by the back door with a date on it.
+
+    Authorization now happens in ``authorize_slice``, which always returns a concrete id, so
+    reaching here with ``None`` means a caller bypassed the seam. Fail loudly instead of serving
+    somebody's league.
+    """
+    if lid is None:
+        raise SliceUnavailable(
+            "a read was called with no league_id — every read must come through authorize_slice")
+    return lid
+
+
 def _params(n=None, lid=None, **extra):
     """Base bind dict every query shares: league id + optional as-of week + extras.
 
-    ``lid`` resolves to ``settings.league_id()`` (the is_mine default) when None — so a read
-    called with no ``league_id`` binds exactly today's value (parity). Callers that accept a
-    ``league_id`` resolve it once and pass it here as ``lid``.
+    Callers resolve the league once and pass it here as ``lid``; it is required, for the reason
+    ``_require_league`` explains.
     """
-    p = {"lid": lid or settings.league_id(), "n": n}
+    p = {"lid": _require_league(lid), "n": n}
     p.update(extra)
     return p
 
 
-def slice_exists(league_id) -> bool:
-    """Whether a ``league_id`` is a known demo slice (catalog membership; a DB read, since the
-    deployed image ships no parquet). Used to 404 an unknown ``?league_id=`` at the route layer."""
-    return bool(db.fetch_all(
-        "SELECT 1 FROM demo_manifest WHERE league_id = %(lid)s LIMIT 1", {"lid": str(league_id)}
-    ))
+# `slice_exists` lived here until P5/S2b. It read `demo_manifest`, which made *catalog membership*
+# double as the authorization boundary — correct only by the coincidence that the manifest happens
+# to hold exactly the demo set, and a coincidence that dies at S4 when a real user's league has data
+# before it is catalogued. Existence now comes from `teams` inside `authorize_slice`'s single
+# lookup. Deleted rather than left behind: a function named "exists" that used to mean "authorised"
+# is the kind of thing a later session calls by its name.
 
 
 def resolve_viewer(lid, viewer_roster_id=None):
@@ -110,7 +129,7 @@ def load_weeks(league_id=None, season=None, viewer_roster_id=None) -> dict:
 
     (``viewer_roster_id`` accepted for a uniform slice signature; weeks have no "me" flag.)
     """
-    lid = league_id or settings.league_id()
+    lid = _require_league(league_id)
     rows = db.fetch_all(
         "SELECT week, max(coalesce(roster_total_points, 0)) AS pts FROM season "
         "WHERE league_id = %(lid)s GROUP BY week ORDER BY week",
@@ -123,7 +142,7 @@ def load_weeks(league_id=None, season=None, viewer_roster_id=None) -> dict:
 
 def load_league_meta(as_of_week=None, league_id=None, season=None, viewer_roster_id=None) -> dict:
     """Top-bar chrome: "10-tm · PPR · 1QB" label + the user's record. Mirrors loadLeagueMeta (l.659)."""
-    lid = league_id or settings.league_id()
+    lid = _require_league(league_id)
     viewer = resolve_viewer(lid, viewer_roster_id)
     p = _params(as_of_week, lid=lid)
     with db.connect() as conn:
@@ -259,7 +278,7 @@ def _sql_players(n):
 
 def load_players(as_of_week=None, league_id=None, season=None, viewer_roster_id=None) -> list[dict]:
     """The Players table: rostered skill players priced by PROD VOR. Mirrors loadPlayers (l.87)."""
-    lid = league_id or settings.league_id()
+    lid = _require_league(league_id)
     viewer = resolve_viewer(lid, viewer_roster_id)
     rows = db.fetch_all(_sql_players(as_of_week), _params(as_of_week, lid=lid))
     return [
@@ -286,7 +305,7 @@ def load_players(as_of_week=None, league_id=None, season=None, viewer_roster_id=
 def load_player_card(sleeper_id, as_of_week=None, league_id=None, season=None,
                      viewer_roster_id=None) -> dict:
     """The full player card (Value·VOR + Opportunity + ROS shape). Mirrors loadPlayerCard (l.120)."""
-    lid = league_id or settings.league_id()
+    lid = _require_league(league_id)
     viewer = resolve_viewer(lid, viewer_roster_id)
     p = _params(as_of_week, lid=lid, sid=str(sleeper_id))
     prod_cutoff = "TRUE" if as_of_week is None else "as_of_week <= %(n)s"
@@ -508,7 +527,7 @@ def _all_play_record(by_week, rid):
 
 def load_standings(as_of_week=None, league_id=None, season=None, viewer_roster_id=None) -> list[dict]:
     """The Teams standings: record + all-play + playoff odds/series + posture. Mirrors loadStandings (l.278)."""
-    lid = league_id or settings.league_id()
+    lid = _require_league(league_id)
     viewer = resolve_viewer(lid, viewer_roster_id)
     p = _params(as_of_week, lid=lid)
     with db.connect() as conn:
@@ -602,7 +621,7 @@ def load_team_detail(roster_id, as_of_week=None, league_id=None, season=None, vi
     from the shared engine's ``team_matchup_summary`` (Session 4) — ``None`` when there is no
     next game.
     """
-    lid = league_id or settings.league_id()
+    lid = _require_league(league_id)
     viewer = resolve_viewer(lid, viewer_roster_id)
     rid = int(roster_id)
     p = _params(as_of_week, lid=lid, rid=rid)
@@ -750,7 +769,7 @@ def load_team_detail(roster_id, as_of_week=None, league_id=None, season=None, vi
 def load_manager_dossier(roster_id, league_id=None, season=None, viewer_roster_id=None) -> dict:
     """The Manager Dossier for one roster — a clean 1:1 passthrough. Mirrors loadManagerDossier (l.583).
     (``viewer_roster_id`` accepted for a uniform slice signature; the dossier has no "me" flag.)"""
-    lid = league_id or settings.league_id()
+    lid = _require_league(league_id)
     rows = db.fetch_all(
         "SELECT owner_name, team_name, headline, waiver_faab, trade_tendency, positional_lean,"
         "       roster_construction, edge_or_blindspot, confidence_note, depth_tier,"
@@ -793,7 +812,7 @@ def load_league(as_of_week=None, league_id=None, season=None, viewer_roster_id=N
     Light — wraps the already-ported ``load_standings(N)`` and one ``league_settings`` read.
     Mirrors loadLeague (l.370).
     """
-    lid = league_id or settings.league_id()
+    lid = _require_league(league_id)
     standings = load_standings(as_of_week, league_id=lid, season=season, viewer_roster_id=viewer_roster_id)
     cfg_rows = db.fetch_all(
         "SELECT key, value FROM league_settings "
@@ -812,7 +831,7 @@ def load_league(as_of_week=None, league_id=None, season=None, viewer_roster_id=N
 def load_positional_talent(league_id=None, season=None, viewer_roster_id=None) -> dict:
     """Positional Talent: teams ranked per position by the Market VOR they hold (sum of positive
     ``market_vor`` at the latest snapshot). Not week-scoped. Mirrors loadPositionalTalent (l.396)."""
-    lid = league_id or settings.league_id()
+    lid = _require_league(league_id)
     viewer = resolve_viewer(lid, viewer_roster_id)
     rows = db.fetch_all(
         "WITH latest AS ("
@@ -858,7 +877,7 @@ def load_positional_talent(league_id=None, season=None, viewer_roster_id=None) -
 
 def load_matchups(as_of_week=None, league_id=None, season=None, viewer_roster_id=None) -> dict:
     """The Matchups slate: the upcoming week's head-to-head games. Mirrors loadMatchups (l.878)."""
-    lid = league_id or settings.league_id()
+    lid = _require_league(league_id)
     viewer = resolve_viewer(lid, viewer_roster_id)
     target_week = projections.target_week_for(as_of_week, lid=lid)
     sched_rows = []
@@ -921,7 +940,7 @@ def load_matchups(as_of_week=None, league_id=None, season=None, viewer_roster_id
 
 def load_matchup_detail(matchup_id, as_of_week=None, league_id=None, season=None, viewer_roster_id=None):
     """One matchup's full breakdown: win prob, Score Range, per-starter gauges. Mirrors loadMatchupDetail (l.942)."""
-    lid = league_id or settings.league_id()
+    lid = _require_league(league_id)
     viewer = resolve_viewer(lid, viewer_roster_id)
     mid = int(matchup_id)
     target_week = projections.target_week_for(as_of_week, lid=lid)
@@ -998,18 +1017,22 @@ def _market_panel(panels_market, cross_time_by: dict, league_id: str) -> bool:
     return cross_time is False
 
 
-_OWNED_LEAGUES = "SELECT league_id FROM public.user_leagues WHERE user_id = %(uid)s"
+_OWNED_LEAGUES = "SELECT league_id, roster_id FROM public.user_leagues WHERE user_id = %(uid)s"
 
 
-def owned_league_ids(user_id) -> set[str]:
-    """The league ids granted to one account (P5/S2a). Empty set for an anonymous caller.
+def owned_seats(user_id) -> dict:
+    """``{league_id: roster_id or None}`` for one account. Empty for an anonymous caller.
 
     Read per request rather than carried in the token: a revoke has to bite immediately, and a
     grant baked into a JWT would keep working for the hour until it expired.
+
+    Returns the seat alongside the id (P5/S2b) because the catalog has to *hand the client* the
+    right roster. Membership tests still work on it unchanged — ``x in owned`` reads the keys.
     """
     if not user_id:
-        return set()
-    return {str(r["league_id"]) for r in db.fetch_all(_OWNED_LEAGUES, {"uid": str(user_id)})}
+        return {}
+    return {str(r["league_id"]): r["roster_id"]
+            for r in db.fetch_all(_OWNED_LEAGUES, {"uid": str(user_id)})}
 
 
 def visible(league_id, season, *, demo_league_id, owned, current_season) -> bool:
@@ -1025,7 +1048,15 @@ def visible(league_id, season, *, demo_league_id, owned, current_season) -> bool
     That is the fail-closed direction: a user briefly not seeing their own league is an
     availability problem, while everyone seeing every league is the silent isolation failure this
     session exists to prevent.
+
+    **Both sides of the ownership test are normalised to text (P5/S2b).** The row's ``league_id``
+    was already stringified; the ``owned`` members were not, so an int-typed set silently matched
+    nothing. No live caller did that — ``owned_league_ids`` builds strings — but S2a's audit (F4)
+    flagged it as a trap laid for exactly this session, which gives the function eleven new call
+    sites. It stays fail-closed either way: the bug loses a user their own league, it never hands
+    anyone someone else's.
     """
+    owned = {str(x) for x in owned}
     if demo_league_id is not None and str(league_id) == str(demo_league_id):
         return True
     if str(league_id) not in owned:
@@ -1035,6 +1066,157 @@ def visible(league_id, season, *, demo_league_id, owned, current_season) -> bool
     return int(season) == int(current_season)
 
 
+class SliceRefused(Exception):
+    """This caller may not have this slice — **or it does not exist**. Deliberately one exception.
+
+    The two cases are indistinguishable on purpose and the route turns both into the identical
+    404. A 403 (or a different message, or a different body length) would confirm that a league
+    exists, and Sleeper ids are guessable, so a refusal that varies is an enumeration oracle.
+    Keeping it one exception type means there is no branch that *could* drift apart.
+    """
+
+
+class SliceUnavailable(Exception):
+    """The store cannot answer for this slice — a deploy or data problem, not a caller problem.
+
+    Kept separate from ``SliceRefused`` because collapsing them would hide a broken deployment
+    behind an authorization message: every read would answer "unknown league_id" and look exactly
+    like someone probing. Surfaced as a 503, the same split S1 drew between "bad credential" (401)
+    and "verifier unreachable" (503).
+    """
+
+
+# ONE round trip, and every subquery runs regardless of the outcome — that is what makes the work
+# symmetric. A nonexistent league and an existing-but-unowned one cost the same lookups, so the
+# response time cannot leak what the status code deliberately does not.
+#
+# Existence + season come from `teams`, NOT `demo_manifest`. `slice_exists` used to read the
+# manifest, which made catalog membership double as the authorization boundary — true only by the
+# coincidence that the manifest currently holds exactly the demo set. That coincidence dies at S4,
+# when a real user's league has data long before it is catalogued. Verified the swap is
+# behaviour-identical today: both tables hold the same 31 league_ids, each with exactly one season,
+# and `check_isolation` asserts that agreement so it stays a property rather than a measurement.
+_SLICE_LOOKUP = """
+SELECT (SELECT count(DISTINCT season) FROM teams WHERE league_id = %(lid)s)::int AS n_seasons,
+       (SELECT min(season) FROM teams WHERE league_id = %(lid)s)::int            AS season,
+       (SELECT count(*) FROM public.user_leagues
+         WHERE user_id = %(uid)s::uuid AND league_id = %(lid)s)::int             AS owned,
+       (SELECT roster_id FROM public.user_leagues
+         WHERE user_id = %(uid)s::uuid AND league_id = %(lid)s)                  AS grant_roster
+"""
+
+_ROSTER_IN_LEAGUE = """
+SELECT 1 FROM teams WHERE league_id = %(lid)s AND roster_id = %(rid)s LIMIT 1
+"""
+
+# Denied reads, counted and never acted on (P5/S2b, settled with Will 2026-08-11). No cap and no
+# blocking: blind enumeration of 19-digit ids is implausible, the realistic attacker knows one id
+# and needs one request, and a limiter keyed on caller-supplied input is the S1b bug. It is an
+# in-process integer rather than a row because a DB write on an unauthenticated path is
+# attacker-triggerable write amplification — and because a counter that fired on *unowned* but not
+# on *nonexistent* would rebuild the very timing oracle the single lookup above exists to prevent.
+# Both refusal branches increment it identically.
+_denied_reads = 0
+
+
+def denied_reads() -> int:
+    """How many slice requests have been refused since this process started."""
+    return _denied_reads
+
+
+def slice_lookup(league_id, user_id) -> dict:
+    """Existence, season, ownership and the granted seat for one league — in one query."""
+    rows = db.fetch_all(_SLICE_LOOKUP, {"lid": str(league_id), "uid": user_id})
+    return rows[0]
+
+
+def roster_in_league(league_id, roster_id) -> bool:
+    """Whether a roster actually sits in a league. Only ever called on an ALREADY-visible slice."""
+    return bool(db.fetch_all(_ROSTER_IN_LEAGUE, {"lid": str(league_id), "rid": int(roster_id)}))
+
+
+def authorize_slice(league_id, season, viewer_roster_id, *, user_id, demo_league_id,
+                    lookup=None, current_season_fn=None, roster_exists=None) -> dict:
+    """THE authorization seam (P5/S2b) — every read passes through here, exactly once.
+
+    Returns the kwargs dict the eleven ``load_*`` functions take, or raises. Kept **pure and
+    injectable** rather than written inline in the FastAPI dependency, for one concrete reason:
+    ``check_ownership`` is a usable gate because ``visible``/``build_catalog`` can be driven from
+    fixtures with no server and no accounts. Burying this logic in a dependency would have made the
+    isolation matrix runnable only against two live accounts — and a check that needs a fixture of
+    that size stops being run. ``slice_params`` is the thin adapter that turns these exceptions
+    into HTTP.
+
+    **The season is resolved LAST, and only when it can still change the answer.** ``visible``
+    short-circuits: the demo is allowed without a season, an unowned league is refused without one.
+    So a signed-out demo request — which is nearly all traffic — never touches ``nfl_state`` at all,
+    and neither refusal branch does either (which is also what keeps them timing-identical). This
+    is call ordering in new code, *not* a fix for audit F6: an owned-league read during a >12h
+    Sleeper outage still pays the 5s timeout, and there are eleven such endpoints now instead of
+    one. S2c owns that.
+    """
+    global _denied_reads
+    lookup = lookup or slice_lookup
+    current_season_fn = current_season_fn or settings.current_season
+    roster_exists = roster_exists if roster_exists is not None else roster_in_league
+
+    # Default resolution, not authorization — the predicate still runs on the result below.
+    lid = league_id if league_id is not None else demo_league_id
+    if lid is None:
+        raise SliceUnavailable("DEMO_LEAGUE_ID is unset, so there is no default slice to serve")
+
+    info = lookup(lid, user_id)
+    exists = int(info["n_seasons"] or 0) >= 1
+    owned = bool(info["owned"])
+    is_demo = demo_league_id is not None and str(lid) == str(demo_league_id)
+
+    if exists and int(info["n_seasons"]) > 1:
+        # A redraft league_id pins exactly one (league, season) slice. More than one means the
+        # store is wrong, and guessing which season to authorize against would be worse than
+        # refusing to answer.
+        raise SliceUnavailable(f"league {lid} has {info['n_seasons']} seasons in `teams`")
+    if is_demo and not exists:
+        # The configured public league has no data. That is a deploy failure, and answering
+        # "unknown league_id" would disguise it as a caller problem for as long as nobody checks.
+        raise SliceUnavailable(f"the demo league {lid} has no rows in `teams`")
+
+    # `visible` is still THE predicate; the two short-circuits above it are only there so the
+    # season lookup happens last. They re-test what `visible` re-tests, which is cheap and keeps
+    # the season term in exactly one place.
+    if is_demo:
+        allowed = True
+    elif not exists or not owned:
+        allowed = False
+    else:
+        allowed = visible(lid, info["season"], demo_league_id=demo_league_id,
+                          owned={str(lid)}, current_season=current_season_fn())
+
+    if not allowed:
+        _denied_reads += 1
+        _LOG.info("slice refused (league_id=%s, signed_in=%s, exists=%s, owned=%s) — refusals "
+                  "since boot: %d", lid, bool(user_id), exists, owned, _denied_reads)
+        raise SliceRefused(lid)
+
+    # The seat, resolved ONCE here rather than per-loader. Precedence: what the caller asked for,
+    # then the seat their grant records, then `MY_USERNAME` (left to `resolve_viewer`, which is
+    # what preserves the demo's behaviour exactly). Caller-supplied wins on purpose — viewing your
+    # own league "as" another manager is a feature the dossiers depend on; reaching into a league
+    # you cannot see was the bug, and that was settled two branches ago.
+    seat = viewer_roster_id
+    if seat is not None:
+        # Strictly AFTER the visibility decision: run earlier, this would answer "is roster N in
+        # league X" for leagues the caller cannot see — a roster-existence oracle.
+        if not roster_exists(lid, seat):
+            _denied_reads += 1
+            _LOG.info("slice refused (league_id=%s, bad viewer_roster_id=%s)", lid, seat)
+            raise SliceRefused(lid)
+        seat = int(seat)
+    elif owned and info.get("grant_roster") is not None:
+        seat = int(info["grant_roster"])
+
+    return {"league_id": str(lid), "season": season, "viewer_roster_id": seat}
+
+
 def build_catalog(rows, weeks_by, cross_time_by, *, demo_league_id, owned, current_season) -> dict:
     """Shape + filter + order the catalog. Pure, so ``check_ownership`` can drive it with fixtures.
 
@@ -1042,6 +1224,10 @@ def build_catalog(rows, weeks_by, cross_time_by, *, demo_league_id, owned, curre
     caller's own leagues come first and the demo last** is what makes a signed-in user with a
     league land on THEIR league instead of the demo. Seasons stay DESC for the same reason.
     """
+    # `owned` is a {league_id: roster_id} map in production and may be a bare set of ids in a
+    # fixture; normalise so the seat lookup below works either way.
+    seats = owned if isinstance(owned, dict) else {str(x): None for x in owned}
+
     lineages: dict = {}
     order: list = []
     owned_lineages: set = set()
@@ -1061,12 +1247,18 @@ def build_catalog(rows, weeks_by, cross_time_by, *, demo_league_id, owned, curre
             order.append(key)
         if str(r["league_id"]) in owned:
             owned_lineages.add(key)
+        # The seat the CALLER should occupy, which is why this is a user × league property now
+        # (P5/S2b). Their grant wins over the manifest's league-wide default; without this the
+        # `roster_id` column could never take effect through the UI, because the client sends back
+        # whatever the catalog told it and `authorize_slice` honours a caller-supplied seat.
+        seat = seats.get(str(r["league_id"]))
+        if seat is None:
+            seat = r["viewer_roster_id"]
         lineages[key]["seasons"].append({
             "season": int(r["season"]),
             "league_id": r["league_id"],
             "weeks_available": weeks_by.get((r["league_id"], int(r["season"])), []),
-            "viewer_roster_id": (int(r["viewer_roster_id"])
-                                 if r["viewer_roster_id"] is not None else None),
+            "viewer_roster_id": int(seat) if seat is not None else None,
             "panels": {
                 "market": _market_panel(r["panels_market"], cross_time_by, r["league_id"]),
                 "manager": bool(r["panels_manager"]),
@@ -1108,7 +1300,7 @@ def load_leagues(user_id=None) -> dict:
     """
     demo_league_id = settings.demo_league_id()
     current_season = settings.current_season()
-    owned = owned_league_ids(user_id)
+    owned = owned_seats(user_id)
 
     with db.connect() as conn, conn.cursor() as cur:
         cur.execute(

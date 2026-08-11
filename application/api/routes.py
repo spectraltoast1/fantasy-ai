@@ -8,48 +8,75 @@ Stage-B B4: every read route also accepts an OPTIONAL ``?league_id=`` (+ ``?seas
 ``slice_params`` dependency. Passing a corpus ``league_id`` scopes the read to that slice; an
 unknown ``league_id`` 404s.
 
-P5/S2a changed two things here. An omitted ``league_id`` now resolves to ``DEMO_LEAGUE_ID``
-explicitly rather than falling through ``MY_USERNAME`` to the is_mine slice — the same league
-today, but decided rather than inherited. And ``/api/leagues``, which was the one unscoped read,
-is now scoped to the caller: the demo always, plus their own current-season leagues. The eleven
-per-panel reads are still open; closing them is S2b, and the split is deliberate so a green run
-can be attributed to one half or the other.
+P5/S2a scoped ``/api/leagues`` — the catalog — so a caller could not *discover* someone else's
+league, and made an omitted ``league_id`` resolve to ``DEMO_LEAGUE_ID`` explicitly instead of
+falling through ``MY_USERNAME`` to the is_mine slice.
+
+**P5/S2b closes access.** ``slice_params`` now takes the caller's identity and applies the
+visibility predicate, so all eleven per-panel reads inherit it from one place. Knowing a
+``league_id`` is no longer enough to read it; an unowned league answers with exactly the 404 a
+nonexistent one does.
 """
 
 from __future__ import annotations
+
+import logging
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
 from application.api import auth, db, rate_limit, reads, settings, signup
 
+_LOG = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api")
 
 
+# ONE refusal string, reached by both branches, interpolating nothing. It used to echo the
+# league_id back — which meant an unowned league and a nonexistent one could never produce the same
+# bytes, and the whole no-enumeration design rests on them being indistinguishable. The caller's own
+# input tells them nothing they didn't already know, but a body that varies with it is a body an
+# attacker can measure, and it also stopped the two responses being comparable at all.
+_UNKNOWN_LEAGUE = "unknown league_id"
+
+
 def slice_params(league_id: str | None = None, season: int | None = None,
-                 viewer_roster_id: int | None = None) -> dict:
-    """The optional slice selector shared by every read route. Validates a non-None ``league_id``
-    against the demo_manifest catalog (404 on an unknown slice). ``season`` is carried for
-    validation/future dynasty, never a SQL filter (a redraft ``league_id`` already pins one
-    ``(league, season)`` slice). ``viewer_roster_id`` (Stage-B B5) selects the "you" roster;
-    ``None`` → ``MY_USERNAME``'s roster (parity). Returned as a kwargs dict so routes forward it
-    with ``**slice``.
+                 viewer_roster_id: int | None = None,
+                 user: dict | None = Depends(auth.optional_user)) -> dict:
+    """The slice selector shared by every read route — and, as of P5/S2b, **the one authorization
+    seam**. Every one of the eleven per-panel reads inherits it; none repeats the check.
 
-    **P5/S2a — an omitted ``league_id`` now resolves to the DEMO explicitly.** It used to fall
-    through to ``settings.league_id()`` inside each ``load_*``, i.e. to whichever league the owner's
-    Sleeper credentials happened to name: an anonymous visitor landed on Will's real league by
-    accident of name resolution rather than by anyone deciding they should. The default is now the
-    one league that is deliberately public. ``MY_USERNAME`` stays, but only as the resolver for
-    Will's own viewer seat (``reads.resolve_viewer``), which is what it was always for.
+    S2a scoped the catalog, so you could not *discover* someone else's league. This closes *access*:
+    until now a caller who already knew a ``league_id`` could pass it here and read the league.
 
-    Note this is *default resolution*, not authorization — a caller can still ask for any catalogued
-    ``league_id`` here. Moving the visibility predicate into this function so every read inherits it
-    is S2b; keeping the two changes separate is what lets each one's proof mean something.
+    A thin adapter on purpose. The decision lives in ``reads.authorize_slice``, which is pure and
+    injectable so ``check_isolation`` can drive the whole matrix from fixtures — an isolation gate
+    that can only run against two live accounts is one that stops being run. This function's only
+    job is turning its two exceptions into HTTP:
+
+    - ``SliceRefused`` → **404**, the same status *and the same body* a nonexistent league gets.
+      A 403 would confirm the league exists; Sleeper ids are guessable, so a refusal that varies by
+      case is an enumeration oracle.
+    - ``SliceUnavailable`` → **503**. A broken demo config or a league with two seasons in the store
+      is a deploy problem, and dressing it as "unknown league_id" would hide an outage behind an
+      authorization message.
+
+    ``season`` is still carried, never a SQL filter (a redraft ``league_id`` already pins one
+    ``(league, season)`` slice). The returned dict is built explicitly, with exactly the three keys
+    the loaders accept — ``user`` is a dependency, not a slice field, and one stray key would make
+    ``**slice`` a 500 on all eleven routes at once.
     """
-    if league_id is not None and not reads.slice_exists(league_id):
-        raise HTTPException(status_code=404, detail=f"unknown league_id {league_id}")
-    if league_id is None:
-        league_id = settings.demo_league_id()
-    return {"league_id": league_id, "season": season, "viewer_roster_id": viewer_roster_id}
+    try:
+        return reads.authorize_slice(
+            league_id, season, viewer_roster_id,
+            user_id=(user or {}).get("id"),
+            demo_league_id=settings.demo_league_id(),
+        )
+    except reads.SliceRefused:
+        raise HTTPException(status_code=404, detail=_UNKNOWN_LEAGUE) from None
+    except reads.SliceUnavailable as exc:
+        _LOG.error("slice unavailable — this is a deploy/data problem, not a caller problem: %s",
+                   exc)
+        raise HTTPException(status_code=503, detail="this league cannot be served") from exc
 
 
 _UPSERT_APP_USER = """

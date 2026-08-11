@@ -99,15 +99,26 @@ def _db():
 
 
 _OWNED = """
-SELECT ul.user_id::text AS user_id, ul.league_id, dm.season, dm.name
+SELECT ul.user_id::text AS user_id, ul.league_id, ul.roster_id, dm.season, dm.name
 FROM public.user_leagues ul
 LEFT JOIN demo_manifest dm ON dm.league_id = ul.league_id
 ORDER BY ul.created_at
 """
 
 _GRANT = """
-INSERT INTO public.user_leagues (user_id, league_id) VALUES (%(uid)s, %(lid)s)
+INSERT INTO public.user_leagues (user_id, league_id, roster_id)
+VALUES (%(uid)s, %(lid)s, %(rid)s)
 ON CONFLICT (user_id, league_id) DO NOTHING
+"""
+
+# A re-grant that CORRECTS the seat has to update, not no-op. With plain DO NOTHING, fixing a wrong
+# roster_id would print "already owned" and change nothing — the failure mode being silent is what
+# makes it worth a second statement. Only runs when a seat was actually supplied, so a bare
+# re-grant still never clobbers a seat that is already right.
+_GRANT_SEAT = """
+INSERT INTO public.user_leagues (user_id, league_id, roster_id)
+VALUES (%(uid)s, %(lid)s, %(rid)s)
+ON CONFLICT (user_id, league_id) DO UPDATE SET roster_id = EXCLUDED.roster_id
 """
 
 _REVOKE = "DELETE FROM public.user_leagues WHERE user_id = %(uid)s AND league_id = %(lid)s"
@@ -156,19 +167,31 @@ def list_users() -> None:
             print("      owns nothing — sees the demo only")
         for g in grants:
             label = f"{g['name']} {g['season']}" if g["name"] else "NOT IN THE CATALOG"
-            print(f"      owns {g['league_id']}  {label}")
+            seat = f"  seat: roster {g['roster_id']}" if g["roster_id"] is not None else ""
+            print(f"      owns {g['league_id']}  {label}{seat}")
 
 
 def _settings_demo() -> str | None:
     return settings.demo_league_id()
 
 
-def grant(email: str, league_id: str) -> None:
-    """Give an account a league. Idempotent — re-granting is a no-op, and says so."""
+def grant(email: str, league_id: str, roster_id: str | None = None) -> None:
+    """Give an account a league, optionally with the seat that is "them" in it (P5/S2b).
+
+    Idempotent — re-granting is a no-op and says so. Supplying a roster_id UPDATES it, because a
+    correction that silently does nothing is worse than an error.
+
+    The seat is what makes viewer identity a user × league property: two people in the same league
+    need different "you" highlights, and until S2b that was a property of the league. Omit it and
+    the caller falls back to MY_USERNAME, which is exactly the demo's existing behaviour.
+    """
     user = _find(email)
-    n = _db().execute(_GRANT, {"uid": user["id"], "lid": str(league_id)})
+    rid = int(roster_id) if roster_id is not None else None
+    sql = _GRANT_SEAT if rid is not None else _GRANT
+    n = _db().execute(sql, {"uid": user["id"], "lid": str(league_id), "rid": rid})
+    seat = f" (seat: roster {rid})" if rid is not None else ""
     if n:
-        print(f"✓ granted {league_id} to {email}")
+        print(f"✓ granted {league_id} to {email}{seat}")
     else:
         print(f"= {email} already owned {league_id} — nothing changed")
 
@@ -212,8 +235,8 @@ if __name__ == "__main__":
     ap.add_argument("--list", action="store_true", help="show every account and what it owns")
     ap.add_argument("--ban", metavar="EMAIL", help="block an account from signing in")
     ap.add_argument("--unban", metavar="EMAIL", help="restore a banned account")
-    ap.add_argument("--grant", nargs=2, metavar=("EMAIL", "LEAGUE_ID"),
-                    help="give an account a league (idempotent)")
+    ap.add_argument("--grant", nargs="+", metavar="EMAIL LEAGUE_ID [ROSTER_ID]",
+                    help="give an account a league, optionally with its viewer seat (idempotent)")
     ap.add_argument("--revoke", nargs=2, metavar=("EMAIL", "LEAGUE_ID"),
                     help="take a league away from an account")
     a = ap.parse_args()
@@ -222,6 +245,8 @@ if __name__ == "__main__":
     elif a.unban:
         set_ban(a.unban, banned=False)
     elif a.grant:
+        if not 2 <= len(a.grant) <= 3:
+            ap.error("--grant takes EMAIL LEAGUE_ID [ROSTER_ID]")
         grant(*a.grant)
     elif a.revoke:
         revoke(*a.revoke)
