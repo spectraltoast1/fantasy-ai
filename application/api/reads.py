@@ -1044,10 +1044,13 @@ def visible(league_id, season, *, demo_league_id, owned, current_season) -> bool
     league living in the 2026 season; written as a global ``season = current`` filter it would
     vanish, and a missing demo reads as an auth bug rather than as the filter it actually is.
 
-    **An unresolved ``current_season`` (Sleeper down, nothing cached) denies the owned term.**
-    That is the fail-closed direction: a user briefly not seeing their own league is an
-    availability problem, while everyone seeing every league is the silent isolation failure this
-    session exists to prevent.
+    **An unresolvable ``current_season`` denies the owned term.** That is the predicate's contract,
+    stated in its signature rather than inferred from today's callers: it stays total for every
+    input, and the deny direction is the safe one. No live caller can pass ``None`` since S2c made
+    the season a local derivation — but "unreachable" is a claim about every caller, and this
+    function is pure, public and freshly acquired eleven call sites. Two lines are cheaper than
+    being wrong about that, and the alternative is not even a clean error: ``int(None)`` raises
+    *inside an authorization predicate*, which is a 500 on a read.
 
     **Both sides of the ownership test are normalised to text (P5/S2b).** The row's ``league_id``
     was already stringified; the ``owned`` members were not, so an int-typed set silently matched
@@ -1148,12 +1151,14 @@ def authorize_slice(league_id, season, viewer_roster_id, *, user_id, demo_league
     into HTTP.
 
     **The season is resolved LAST, and only when it can still change the answer.** ``visible``
-    short-circuits: the demo is allowed without a season, an unowned league is refused without one.
-    So a signed-out demo request — which is nearly all traffic — never touches ``nfl_state`` at all,
-    and neither refusal branch does either (which is also what keeps them timing-identical). This
-    is call ordering in new code, *not* a fix for audit F6: an owned-league read during a >12h
-    Sleeper outage still pays the 5s timeout, and there are eleven such endpoints now instead of
-    one. S2c owns that.
+    short-circuits: the demo is allowed without a season, an unowned league is refused without one,
+    which is also what keeps the two refusal branches timing-identical.
+
+    That ordering was written when resolving the season meant a network call, and S2b's audit was
+    right that it narrowed audit F6 without fixing it. **S2c fixed it at the source** — the season
+    is now a local derivation from the calendar, with no I/O to be slow — so the ordering here is
+    no longer load-bearing for latency. It stays because the timing symmetry of the two refusals
+    still is.
     """
     global _denied_reads
     lookup = lookup or slice_lookup

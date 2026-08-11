@@ -142,8 +142,8 @@ def _owned_by_user() -> dict[str, list[dict]]:
 def _season_line() -> str:
     """The resolved season + its source, so a CURRENT_SEASON left set cannot hide behind a list."""
     try:
-        from application.api import nfl_state
-        return nfl_state.describe()
+        from application.api import settings
+        return settings.describe_season()
     except Exception as exc:  # noqa: BLE001
         return f"current NFL season: UNRESOLVED ({exc})"
 

@@ -20,9 +20,10 @@ _SQL_PATH = Path(__file__).resolve().parent / "auth_schema.sql"
 
 # Every table this file owns. S1 hardcoded `app_users` in three places; S1b needed a second
 # table, so the name lives here once instead — adding a third is now one list entry. S2a added
-# two (`user_leagues`, `nfl_state_cache`) and that is exactly what it cost: two list entries,
-# with the column dump and the absent-from-generated-DDL assertion inherited for free.
-_TABLES = ["app_users", "signup_attempts", "user_leagues", "nfl_state_cache"]
+# two and that is exactly what it cost: two list entries, with the column dump and the
+# absent-from-generated-DDL assertion inherited for free. S2c removed one of them again
+# (`nfl_state_cache`, retired with the Sleeper call it cached) — one list entry, same seam.
+_TABLES = ["app_users", "signup_attempts", "user_leagues"]
 
 _COLUMNS_SQL = """
 SELECT column_name, data_type, is_nullable

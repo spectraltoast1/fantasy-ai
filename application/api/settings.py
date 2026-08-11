@@ -26,10 +26,11 @@ depends on it (the env var wins there).
 - ``demo_league_id()`` — the ONE public league (P5/S2a). Config rather than a table: one public
   league makes a table pure overhead, and a config value cannot be silently recreated-without-its
   properties by the next full loader run the way a `schema.sql` table can.
-- ``current_season()`` — a thin seam over ``nfl_state``, which resolves Sleeper's ``/v1/state/nfl``
-  with a persisted last-known-good and **fails closed** (unresolved → only the demo is visible).
-  Its ``CURRENT_SEASON`` override is process-env-only, with **no config.py fallback on purpose** —
-  it is a temporary operational override and one that could hide in a gitignored file is the
+- ``current_season()`` — the current NFL season, **derived locally** (P5/S2c): env override first,
+  else the calendar year, or the year before it until August 1. Env-first-with-a-computed-default is
+  the same shape as ``access_code()`` and ``demo_league_id()`` above, which is why it belongs here
+  rather than in a module of its own. Its ``CURRENT_SEASON`` override is process-env-only, with
+  **no config.py fallback on purpose** — an override that could hide in a gitignored file is the
   failure mode.
 - ``access_code()`` — the shared access code (P5/S1b). Required on **every** sign-in request,
   from everyone, which is what makes "no valid code, no email is ever sent" a hard property
@@ -46,7 +47,11 @@ alone → 200, ``Authorization`` alone → 401). None of this touches token veri
 
 from __future__ import annotations
 
+import logging
 import os
+from datetime import date
+
+_LOG = logging.getLogger(__name__)
 
 
 def _config_attr(name: str):
@@ -115,13 +120,65 @@ def demo_league_id() -> str | None:
     return str(cfg) if cfg is not None else None
 
 
-def current_season() -> int | None:
-    """The current NFL season, or None when it cannot be resolved (→ demo-only visibility).
+ENV_CURRENT_SEASON = "CURRENT_SEASON"
 
-    The resolution rules, the persisted last-known-good and the fail-closed behaviour live in
-    ``nfl_state`` — this is only the seam so callers have one place to ask. Imported lazily
-    because ``nfl_state`` reaches Postgres, and ``settings`` is imported by things that must stay
-    DB-free at import time (``check_signup``, ``scripts/users.py``).
+# The season rolls over on August 1 — a few days EARLIER than Sleeper's own flip, deliberately.
+# The two error directions are not symmetric: flipping early drops last season's league from a
+# catalog slightly sooner than necessary, which nobody notices, while flipping late hides the
+# league somebody has just connected. Lead, don't lag.
+_ROLLOVER_MONTH = 8
+
+
+def derive_season(today: date) -> int:
+    """The NFL season a given date falls in. Pure, total, and the whole rule (P5/S2c).
+
+    Takes the date rather than reading the clock so it can be table-tested across the boundary
+    in both directions — a function that calls ``date.today()`` internally cannot be.
     """
-    from application.api import nfl_state
-    return nfl_state.current_season()
+    return today.year if today.month >= _ROLLOVER_MONTH else today.year - 1
+
+
+def current_season(today: date | None = None) -> int:
+    """The current NFL season — the time half of the visibility predicate (P5/S2a, rewritten S2c).
+
+        visible(league) = (league_id == DEMO_LEAGUE_ID) OR (owned by caller AND season == current)
+
+    **Local and total: there is nothing here that can fail.** Until S2c this resolved Sleeper's
+    ``/v1/state/nfl`` through a Postgres last-known-good cache, which put a third party and a 5s
+    timeout in front of every read — twelve endpoints' worth after S2b, on one 256mb machine with
+    shared workers, so a long Sleeper outage could starve the public demo rather than merely slow
+    it. The cache, the timeout, the stale-cache branch and the unresolved/fail-closed branch are
+    all gone: they existed only to survive a failure that no longer exists, and removing the
+    failure beats handling it.
+
+    Sleeper is still the authority on the answer — just not on the request path. ``check_ownership``
+    asks it once and fails loudly if it disagrees with what this derives, so drift is still caught.
+
+    ``CURRENT_SEASON`` is the documented manual lever, and process-env-only: never a query
+    parameter, header, or cookie, and with no ``config.py`` fallback either (an override that can
+    hide in a gitignored file is the failure mode). ``check_ownership`` asserts that immunity.
+    """
+    return season_and_source(today)[0]
+
+
+def season_and_source(today: date | None = None) -> tuple[int, str]:
+    """``(season, "env" | "derived")``. The source is published, not just the value (S2a audit F7):
+    an override left set after a proof run is otherwise invisible from outside the process."""
+    raw = (os.environ.get(ENV_CURRENT_SEASON) or "").strip()
+    if raw:
+        try:
+            return int(raw), "env"
+        except ValueError:
+            # Refused rather than guessed at: a typo'd override must be loud, not silently ignored
+            # while the operator believes everything ran under it.
+            _LOG.error("%s=%r is not an integer — ignoring the override", ENV_CURRENT_SEASON, raw)
+    return derive_season(today or date.today()), "derived"
+
+
+def describe_season(today: date | None = None) -> str:
+    """One line for the startup log and ``users.py --list`` (``/health`` publishes the pair)."""
+    season, source = season_and_source(today)
+    line = f"current NFL season: {season} (source: {source})"
+    if source == "env":
+        line += f"  ⚠ {ENV_CURRENT_SEASON} override is SET — unset it before this counts as production"
+    return line

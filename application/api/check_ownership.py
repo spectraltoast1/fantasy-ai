@@ -7,10 +7,15 @@ nothing**, which is the property S2 exists to create.
     application/api/.venv/bin/python -m application.api.check_ownership
     application/api/.venv/bin/python -m application.api.check_ownership --live --current-season 2025
 
-The default run is DB-free and network-free: the visibility predicate and the catalog builder are
-pure functions (`reads.visible`, `reads.build_catalog`), so the whole matrix runs against fixtures.
-That matters — an isolation gate you can only run by standing up two real accounts is one that
-stops being run.
+The default run is DB-free and needs no accounts: the visibility predicate and the catalog builder
+are pure functions (`reads.visible`, `reads.build_catalog`), so the whole matrix runs against
+fixtures. That matters — an isolation gate you can only run by standing up two real accounts is one
+that stops being run.
+
+It does make ONE network call (P5/S2c): Sleeper's `/v1/state/nfl`, to assert it agrees with the
+season this app now derives from the calendar. That call used to sit on every read; it lives here
+instead, where being slow costs nobody anything. Unreachable is a failure rather than a skip — see
+`check_sleeper_agrees`.
 
 `--live` adds the half fixtures cannot prove: two REAL Supabase accounts against a REAL API, over
 HTTP, with real tokens. It mints sessions with the admin key (`generate_link` → `/auth/v1/verify`)
@@ -27,13 +32,16 @@ S2b extends this file to the full endpoint × role matrix. S2a's scope is the ca
 from __future__ import annotations
 
 import argparse
+import ast
 import inspect
 import json
 import os
 import urllib.error
 import urllib.request
+from datetime import date
+from pathlib import Path
 
-from application.api import auth, nfl_state, reads, routes, settings
+from application.api import auth, reads, routes, settings
 
 _failures: list[str] = []
 
@@ -143,39 +151,142 @@ def check_predicate() -> None:
             _ok(f"hides {label}")
 
 
-def check_fails_closed() -> None:
-    print("\nan unresolved season must NARROW, never widen")
+def check_unresolvable_season_narrows() -> None:
+    print("\nan unresolvable season must NARROW, never widen")
     if reads.visible(A_LEAGUE, 2025, demo_league_id=DEMO, owned={A_LEAGUE}, current_season=None):
         _fail("an owned league is VISIBLE with the season unresolved — this is the fail-OPEN bug")
     else:
-        _ok("an unresolved season hides even an owned league (availability cost, not exposure)")
+        _ok("an unresolvable season hides even an owned league (availability cost, not exposure)")
 
     got = _ids(_catalog(owned={A_LEAGUE, B_LEAGUE, A_PRIOR}, current_season=None))
-    _eq("catalog with the season unresolved", got, [DEMO])
+    _eq("catalog with the season unresolvable", got, [DEMO])
+    # No live caller can reach this since S2c — `settings.current_season` is total. It stays because
+    # `visible` is pure and public: its contract is its signature, not today's call sites.
 
-    # And the resolver really does produce None on a total outage, rather than a wide-open value.
-    saved_fetch, saved_cache = nfl_state.fetch_from_sleeper, nfl_state.read_cache
-    saved_env = os.environ.pop(nfl_state.ENV_VAR, None)
+
+# --- the season is DERIVED, and the derivation is the whole rule (P5/S2c, audit F6) ----------
+
+# Date → the season that date falls in. The August 1 boundary is deliberately a few days EARLIER
+# than Sleeper's own flip: flipping early drops last season's league from a catalog slightly sooner
+# than necessary, which nobody notices; flipping late hides the league somebody JUST connected.
+# Crosses the boundary in BOTH directions, and New Year in both, because a rule written as
+# `year - 1` is exactly as easy to get backwards as forwards.
+_SEASON_TABLE = [
+    (date(2025, 7, 31), 2024, "the day before the rollover — still last season"),
+    (date(2025, 8, 1), 2025, "the rollover day itself — the boundary is inclusive"),
+    (date(2025, 12, 31), 2025, "New Year's Eve — still the season that started in August"),
+    (date(2026, 1, 1), 2025, "January belongs to the PRIOR year's season (playoffs)"),
+    (date(2026, 2, 8), 2025, "Super Bowl Sunday — the season it belongs to has not changed"),
+    (date(2026, 7, 31), 2025, "the last day of the offseason"),
+    (date(2026, 8, 1), 2026, "rollover"),
+    (date(2026, 8, 11), 2026, "today, as this ships"),
+    (date(2027, 1, 1), 2026, "the year rolls, the season does not"),
+    (date(2027, 8, 1), 2027, "next year's rollover — the rule is not hardcoded to 2026"),
+    (date(2028, 2, 29), 2027, "a leap day, because `date` arithmetic is the one thing not tested"),
+]
+
+
+def check_season_derivation() -> None:
+    print("\nthe season derives from the date — testing the FUNCTION, not the clock")
+    saved = os.environ.pop(settings.ENV_CURRENT_SEASON, None)
     try:
-        nfl_state.fetch_from_sleeper = lambda: (_ for _ in ()).throw(OSError("simulated outage"))
-        nfl_state.read_cache = lambda: None
-        season, source = nfl_state.resolve()
-        if season is None and source == "unresolved":
-            _ok("Sleeper down with nothing cached resolves to (None, 'unresolved')")
-        else:
-            _fail(f"outage resolved to {(season, source)} — it must be (None, 'unresolved')")
+        for day, expect, why in _SEASON_TABLE:
+            got = settings.current_season(day)
+            if got == expect:
+                _ok(f"{day} → {got}  ({why})")
+            else:
+                _fail(f"{day} → {got}, expected {expect} ({why})")
 
-        nfl_state.read_cache = lambda: (2026, 999_999.0)
-        season, source = nfl_state.resolve()
-        if season == 2026 and source.startswith("cache"):
-            _ok("Sleeper down WITH a cached value serves it stale (a stale season only hides a "
-                "league that just became current — narrowing, never widening)")
+        os.environ[settings.ENV_CURRENT_SEASON] = "2025"
+        if settings.current_season(date(2026, 8, 11)) == 2025:
+            _ok("the env override beats the derivation (the documented manual lever)")
         else:
-            _fail(f"outage with a cache resolved to {(season, source)}")
+            _fail("CURRENT_SEASON did not override the derived value")
+        if settings.season_and_source(date(2026, 8, 11)) == (2025, "env"):
+            _ok("…and reports source 'env', so an override left set cannot hide")
+        else:
+            _fail("the override is not reported as source 'env'")
+
+        os.environ[settings.ENV_CURRENT_SEASON] = "twenty-twenty-five"
+        if settings.current_season(date(2026, 8, 11)) == 2026:
+            _ok("a garbage override is refused and the derivation stands — never guessed at")
+        else:
+            _fail("a garbage override was accepted")
     finally:
-        nfl_state.fetch_from_sleeper, nfl_state.read_cache = saved_fetch, saved_cache
-        if saved_env is not None:
-            os.environ[nfl_state.ENV_VAR] = saved_env
+        os.environ.pop(settings.ENV_CURRENT_SEASON, None)
+        if saved is not None:
+            os.environ[settings.ENV_CURRENT_SEASON] = saved
+
+
+_SLEEPER_STATE_URL = "https://api.sleeper.app/v1/state/nfl"
+
+
+def _sleeper_season() -> int:
+    """The season Sleeper reports. Lives HERE, in the gate — it is no longer on any request path."""
+    req = urllib.request.Request(_SLEEPER_STATE_URL, headers={"Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return int(json.loads(resp.read() or "{}")["season"])
+
+
+def check_sleeper_agrees() -> None:
+    """Sleeper is an ASSERTION now, not a dependency (P5/S2c).
+
+    Before S2c every read resolved the season from Sleeper, so drift was impossible and an outage
+    was everyone's problem. Now the derivation owns the answer and Sleeper checks it — once, here,
+    where being slow costs nobody anything.
+
+    Unreachable is a FAILURE, not a skip. A gate that prints "Sleeper agrees" without having asked
+    is the same defect as the 401-or-503 check this file used to carry: green having verified
+    nothing.
+    """
+    print("\nSleeper must AGREE with the derived season (an assertion, not a dependency)")
+    derived = settings.current_season()
+    try:
+        theirs = _sleeper_season()
+    except Exception as exc:                       # noqa: BLE001 — every failure lands the same way
+        _fail(f"could not reach Sleeper ({type(exc).__name__}: {exc}) — agreement is UNVERIFIED, "
+              "and this check does not pass unverified")
+        return
+    if theirs == derived:
+        _ok(f"Sleeper says {theirs}; we derive {derived}")
+    else:
+        _fail(f"DRIFT: Sleeper says {theirs}, we derive {derived}. One benign cause exists — in "
+              f"early August we roll over a few days BEFORE Sleeper does, on purpose. Outside that "
+              f"window the calendar rule is wrong and CURRENT_SEASON is the lever until it is fixed.")
+
+
+def check_no_network_in_the_request_path() -> None:
+    """Audit F6, closed structurally rather than by inspection."""
+    print("\nnothing on the request path can be slow — the season does no I/O")
+    api_dir = Path(__file__).resolve().parent
+    if (api_dir / "nfl_state.py").exists():
+        _fail("application/api/nfl_state.py still exists — the network call is back")
+    else:
+        _ok("application/api/nfl_state.py is gone (with its cache, timeout and fallbacks)")
+
+    # Parsed, not grepped: the first version of this failed on `init_auth_schema`'s COMMENT saying
+    # the table was retired, which is the textual-check trap this file warns about elsewhere.
+    importers = []
+    for path in sorted(api_dir.glob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text())):
+            names = ([a.name for a in node.names] if isinstance(node, ast.Import) else
+                     [a.name for a in node.names] + [node.module or ""]
+                     if isinstance(node, ast.ImportFrom) else [])
+            if any("nfl_state" in n for n in names):
+                importers.append(path.name)
+    if importers:
+        _fail(f"{sorted(set(importers))} still IMPORT nfl_state")
+    else:
+        _ok("no api module imports nfl_state (this gate owns the Sleeper call now)")
+
+    body = inspect.getsource(settings.season_and_source) + inspect.getsource(settings.derive_season)
+    forbidden = [w for w in ("urllib", "http", "socket", "db.", "fetch") if w in body]
+    if forbidden:
+        _fail(f"the season derivation references {forbidden} — it must be pure")
+    elif "os.environ" not in body:
+        _fail("the derivation does not read os.environ — where is the override coming from?")
+    else:
+        _ok("the derivation is os.environ + the calendar: no I/O, so nothing to time out")
 
 
 # --- the catalog ---------------------------------------------------------------------------
@@ -242,24 +353,29 @@ def check_never_empty_or_duplicated(builder=None) -> None:
 
 def check_override_is_process_env_only() -> None:
     print("\nCURRENT_SEASON is process env ONLY — never caller-supplied")
-    # Structural, not textual: a function that takes no arguments has no channel for caller data,
+    # Structural, not textual: a function's parameters are the only channel for caller data,
     # whatever it says in its docstring. (An earlier version of this check grepped the module for
-    # "request"/"header" and tripped over nfl_state's own prose and its OUTBOUND urllib call —
-    # which is a good reminder that a check matching comments is checking the wrong thing.)
-    for fn in (nfl_state.env_override, nfl_state.resolve, nfl_state.current_season):
-        params = list(inspect.signature(fn).parameters)
-        if params:
-            _fail(f"nfl_state.{fn.__name__} accepts {params} — the season is injectable")
+    # "request"/"header" and tripped over the old nfl_state's own prose and its OUTBOUND urllib
+    # call — a good reminder that a check matching comments is checking the wrong thing.)
+    #
+    # S2c: these take `today` now, because the date table above cannot test a function that reads
+    # the clock itself. `today` is a DATE, not a season, and no route accepts one — which is what
+    # the `slice_params`/`leagues` parameter assertions below actually guarantee. They are the
+    # load-bearing half of this check now.
+    for fn in (settings.current_season, settings.season_and_source, settings.describe_season):
+        params = set(inspect.signature(fn).parameters)
+        if params - {"today"}:
+            _fail(f"settings.{fn.__name__} accepts {sorted(params)} — the season is injectable")
         else:
-            _ok(f"nfl_state.{fn.__name__}() takes no arguments — nothing can be passed in")
+            _ok(f"settings.{fn.__name__}({', '.join(sorted(params))}) takes no season from anyone")
 
-    body = inspect.getsource(nfl_state.env_override)
+    body = inspect.getsource(settings.season_and_source)
     if "os.environ" not in body:
-        _fail("env_override does not read os.environ — where is it getting the value?")
+        _fail("the override does not read os.environ — where is it getting the value?")
     elif [w for w in ("request", "header", "cookie", "Request") if w in body]:
-        _fail("env_override references caller-supplied input")
+        _fail("the override references caller-supplied input")
     else:
-        _ok("env_override reads os.environ and nothing else")
+        _ok("the override reads os.environ and nothing else")
 
     params = set(inspect.signature(routes.slice_params).parameters)
     banned = {"current_season", "season_override", "CURRENT_SEASON", "demo_league_id"}
@@ -274,22 +390,8 @@ def check_override_is_process_env_only() -> None:
     else:
         _ok("/api/leagues takes nothing from the caller but their verified identity")
 
-    saved = os.environ.pop(nfl_state.ENV_VAR, None)
-    try:
-        os.environ[nfl_state.ENV_VAR] = "2025"
-        if nfl_state.env_override() == 2025:
-            _ok("the override is honoured when it IS in the process env")
-        else:
-            _fail("the process-env override does not work at all")
-        os.environ[nfl_state.ENV_VAR] = "twenty-twenty-five"
-        if nfl_state.env_override() is None:
-            _ok("a non-numeric override is refused, not guessed at")
-        else:
-            _fail("a garbage override was accepted")
-    finally:
-        os.environ.pop(nfl_state.ENV_VAR, None)
-        if saved is not None:
-            os.environ[nfl_state.ENV_VAR] = saved
+    # That the override is honoured from the process env, and refused when it is garbage, is
+    # asserted by `check_season_derivation` — one place, next to the values it produces.
 
 
 def check_anonymous_is_not_denied() -> None:
@@ -441,7 +543,10 @@ def main() -> int:
 
     print("=== check_ownership: can a valid token for the wrong account reach a league? ===")
     check_predicate()
-    check_fails_closed()
+    check_unresolvable_season_narrows()
+    check_season_derivation()
+    check_sleeper_agrees()
+    check_no_network_in_the_request_path()
     check_catalog()
     check_ordering()
     check_never_empty_or_duplicated()
@@ -457,8 +562,9 @@ def main() -> int:
             print(f"  - {f}")
         return 1
     print("\nALL GREEN — the demo is public and season-independent, an owned league is visible only "
-          "in the current season, nobody sees anyone else's, an unresolved season narrows rather "
-          "than widens, and the pre-S2a catalog fails every one of these.")
+          "in the current season, nobody sees anyone else's, the season derives locally across the "
+          "August boundary in both directions with Sleeper agreeing, and the pre-S2a catalog fails "
+          "every one of these.")
     return 0
 
 
