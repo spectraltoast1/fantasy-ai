@@ -30,6 +30,7 @@
 | **S1 — Served-decision instrumentation** *(must-have; before onboarding)* | The live path is measurable | Write **`served=true`** rows to the ledger on the live path; a **minimal usage log** (opened before lineup lock?); compute **decision-touch** + **divergence/adjudication** from Sleeper transactions; wire the weekly one-question prompt | `served=true` rows written for a live league; decision-touch + divergence computable from real data; the weekly question captured |
 | **S2 — End-to-end verification on real shapes** *(must-have)* | It doesn't break on real leagues | Click through every onboarded league shape (team counts, 1QB/SF, ppr/half) × sample weeks; identity, panel gating, `read_network_requests`/`read_console_messages` clean | Green across every onboarded shape; screenshots of contrasting real leagues; no console/network errors |
 | **S3 — Ops hardening** *(mostly can-be-late)* | Safe under real users | Error monitoring + basic alerting; **AI cost caps** (rides with P4); the `metadata.json` cache sidecar (if not already in P1); Fly **scale-to-zero cold-start** behavior acceptable on first hit; basic rate limiting on the connect endpoint | Errors are visible; AI + hosting costs are bounded; cold-start is acceptable; the connect path is rate-limited |
+| **S4 — The demo costs nothing to serve** *(must-have before real traffic)* | Traffic stops being able to take the site down | **Precompute the demo.** Once S2d freezes it (own `league_id`, own lineage, week 5, never changes), compute its responses ONCE instead of once per visitor — today every anonymous visit fires **eleven analytical queries** returning byte-identical data. Three strengths, pick in-session: an in-process cache (**weak here** — scale-to-zero kills the process constantly), a table of precomputed responses (one keyed lookup instead of eleven analytical ones), or **baking the responses into the image as static files (zero database hits)**. Honest scope note: it is not eleven files — five weeks × every player/team/matchup/dossier drill-down is hundreds to low thousands of small responses, so a hybrid (precompute the surfaces, leave rare drill-downs on the DB) may be the right call. **Plus Cloudflare's free tier in front of Fly** — per-IP limiting, bot filtering and static caching applied *before* a request costs anything. | An anonymous visit costs zero (or one trivial) Supabase queries; the demo renders identically; Cloudflare fronts the origin |
 
 ## Decisions to settle
 
@@ -37,10 +38,25 @@
   resist adding more (instrumentation you don't analyze is cost without payoff).
 - **Monitoring stack** — the lightest thing that surfaces errors + the weekly coverage/health check (can
   reuse P1's alerting).
+- **Cloudflare in front of Fly — recommended, decide in S4.** Free tier, DNS change plus config, no
+  code. It is the only layer where blocking actually works, because it refuses a request *before* Fly
+  wakes or Supabase is touched. The alternative — rate limiting inside the app — fires at the most
+  expensive possible moment and was rejected for that reason (see `SESSION_P5_S2B_SCOPED_READS.md`,
+  which keeps a *counter* on unowned-league attempts but no cap).
+- **Two of these are not sessions and should not queue behind P5.** Cloudflare is an afternoon of
+  dashboard work; the runbook (`context/OPERATIONS.md`) is already written. P6 sits last in the build
+  order while its ops half is designated must-have for Week 1 — so the non-session items come forward.
 - **Which of S3 blocks Week 1** — error visibility and cost caps probably yes; deeper alerting/perf can
   trail.
 
 ## Risks / notes
+
+- **THE RISK MODEL, corrected 2026-08-11 (with Will) — `context/OPERATIONS.md` is the standing version.**
+  There is **no runaway-bill path**: one machine, no autoscaling, and a Supabase **free tier that cannot
+  bill — it pauses.** "Cost caps" here therefore means *the AI runtime* (P4), not hosting. The single
+  real failure is **Supabase pausing**, which unlike a saturated Fly machine **does not recover on its
+  own**. What consumes the free tier is queries and bytes, which is what makes S4 (precompute + edge) a
+  guardrail rather than a performance nicety.
 
 - **S1 is a gate, not a polish step** — if it isn't done, per the pilot you **don't onboard**. Do it before
   the cohort, not after.

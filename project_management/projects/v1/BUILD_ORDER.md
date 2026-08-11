@@ -206,6 +206,7 @@ runbooks — are reference in **`sessions/v1/`**. For how the whole `project_man
 - **Served-decision instrumentation:** write `served=true` ledger rows, a minimal usage log (read-before-lineup-lock), and the decision-touch + divergence metrics. *(Per the pilot's own gate: don't onboard anyone before the live path writes `served=true` rows — an un-instrumented week is unrecoverable.)*
 - **End-to-end verification** across real onboarded league shapes × weeks.
 - **Ops:** error monitoring, cost caps on the AI runtime, the cache-metadata sidecar, cold-start behavior on Fly's scale-to-zero.
+- **Cost + availability guardrails (added 2026-08-11):** there is no runaway-bill path (one machine, no autoscaling, Supabase free tier **pauses** rather than bills) — the one real failure is **Supabase pausing, which does not self-heal**. So: **precompute the frozen demo** and **put Cloudflare in front**, which make traffic cheap instead of trying to block it. See `P6_LAUNCH_HARDENING.md` S4 and the runbook at `context/OPERATIONS.md`.
 
 **Done when:** the cohort can be onboarded with monitoring, cost controls, and a real scoreboard for whether the product is helping.
 
