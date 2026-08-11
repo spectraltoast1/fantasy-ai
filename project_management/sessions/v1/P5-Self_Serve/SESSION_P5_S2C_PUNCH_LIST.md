@@ -22,8 +22,10 @@ public demo down**, not slow pages. Item 1 retires that. Gate A is ~2 weeks out;
 hand, re-run `--emit`/`--load`, show it comes back"* — and `--load` **DROPs every table it names**, against
 the **single Supabase project that also serves production**. That makes it the only item on this list that
 can take the site down while it runs. Bundling a planned outage with nine local fixes means one item can
-sink the other nine. **It should ride with S2d**, which is the other store-touching session, or take its
-own slot. Either way it is a scheduled event, not a punch-list line. → `context/OPERATIONS.md`.
+sink the other nine. **It rides with S2d** (Will, 2026-08-11) — the other store-touching session, so
+the outage happens once instead of twice. A scheduled event, not a punch-list line. **S2d's Part 3 now
+also records that a `--load` would WIPE a hand-inserted demo clone**, which changes how that session's
+Part 1 must be built.
 
 ## Your part, Will
 
