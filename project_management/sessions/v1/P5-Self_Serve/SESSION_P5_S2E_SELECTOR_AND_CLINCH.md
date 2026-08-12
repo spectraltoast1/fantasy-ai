@@ -27,27 +27,27 @@ is not "eliminated vs not". `magicLine()` returns null for a null magic number; 
 - **Why it is not cosmetic-only:** *absence is reported, never fabricated*. A blank beside nine populated
   rows reads as broken, on the page every visitor lands on.
 
-## 3. Playoff odds must not round to 0% or 100% (Will, 2026-08-12)
+## 3. Playoff odds — integers only, with `<1%` and `>99%` at the ends (Will, 2026-08-12)
 
 `League.jsx` renders `Math.round(playoffPct)` in three places (`:74`, `:135`, `:186`), so **0.3% displays
-as 0%** — which reads as *mathematically eliminated* to every manager who sees it. That is fabricated
-certainty, and the north star is confidence-**honesty**.
+as 0%** — which reads as *mathematically eliminated*. That is fabricated certainty, and the north star is
+confidence-**honesty**.
 
-**Rounding only lies at the ends, so the rule is asymmetric** — a decimal in the middle would be false
-precision, since 10,000 sims give roughly ±0.5pp around the midrange:
+**The rule (Will's, simpler than the PM's decimal proposal and it solves the actual problem):**
 
-| value | display | why |
-|---|---|---|
-| 0 < p < 1% | **one decimal** (`0.3%`) | the difference between 0.3% and 0.03% is a real decision input |
-| p == 0 from the sim | **`<0.1%`**, never `0%` | see below |
-| 1% ≤ p ≤ 99% | integer | a decimal implies resolution 10k runs does not have |
-| p > 99% | **`>99%`** | never assert a certainty the sim did not establish |
+| value | display |
+|---|---|
+| 0 < p < 1 | **`<1%`** |
+| 1 ≤ p ≤ 99 | the integer |
+| p > 99 | **`>99%`** |
+| p == 0 from the sim | **`<1%`** — see below |
 
-**The `0%` case is the important one, and it is subtler than rounding.** A Monte Carlo returning 0 out of
-10,000 does **not** mean eliminated — it means "did not occur in 10,000 tries", i.e. below roughly 0.03%.
-Displaying that as `0%` asserts an elimination the model never established. **True elimination is a
-different fact** and would have to come from the bracket logic, not from a simulated frequency. If the app
-ever wants to say "eliminated", that is a separate claim needing a separate source.
+**A sim result of 0 is not elimination.** 0 out of 10,000 means "did not occur in ten thousand tries",
+i.e. below roughly 0.03% — not impossible. So it takes `<1%` like any other sub-1% value.
+
+**`Clinched` and `Eliminated` may only come from real bracket math, never from the simulation** (Will).
+Neither exists yet; when it does, they become their own labels. Until then the display never asserts
+either.
 
 ## 4. "Clinch in N of next 10" overstates what the number is
 
@@ -59,9 +59,22 @@ k of its remaining games, it made the playoffs in ≥90% of them.*
 out of ten*. A manager reading "Clinch in 5 of next 10" will believe winning 5 puts them in; it puts them
 in 90% of the time. **The engine is honest — it says "proxy" — and the UI dropped the hedge.**
 
-Fix is copy, not math: say what it is (e.g. *"5 of next 10 usually does it"*, or keep the number and
-label the strength). Will's call on wording. **Do not retune `MAGIC_ODDS`** — report, don't tune; that is
-a measured constant and this session is a labelling pass.
+**The label set — DECIDED (Will, 2026-08-12).** Copy, not math. **Do not retune `MAGIC_ODDS`** — report,
+don't tune; it is a measured constant and this is a labelling pass.
+
+| condition | label |
+|---|---|
+| `magicWins <= 0` | **"Likely a playoff team"** |
+| `0 < magicWins < remainingGames` | **"X of the next Y should clinch a spot"** |
+| `magicWins == remainingGames` | **"Has to win out"** |
+| `magicWins` null, `remainingGames` known | **"Needs help to clinch"** |
+| `remainingGames` unknown | `—` |
+| *(future, from bracket math only)* | `Clinched` / `Eliminated` |
+
+**A consequence of Will's rule that is easy to miss: the existing `magicWins <= 0 → 'Clinched a spot'`
+branch has to go.** That string is the simulation asserting a certainty, which is exactly what the rule
+forbids — it becomes **"Likely a playoff team"**. It is the same defect as the `0%` rounding, in the one
+place nobody was looking because the panel was *flattering* rather than grim.
 
 ---
 
@@ -82,3 +95,26 @@ the League screen**, not as a grab-bag — and it is the first concrete instance
 ## Scope guard
 
 No data path, no loader, no engine, no store. No outage — nothing here requires a `--load`.
+
+
+---
+
+## Not this session — the Posture Map reshape, sized (Will asked 2026-08-12)
+
+**Short answer: cheap to reshape, expensive to redefine.** The cost depends entirely on whether the change
+is about how it *looks* or what it *means*.
+
+| change | size | why |
+|---|---|---|
+| **Layout, dot style, labels, legend, aspect ratio, responsiveness, captions** | **small — half a session** | `PostureMap` is one self-contained ~50-line component in `League.jsx` with **no charting library**: a hand-rolled `<svg>` for the quadrants and diagonal, then absolutely-positioned divs for dots. Plus CSS. No API or engine change. |
+| **A different axis** (something other than playoff odds × all-play) | **medium** | X and Y read `playoffPct` and `allPlayPct`, both already served by `loadStandings`. Any *other* field needs the read extended, and possibly the engine. Bounded, but it stops being frontend-only. |
+| **Redefining posture itself** — the quadrant boundaries, what counts as "riding luck" | **its own measured session** | `posture` is **server-side**: `reads.py:607` → `calcs.derive_posture(playoff_pct, all_play_pct)`. Changing the thresholds is an engine-constant change, which is **propose-only, human-promoted, and needs measurement** under this project's own rules. Not a presentation task at all. |
+
+**One thing to check during any reshape, and possibly a live bug now:** the `<svg>` uses
+`viewBox="0 0 100 100"` with **`preserveAspectRatio="none"`**, so the dashed "ON PACE" diagonal stretches
+with the container. **It only reads as a true on-pace line if the panel renders square.** If it does not,
+a dot that appears above the line may not actually be above it — and the whole panel's read is
+*off-diagonal is the signal*. Worth measuring before redesigning around it.
+
+**Also note:** this panel is gated behind `REGIME.TREND` in `readiness.jsx`, which is **shared with other
+panels** — so changing *when* it appears has blast radius beyond this map, unlike changing how it looks.
