@@ -103,7 +103,14 @@ No data path, no loader, no engine, no store. No outage — nothing here require
 
 ---
 
-## 5. The Posture Map is INVERTED on the live demo — measured 2026-08-12, not theorised
+## 5. The posture read is INVERTED — everywhere, not just on the demo (measured 2026-08-12)
+
+**Scope correction (Will, 2026-08-12).** The PM first wrote this up as "inverted on the public landing
+page". **It is inverted for every league.** `derive_posture` runs on every standings row the API serves —
+the demo, Will's own league when he signs in, every user's league after S4/S5, and all 31 corpus slices.
+The demo is only where it was *measured*, not where it applies. **Second time in this project the PM has
+let the sample stand in for the scope** (after the Fly machine count) — the standing lesson is *a sample
+supports a hypothesis, not an invariant*, and it applies to blast radius as much as to behaviour.
 
 Will asked how hard a reshape would be. Measuring it to answer produced a defect instead.
 
@@ -137,6 +144,33 @@ both.
 
 **This is a correctness defect, not a calibration one.** The formula compares two quantities that are not
 the same unit. Retuning `BAND` cannot fix it; it would only move which rank the split lands on.
+
+### OPEN — how much to withhold. Will's call.
+
+"Withhold posture" is broader than "hide the map", so here is exactly what goes and what stays.
+
+**Withheld under any option:** the four `posture` sites — the map's classification, the *Your Race* chip,
+the chip on every Teams row, and the sparkline's posture-derived colour (falls back to `var(--violet)`).
+**Never withheld:** playoff odds, all-play %, records, ranks, the sparkline itself, the magic line, and
+everything else on League and Teams. **The data stays; the classification goes.** We are not hiding
+information, we are removing a label that misclassifies.
+
+The fork is only about the map's panel:
+
+| | what the visitor sees | cost |
+|---|---|---|
+| **(a) withhold the whole panel** | a `PanelOff` slot with an honest reason | smallest |
+| **(b) keep the scatter, drop the interpretation** ← *recommended* | every team plotted by odds × all-play, **no diagonal, no corner labels, no buy/sell** | slightly more — delete a few JSX elements and rewrite the caption |
+
+**Recommendation: (b).** The dot *positions* are true — 94% odds against 82% all-play is a real
+measurement. What is false is the **diagonal** (which implies the two axes are comparable) and the
+**corner labels** (which assert buy/sell). Removing those leaves an honest "here is where everyone sits"
+and keeps a working panel on the page a visitor lands on — a `PanelOff` slot on the demo says *this
+product has broken parts*. The elements are already separate in the JSX (polygons, the dashed line, four
+corner divs, the axis label, then the dots), so this is deletion, not a rebuild. **The caption must be
+rewritten** — it is currently entirely about off-diagonal reads.
+
+It also means the eventual metric fix reuses this plot with better axes rather than rebuilding it.
 
 ### What to do — two pieces, different sessions
 
