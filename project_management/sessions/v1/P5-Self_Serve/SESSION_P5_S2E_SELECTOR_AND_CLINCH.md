@@ -99,7 +99,54 @@ No data path, no loader, no engine, no store. No outage — nothing here require
 
 ---
 
-## Not this session — the Posture Map reshape, sized (Will asked 2026-08-12)
+## 5. The Posture Map is INVERTED on the live demo — measured 2026-08-12, not theorised
+
+Will asked how hard a reshape would be. Measuring it to answer produced a defect instead.
+
+**`/api/league` on the live demo, every team:**
+
+| rank | team | playoff % | all-play % | gap | label |
+|---|---|---|---|---|---|
+| 1 | The Replacements | 94.2 | 82.2 | −12.0 | **Riding luck** |
+| 2 | Scoop and Score | 93.2 | 57.8 | −35.4 | Riding luck |
+| 3 | Certified Lads | 92.0 | 53.3 | −38.7 | Riding luck |
+| 4 | Comeback Szn | 79.0 | 62.2 | −16.8 | Riding luck |
+| 5 | Forty Yard Trash | 19.9 | 48.9 | +29.0 | **Unlucky** |
+| 6 | Bijan Mustard | 10.4 | 46.7 | +36.3 | Unlucky |
+| 7 | No Punt Intended | 6.2 | 62.2 | +56.0 | Unlucky |
+| 8 | Waiver Wire Fire | 4.5 | 44.4 | +39.9 | Unlucky |
+| 9 | Sunday Scaries | 0.3 | 24.4 | +24.1 | Unlucky |
+| 10 | Cool Runnings | 0.3 | 17.8 | +17.5 | Unlucky |
+
+**Every team is lucky or unlucky. `Contender`, `Rebuild` and `On pace` are unreachable** — `BAND = 9`
+and the *smallest* |gap| in the league is 12.0. Three of five labels have never fired.
+
+**The label carries no information beyond rank.** It is the playoff line, relabelled: top four = sell,
+bottom six = buy. And it is **inverted** — the best team in the league by both measures (82.2% all-play,
+the highest) is told to **sell**.
+
+**Root cause: the two axes are not commensurable.** Playoff odds *saturate* toward 0 and 100; all-play %
+*compresses* toward 50. Their difference is therefore dominated by the odds axis, so `gap` measures the
+shape of the odds curve, not luck. Team 7 is a genuine unlucky story (3rd-best all-play, 6.2% odds) and
+team 9 is simply bad (24.4% all-play) — the metric cannot tell them apart, because the odds term swamps
+both.
+
+**This is a correctness defect, not a calibration one.** The formula compares two quantities that are not
+the same unit. Retuning `BAND` cannot fix it; it would only move which rank the split lands on.
+
+### What to do — two pieces, different sessions
+
+1. **NOW, in S2e: gate the panel off.** The project's own standing rule is *"gate a panel OFF only when a
+   read is **misleading**, not merely uncertain."* This read is mechanically misleading, it is on the
+   **public landing page**, and it tells visitors to sell the best team. Gating is the rule's own remedy.
+2. **Its own measured session: compare like with like.** The likely answer is **all-play % vs actual win
+   %** — same unit (share of games won), so the gap *is* luck, which is the canonical fantasy read. Cheap
+   to compute if win% is already served. `BAND`/`LEVEL_CUT` must then be **re-measured** on the new scale
+   — 9 points is meaningless against odds and plausible against win%. Note `derive_posture` exists twice:
+   `api/calcs.py:32` and `frontend/src/posture.js` ("mirrors posture.js exactly") — both move together.
+   **Rank-vs-rank** (standing rank vs all-play rank) is the fallback if win% is not available.
+
+## Sizing the reshape (asked 2026-08-12) — supersedes nothing above; item 5 is the reason it matters
 
 **Short answer: cheap to reshape, expensive to redefine.** The cost depends entirely on whether the change
 is about how it *looks* or what it *means*.
