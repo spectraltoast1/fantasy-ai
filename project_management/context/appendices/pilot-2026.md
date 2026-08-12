@@ -91,8 +91,9 @@ league-mate *is* word of mouth. A leak is answered by rotating the code, not by 
 Cohort A existed so data-quality bugs surfaced on Will's own leagues *before* anyone else saw a number.
 Collapsing A into B means friends see the product during exactly those weeks. **That is a deliberate trade,
 not an oversight** — they're friends, expectations are calibrated by that, and S4a's honesty work already
-withholds what a thin sample can't support (no posture chip, no clinch magic number, no trend direction under
-three weeks).
+withholds what a thin sample can't support (no clinch magic number, no trend direction, no posture map under
+three weeks). *(The posture **chip** is no longer a thin-sample question: P5/S2e withheld `posture` outright,
+at every sample size, because the metric is inverted — see STATUS.)*
 
 **But the value of that gate was never the boundary — it was the list.** So it stays, as a checklist Will
 runs at week 4 regardless of who is looking:

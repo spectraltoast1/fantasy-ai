@@ -12,7 +12,11 @@ import { fmtOdds } from './format.js';
 // player. Pure renderer. The this-week bar drills into the full matchup detail (Matchups slice).
 
 export default function TeamDetail({ rosterId, asOfWeek, panels, onOpenPlayer, onOpenDossier, onOpenMatchup }) {
-  const [team, setTeam] = useState(null);
+  // `undefined` = in flight, `null` = the server said there is no such roster, an object = data.
+  // Three states, because the API legitimately answers `200 null` for an unknown roster and this
+  // used to seed with `null` — so success-with-nothing and still-loading were the same value, and
+  // the panel spun for ever (filed in P5/S2b, fixed in S2e).
+  const [team, setTeam] = useState(undefined);
   const [err, setErr] = useState(null);
   const [metric, setMetric] = useState('prod'); // 'prod' | 'mkt'
 
@@ -23,10 +27,10 @@ export default function TeamDetail({ rosterId, asOfWeek, panels, onOpenPlayer, o
 
   useEffect(() => {
     let live = true;
-    setTeam(null);
+    setTeam(undefined);
     setErr(null);
     loadTeamDetail(rosterId, asOfWeek)
-      .then((t) => live && setTeam(t))
+      .then((t) => live && setTeam(t ?? null))
       .catch((e) => live && setErr(e));
     return () => {
       live = false;
@@ -34,7 +38,8 @@ export default function TeamDetail({ rosterId, asOfWeek, panels, onOpenPlayer, o
   }, [rosterId, asOfWeek]);
 
   if (err) return <div className="gr-state error">Could not load team.<pre>{String(err.message ?? err)}</pre></div>;
-  if (!team) return <div className="gr-state">Loading…</div>;
+  if (team === undefined) return <div className="gr-state">Loading…</div>;
+  if (team === null) return <div className="gr-state">No such team in this league.</div>;
 
   const s = team.stats;
   return (

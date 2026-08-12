@@ -1,5 +1,8 @@
 # Appendix: Store Schema
 
+**Current as of 2026-08-12** (P5/S2e — confirmed against the live schema; only the catalog's *payload*
+shape moved, no table changed).
+
 **Scope:** the served Postgres store. Referenced from `ARCHITECTURE.md`. For how the data gets *into* these
 tables, see appendix: data-collection; for the reads' meaning, see appendix: engine-decision-reads.
 
@@ -32,7 +35,7 @@ a SERVE artifact and is 32**, the 31 plus the generated demo clone, unioned by `
 | `manager_dossiers` | roster_id (+`owner_id` indexed) | AI manager dossier headline + tendencies. |
 | `projection_consensus` | player × week 1–18 | Forward band: `center_ppr` / `p25/50/75_ppr` / `band_ppr`. |
 | `schedule` | week × roster_id | Pairings only — points are dropped upstream so future results never reach the client. |
-| `league_catalog` | lineage × season | The catalog `GET /api/leagues` reads: lineage→seasons tree, viewer, panels. 32 rows = the 31 corpus slices + the demo clone. |
+| `league_catalog` | lineage × season | The catalog `GET /api/leagues` reads: one row per league-season, plus viewer + panels. 32 rows = the 31 corpus slices + the demo clone. The TABLE is unchanged, but since P5/S2e the **payload is flat** — one entry per visible (league, season), not a lineage→seasons tree; the nesting existed only for the removed season selector. |
 
 **Naming wart:** the `projection_consensus` columns are named `*_ppr` (`center_ppr`, `p50_ppr`, …) but hold
 **league** points, not PPR — a `*_ppr` name here does *not* imply PPR scoring. The rename is parked (it would

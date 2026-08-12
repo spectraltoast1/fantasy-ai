@@ -9,15 +9,20 @@ import { POS_COLORS } from './posColors.js';
 // web two-pane (Matchups, right side) and as a stack detail (from Team detail's this-week bar), so it
 // fills whatever container holds it. Teams arrive "you" first.
 export default function MatchupDetail({ matchupId, asOfWeek }) {
-  const [data, setData] = useState(null);
+  // `undefined` = in flight, `null` = the server said there is no such matchup, an object = data.
+  // Three states, because the API legitimately answers `200 null` and until P5/S2e this seeded
+  // with `null` — so a successful "no such matchup" was indistinguishable from "still loading"
+  // and the panel spun for ever. Not an exotic path: load_matchup_detail targets as_of_week + 1,
+  // so viewing the last regular-season week aims at a playoff week with no schedule row.
+  const [data, setData] = useState(undefined);
   const [err, setErr] = useState(null);
 
   useEffect(() => {
     let live = true;
-    setData(null);
+    setData(undefined);
     setErr(null);
     loadMatchupDetail(matchupId, asOfWeek)
-      .then((d) => live && setData(d))
+      .then((d) => live && setData(d ?? null))
       .catch((e) => live && setErr(e));
     return () => {
       live = false;
@@ -25,7 +30,14 @@ export default function MatchupDetail({ matchupId, asOfWeek }) {
   }, [matchupId, asOfWeek]);
 
   if (err) return <div className="gr-state error">Could not load matchup.<pre>{String(err.message ?? err)}</pre></div>;
-  if (!data) return <div className="gr-state">Loading matchup…</div>;
+  if (data === undefined) return <div className="gr-state">Loading matchup…</div>;
+  if (data === null) {
+    return (
+      <div className="gr-state">
+        No matchup here for this week — the schedule has no game for it yet.
+      </div>
+    );
+  }
 
   const [a, b] = data.teams;
   // Shared scale for the two team Score Range bars (so overlap reads true).
