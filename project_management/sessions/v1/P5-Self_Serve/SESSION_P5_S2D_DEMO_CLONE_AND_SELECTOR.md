@@ -263,3 +263,77 @@ REDEPLOY and confirm live. Sweep .git for stale lock files at closedown.
   2026 league arrives.
 - **The anonymisation map must be deterministic**, or a re-load produces different fake names and the
   value-identical proof fails for a reason that has nothing to do with the clone being correct.
+
+---
+
+# AMENDMENT — 2026-08-11 — Code's four S2d questions, answered
+
+## 1. Where the generator writes — the STANDARD `data_layer` paths, keyed on the new id
+
+Both trees, wherever a league of that id would normally live: the raw Sleeper harvest tree for `teams` /
+`lineup_slots` / `league_settings`, and `derived/` for the rest. **That is what makes the loader need zero
+changes** — `build_db` reads through `data_layer`, whose readers already know each dataset's tree, so a
+league whose files sit in the expected places loads with no special-casing. Special-casing the loader for
+one league is the thing to avoid; it would put a permanent `if demo` inside the publish seam.
+
+**Two guards, and the first is the real work of "hard-exclude from every engine component":**
+
+- **One central predicate — `is_synthetic(league_id)` — that every PRODUCER consults.** The clone must be
+  invisible to everything that **writes or computes** (harvest, `weekly_refresh`, the corpus builders,
+  `league_registry`) and visible only to what **reads for serving** (the loader, the API). Scattered
+  `if league_id != DEMO` checks are how one gets missed. The concrete hazard: `weekly_refresh` iterating
+  leagues and trying to fetch `DEMO-2025` from Sleeper, which does not exist.
+- **`DEMO-2025` is not a Sleeper snowflake, and that is a feature.** Verified 2026-08-11: `league_id` is
+  `pl.Utf8` in the registry and `TEXT` in `schema.sql`, with **no integer cast anywhere** — so the id is
+  safe. If Code finds a cast, that is a **finding to report, not to paper over**: a non-numeric id failing
+  loudly is exactly the behaviour we want from anything that mistakes the clone for a real league.
+
+## 2. Part 2 is the designated overflow — decide BEFORE starting it, not partway through
+
+Parts 0, 1 and 3 plus the load are **one atomic unit** — a half-built clone is not a shippable state.
+Part 2 (the season selector + catalog flattening) is the only piece that is frontend-only, not required
+by the Gate A deadline, and reversible in isolation. **So it is the release valve, and this brief names it
+as such rather than leaving it to mid-session judgement.**
+
+- **Commit map for the 3-commit cap:** (1) the rename · (2) the generator + the `--emit` RLS change ·
+  (3) the load, the `DEMO_LEAGUE_ID` repoint, and docs.
+- **If Part 2 does not fit, it becomes S2e** — and its ordering constraint is already satisfied by then,
+  because the demo will have its own lineage. **Decide before starting Part 2. A half-removed season
+  selector is worse than an untouched one.**
+
+## 3. Names — realistic, NOT `DEMO-OWNER-01`. Both of you are right about different things.
+
+**Will is right that collision with a real Sleeper handle is not a real problem.** It is a display string
+in a demo league; nothing links to a real account and nobody is harmed.
+
+**Code is right that an absence check is weak.** "Grep for the ten known real names, find zero" only
+proves those ten are gone — it cannot prove a name that was missed is not still there. That is this
+project's own *a refusal alone proves nothing*, correctly applied.
+
+**But the total check comes from the MAP, not from the format**, and that costs the product nothing:
+
+> Every `owner_name` and team name in the clone must appear in the **value set** of the committed map, and
+> no value may equal any key. That is a **positive, total** assertion — strictly stronger than a
+> `^DEMO-OWNER-\d+$` regex, because it also proves the mapping was applied rather than merely that
+> something got renamed.
+
+So: **realistic display names stand** (the clone brief's rule — a demo that reads as a mock-up answers the
+trust question the wrong way, and this *is* the landing page), and the verification gets stronger, not
+weaker.
+
+**Where Code's instinct is right and stays:** the **identifiers**. `DEMO-2025` and lineage `DEMO` are
+internal, never displayed, and being obviously non-Sleeper means anything that mistakes them for a real
+league id fails visibly. **Synthetic-looking ids, realistic display names — split by whether a human sees
+it.**
+
+## 4. The outage — Will is right; run it when ready. But TIME it.
+
+**The PM's "pick a window" was ceremony imported from a context with users.** There are none, the app
+scales to zero and is cold most of the time anyway, and there is no SLA. Running it as soon as it is ready
+is not merely acceptable — it is **better than waiting**, because Will's 2026 league is not loaded yet, so
+the store is smaller and no data he cares about is in the blast radius.
+
+**What survives is one line of measurement:** record **how long the site was down**, in the report and in
+`context/OPERATIONS.md`. Not because today's outage matters — it does not — but because that number is
+what you want at Week 1, when a re-load might be needed with real people on the site. Measuring it now is
+free; learning it then is not.
