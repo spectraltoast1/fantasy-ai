@@ -152,17 +152,17 @@ body {
 .gr-tab.active { background: var(--violet); color: var(--on-violet); }
 .gr-tab-icon { display: inline-flex; }
 
-/* Season + week switchers + avatar (right). The two selectors share the one `week` grid slot. */
+/* Week switcher + avatar (right). The season switcher shared this `week` grid slot until P5/S2e
+   removed it, taking `.gr-season` with it. */
 .gr-controls { grid-area: week; display: flex; align-items: center; gap: 14px; }
 .gr-week { display: flex; align-items: center; gap: 8px; }
-.gr-season { display: flex; align-items: center; gap: 8px; }
 .gr-week-label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
-.gr-week select, .gr-season select {
+.gr-week select {
   background: var(--surface); color: var(--text);
   border: 1px solid var(--border-2); border-radius: var(--r-ctl);
   padding: 6px 10px; font-family: var(--mono); font-size: 12px; font-weight: 500; cursor: pointer;
 }
-.gr-week select:hover, .gr-season select:hover { border-color: var(--violet-border); }
+.gr-week select:hover { border-color: var(--violet-border); }
 .gr-avatar {
   grid-area: avatar;
   width: 30px; height: 30px; border-radius: var(--r-pill);
@@ -614,16 +614,10 @@ body {
   position: relative; height: 412px; background: var(--map-well);
   border: 1px solid var(--border); border-radius: 14px; overflow: hidden;
 }
-.lg-map-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
-.lg-map-onpace {
-  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%) rotate(-45deg);
-  font-size: 9px; letter-spacing: 0.16em; color: var(--faint);
-}
-.lg-map-corner { position: absolute; font-size: 9.5px; letter-spacing: 0.06em; }
-.lg-map-corner.tl { left: 14px; top: 12px; }
-.lg-map-corner.tr { right: 14px; top: 12px; }
-.lg-map-corner.bl { left: 14px; bottom: 26px; }
-.lg-map-corner.br { right: 14px; bottom: 26px; }
+/* The quadrant wash, the "on pace" diagonal and its four corner labels were deleted in P5/S2e
+   along with their rules (.lg-map-svg, .lg-map-onpace, .lg-map-corner) — they drew a comparison
+   between two axes that are not the same unit. The dots and the axis label are measurements
+   and stay. */
 .lg-map-axis {
   position: absolute; left: 0; right: 0; bottom: 8px; text-align: center;
   font-size: 8px; letter-spacing: 0.14em; color: var(--faint);
@@ -747,7 +741,7 @@ body {
    Gridiron Mobile mockup: a 2-row top header + fixed bottom tab bar, vertical
    stacks, full-screen details, and tap-through Matchups.
    ============================================================================ */
-/* The desktop topbar (brand · league · 4 tabs · season · week · avatar) needs ~1080px to breathe;
+/* The desktop topbar (brand · league · 4 tabs · week · avatar) needs ~1080px to breathe;
    below that it goes to the polished 2-row layout with a bottom tab bar. */
 @media (max-width: 1024px) {
   /* No sideways scroll — wide content scrolls inside its own container, not the page. */
@@ -777,13 +771,13 @@ body {
   .gr-league-name, .gr-league-select { font-size: 15px; max-width: none; }
   .gr-league-meta { font-size: 11px; }
   .gr-controls { flex-direction: row; gap: 8px; justify-self: end; }
-  .gr-week, .gr-season {
+  .gr-week {
     flex-direction: column; align-items: flex-start; gap: 2px;
     border: 1px solid var(--border-2); border-radius: var(--r-ctl);
     background: var(--surface); padding: 7px 12px;
   }
   .gr-week-label { font-size: 8.5px; }
-  .gr-week select, .gr-season select {
+  .gr-week select {
     border: none; background: transparent; padding: 0; font-size: 15px; font-weight: 700;
   }
 

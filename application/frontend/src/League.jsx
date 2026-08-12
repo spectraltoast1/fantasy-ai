@@ -2,11 +2,12 @@ import React, { useEffect, useState } from 'react';
 import { loadLeague, loadPositionalTalent, POS } from './queries.js';
 import { Sparkline } from './charts.jsx';
 import { Gate, REGIME, MarketOff, marketOn, hasShape } from './readiness.jsx';
+import { fmtOdds, magicLine } from './format.js';
 
 // League surface — "whole league at a glance". A full-width Your Race band over a
 // 3-column dashboard: Playoff Picture · Posture Map · Positional Talent. Pure renderer:
 // everything comes assembled from loadLeague (which reuses loadStandings — one source for
-// records/odds/posture across Teams and League). Rows/dots drill to Team detail.
+// records/odds across Teams and League). Rows/dots drill to Team detail.
 
 export default function League({ asOfWeek, weeks, panels, onOpenTeam }) {
   const [data, setData] = useState(null);
@@ -71,7 +72,7 @@ function YourRace({ data, weeks, onOpenTeam }) {
       <div className="lg-race-odds" onClick={() => onOpenTeam?.(me.rosterId)}>
         <div className="lg-race-label gr-label">Your Race</div>
         <div className="lg-race-big">
-          <span className="lg-race-pct mono">{me.playoffPct != null ? `${Math.round(me.playoffPct)}%` : '—'}</span>
+          <span className="lg-race-pct mono">{fmtOdds(me.playoffPct) ?? '—'}</span>
           {shape && me.posture ? (
             <span className="lg-race-posture" style={{ color: me.posture.tone, background: chipBg(me.posture.tone) }}>
               {me.posture.label}
@@ -128,11 +129,14 @@ function PlayoffPicture({ data, weeks, onOpenTeam }) {
                 {t.name}
                 {t.isMe ? <span className="pl-you">YOU</span> : null}
               </span>
-              <span className="lg-pp-magic mono">{(shape ? magicLine(t.magicWins, t.remainingGames) : null) ?? ''}</span>
+              {/* The same value the your-team panel renders — so it takes the same treatment.
+                  It rendered '' here and '—' there until S2e, which is how a null magic number
+                  came to look like a broken cell beside nine populated ones. */}
+              <span className="lg-pp-magic mono">{(shape ? magicLine(t.magicWins, t.remainingGames) : null) ?? '—'}</span>
             </div>
             <div className="lg-pp-odds">
               <Sparkline values={t.oddsSeries} color={t.posture ? t.posture.tone : 'var(--violet)'} width={54} height={16} />
-              <span className="lg-pp-pct mono">{t.playoffPct != null ? `${Math.round(t.playoffPct)}%` : '—'}</span>
+              <span className="lg-pp-pct mono">{fmtOdds(t.playoffPct) ?? '—'}</span>
             </div>
           </div>
           {playoffCut != null && t.rank === playoffCut ? (
@@ -148,13 +152,20 @@ function PlayoffPicture({ data, weeks, onOpenTeam }) {
   );
 }
 
-// Posture Map — the luck-vs-performance quadrant (contract §4.2 + §5). X = standing
-// (playoff odds), Y = true record (all-play %, inverted so strong sits at top). The
-// diagonal is the "on pace" line: above it a roster performs above its standing (buy),
-// below it a roster is standing above its performance (sell). One dot per team, colored by
-// the same posture read as the standings; a dot drills to Team detail.
+// Posture Map — one dot per team. X = standing (playoff odds), Y = true record (all-play %,
+// inverted so strong sits at top). A dot drills to Team detail.
+//
+// The INTERPRETATION was removed in P5/S2e and the plot kept. It used to draw an "on pace"
+// diagonal with buy/sell quadrants, reading distance from that diagonal as luck — but playoff
+// odds and all-play % are not the same unit (odds saturate toward 0 and 100, all-play
+// compresses toward 50), so the gap measured the shape of the odds curve, not luck. Measured
+// 2026-08-12 on the live demo: BAND = 9 and the smallest |gap| in the league is 12.0, so every
+// team read Riding luck or Unlucky, Contender/Rebuild/On pace were unreachable, and the best
+// team by BOTH axes was told to sell. The dot POSITIONS are true measurements and stay; the
+// diagonal, the quadrants and the corner labels asserted a comparison that does not hold.
+// Fixing the metric is its own measured session — see STATUS. `posture` is not served today.
 function PostureMap({ data, weeks, onOpenTeam }) {
-  const dots = data.standings.filter((t) => t.playoffPct != null && t.posture);
+  const dots = data.standings.filter((t) => t.playoffPct != null && t.allPlayPct != null);
   return (
     <div className="lg-panel">
       <div className="lg-panel-head">
@@ -166,16 +177,6 @@ function PostureMap({ data, weeks, onOpenTeam }) {
           Gate the plot and its caption together rather than drawing an empty chart. */}
       <Gate regime={REGIME.TREND} weeks={weeks} label="The posture map">
       <div className="lg-map-well">
-        <svg className="lg-map-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
-          <polygon points="9,9 91,9 9,91" fill="color-mix(in srgb, var(--unlucky) 6%, transparent)" />
-          <polygon points="91,9 91,91 9,91" fill="color-mix(in srgb, var(--ridingluck) 5%, transparent)" />
-          <line x1="9" y1="91" x2="91" y2="9" stroke="var(--faint)" strokeWidth="1" strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />
-        </svg>
-        <div className="lg-map-onpace mono">ON PACE</div>
-        <div className="lg-map-corner tl mono" style={{ color: 'var(--unlucky)' }}>◤ UNLUCKY · buy</div>
-        <div className="lg-map-corner tr mono" style={{ color: 'var(--contender)' }}>CONTENDER ◥</div>
-        <div className="lg-map-corner bl mono" style={{ color: 'var(--rebuild)' }}>◣ REBUILD</div>
-        <div className="lg-map-corner br mono" style={{ color: 'var(--ridingluck)' }}>RIDING LUCK · sell ◢</div>
         <div className="lg-map-axis mono">STANDING · PLAYOFF ODDS →</div>
         {dots.map((t) => (
           <div
@@ -183,20 +184,21 @@ function PostureMap({ data, weeks, onOpenTeam }) {
             className="lg-map-dot"
             style={{ left: `${9 + (t.playoffPct / 100) * 82}%`, top: `${9 + ((100 - t.allPlayPct) / 100) * 82}%` }}
             onClick={() => onOpenTeam?.(t.rosterId)}
-            title={`${t.name} · ${Math.round(t.playoffPct)}% odds · ${Math.round(t.allPlayPct)}% all-play`}
+            // All-play is a realized record — 0 of 45 really is 0% — so it rounds plainly.
+            // Playoff odds are an estimate and take the hedged formatter.
+            title={`${t.name} · ${fmtOdds(t.playoffPct)} odds · ${Math.round(t.allPlayPct)}% all-play`}
           >
             <span
               className={`lg-map-pt ${t.isMe ? 'me' : ''}`}
-              style={{ background: t.posture.tone, boxShadow: `0 0 0 3px ${ring(t.posture.tone)}` }}
+              style={{ background: 'var(--violet)', boxShadow: `0 0 0 3px ${ring('var(--violet)')}` }}
             />
             <span className="lg-map-short mono">{shortName(t.name)}</span>
           </div>
         ))}
       </div>
       <p className="lg-map-cap">
-        Off-diagonal is the read: <span style={{ color: 'var(--unlucky-l)' }}>top-left</span> wins less
-        than it should (buy), <span style={{ color: 'var(--ridingluck)' }}>bottom-right</span> wins more
-        than it should (sell).
+        Each team by playoff odds and true record. Strong on both sits top-right; strong on
+        neither, bottom-left.
       </p>
       </Gate>
     </div>
@@ -287,11 +289,6 @@ function shortName(name) {
   return (n.split(/\s+/)[0] || n).slice(0, 6).toUpperCase();
 }
 
-// Magic number → a manager-facing line from bracket_odds' magic_wins + remaining_games.
-function magicLine(magicWins, remainingGames) {
-  if (magicWins == null || remainingGames == null) return null;
-  if (magicWins <= 0) return 'Clinched a spot';
-  if (magicWins > remainingGames) return 'Needs help to clinch';
-  if (magicWins === remainingGames) return 'Must win out';
-  return `Clinch in ${magicWins} of next ${remainingGames}`;
-}
+// `magicLine` and `fmtOdds` moved to format.js in P5/S2e — two views render each of them, and
+// they are the two strings this screen was overstating, so they are gated by
+// `check_league_copy.mjs` rather than living inline here.

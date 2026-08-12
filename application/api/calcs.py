@@ -1,7 +1,11 @@
-"""Pure calculations ported from the front-end seam (``queries.js`` + ``posture.js``).
+"""Pure calculations ported from the front-end seam (``queries.js`` + the retired ``posture.js``).
 
 Byte-for-byte behavioural mirrors of the JavaScript, so each endpoint returns the same
 numbers the browser produces today. No data access — the reads live in ``reads.py``.
+
+``posture.js`` no longer exists — it was deleted with the DuckDB-WASM client, which makes this
+module the **single** home of the posture derivation rather than one of two mirrors. The
+references to it below are kept only as provenance for the constants.
 """
 
 from __future__ import annotations
@@ -30,7 +34,15 @@ SHAPE_LABEL = {"surplus": "SURPLUS", "adequate": "EVEN", "gap": "GAP"}
 
 
 def derive_posture(playoff_odds_pct: float, all_play_pct: float) -> dict:
-    """The posture read for one team. Both inputs 0-100. Mirrors posture.js exactly."""
+    """The posture read for one team. Both inputs 0-100.
+
+    **No callers as of P5/S2e — the read is withheld, not deleted.** ``reads.load_standings``
+    stopped serving it because ``gap`` subtracts two quantities that are not the same unit, which
+    made the label inverted for every league (the full measurement is in the note at that call
+    site). Held here because the session that fixes the metric starts from this function, and
+    ``BAND``/``LEVEL_CUT`` must be re-measured on whatever the new scale turns out to be — nine
+    points is meaningless against odds and plausible against win%.
+    """
     gap = all_play_pct - playoff_odds_pct  # + = performing above standing (buy window)
     level = (playoff_odds_pct + all_play_pct) / 2
 

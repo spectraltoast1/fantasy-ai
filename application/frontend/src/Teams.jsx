@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { loadStandings } from './queries.js';
 import { Sparkline } from './charts.jsx';
 import { Gate, REGIME, hasShape } from './readiness.jsx';
+import { fmtOdds } from './format.js';
 
 // Teams surface — the standings table. Ranked by playoff odds, each row carries the real
 // record, the all-play "true record", a posture chip (the shared §5 derivation), and the
@@ -113,4 +114,7 @@ export default function Teams({ asOfWeek, weeks, onOpenTeam }) {
 // `var(--x)` token; color-mix keeps one source of truth for the hue.
 const chipBg = (tone) => `color-mix(in srgb, ${tone} 13%, transparent)`;
 
-const fmtPct = (v) => (v == null ? <span className="pl-empty">—</span> : `${Math.round(v)}%`);
+// Playoff odds carry the hedged formatter (P5/S2e) — this cell used to print "0%" for a team at
+// 0.3%, which reads as mathematically eliminated. The absent-state span stays local; only the
+// number rule is shared.
+const fmtPct = (v) => fmtOdds(v) ?? <span className="pl-empty">—</span>;

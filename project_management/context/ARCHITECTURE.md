@@ -138,8 +138,13 @@ fallback, so the band is the honest, wide, position-typical prior until games sh
 ## Multi-league / multi-user (current state)
 
 - **Multi-league** — live: the store is fully keyed, every read is parameterized on `league_id`(+`season`),
-  and the SPA has league + season selectors (from `/api/leagues`). The 31 corpus slices all remain in the
-  database as engineering fixtures; since S2a the **public catalog** is one league.
+  and the SPA has **league + week** selectors (the league one from `/api/leagues`). The 31 corpus slices all
+  remain in the database as engineering fixtures; since S2a the **public catalog** is one league. **The
+  catalog payload is FLAT since S2e** — one entry per visible (league, season), season on the row. The
+  lineage→seasons tree existed only to feed a **season selector, which is gone**: prior seasons are corpus,
+  not product. It loses nothing, because `visible` already admits at most one season per lineage (a lineage
+  is one league across years; the owned term requires `season == current`, the demo term names one
+  `league_id`). `season` is still carried on every request — inert, never a SQL filter.
 - **Ownership + visibility — live (P5/S2a).** Visibility is one predicate, in one function
   (`reads.visible`): `visible(league) = (league_id == DEMO_LEAGUE_ID) OR (owned by caller AND season ==
   current)`. Ownership is `public.user_leagues` (`user_id` × `league_id`, cascading off `auth.users`), written

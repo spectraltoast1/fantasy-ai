@@ -4,6 +4,7 @@ import { TrendLine, DepthBar, WinProbBar } from './charts.jsx';
 import { POS_COLORS } from './posColors.js';
 import { IconShieldCheck } from './icons.jsx';
 import { marketOn } from './readiness.jsx';
+import { fmtOdds } from './format.js';
 
 // Team detail (drill-down from the standings). Consumes the assembled object from
 // queries.loadTeamDetail: 4 stat blocks, the this-week matchup bar, positional depth per
@@ -11,7 +12,11 @@ import { marketOn } from './readiness.jsx';
 // player. Pure renderer. The this-week bar drills into the full matchup detail (Matchups slice).
 
 export default function TeamDetail({ rosterId, asOfWeek, panels, onOpenPlayer, onOpenDossier, onOpenMatchup }) {
-  const [team, setTeam] = useState(null);
+  // `undefined` = in flight, `null` = the server said there is no such roster, an object = data.
+  // Three states, because the API legitimately answers `200 null` for an unknown roster and this
+  // used to seed with `null` — so success-with-nothing and still-loading were the same value, and
+  // the panel spun for ever (filed in P5/S2b, fixed in S2e).
+  const [team, setTeam] = useState(undefined);
   const [err, setErr] = useState(null);
   const [metric, setMetric] = useState('prod'); // 'prod' | 'mkt'
 
@@ -22,10 +27,10 @@ export default function TeamDetail({ rosterId, asOfWeek, panels, onOpenPlayer, o
 
   useEffect(() => {
     let live = true;
-    setTeam(null);
+    setTeam(undefined);
     setErr(null);
     loadTeamDetail(rosterId, asOfWeek)
-      .then((t) => live && setTeam(t))
+      .then((t) => live && setTeam(t ?? null))
       .catch((e) => live && setErr(e));
     return () => {
       live = false;
@@ -33,7 +38,8 @@ export default function TeamDetail({ rosterId, asOfWeek, panels, onOpenPlayer, o
   }, [rosterId, asOfWeek]);
 
   if (err) return <div className="gr-state error">Could not load team.<pre>{String(err.message ?? err)}</pre></div>;
-  if (!team) return <div className="gr-state">Loading…</div>;
+  if (team === undefined) return <div className="gr-state">Loading…</div>;
+  if (team === null) return <div className="gr-state">No such team in this league.</div>;
 
   const s = team.stats;
   return (
@@ -55,7 +61,7 @@ export default function TeamDetail({ rosterId, asOfWeek, panels, onOpenPlayer, o
       <div className="td-stats">
         <Stat label="Record" value={s.record} />
         <Stat label="True Rec" value={s.trueRec} sub="all-play" />
-        <Stat label="Playoff %" value={s.playoffPct != null ? `${Math.round(s.playoffPct)}%` : '—'} sub={s.seed != null ? `seed ${s.seed}` : null} />
+        <Stat label="Playoff %" value={fmtOdds(s.playoffPct) ?? '—'} sub={s.seed != null ? `seed ${s.seed}` : null} />
         <Stat label="Pts / Wk" value={s.ptsWk != null ? s.ptsWk.toFixed(1) : '—'} />
       </div>
 

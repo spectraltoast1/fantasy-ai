@@ -81,26 +81,29 @@ def _catalog(owned=(), current_season=2025, demo=DEMO, builder=None):
 
 
 def _ids(catalog) -> list[str]:
-    """Every visible league_id, in catalog order — the thing the SPA actually navigates."""
-    return [s["league_id"] for lg in catalog["leagues"] for s in lg["seasons"]]
+    """Every visible league_id, in catalog order — the thing the SPA actually navigates.
+
+    One level since P5/S2e: the catalog is flat, so a league IS an entry rather than a season
+    nested under a lineage. This helper is the reason the shape change is one edit and not
+    fifteen — every assertion in this file reads the catalog through it.
+    """
+    return [lg["league_id"] for lg in catalog["leagues"]]
 
 
 # --- the pre-S2a behaviour, for prove-it-bites ----------------------------------------------
 
 def _unscoped_builder(rows, weeks_by, cross_time_by, *, demo_league_id, owned, current_season):
-    """What `load_leagues` did before S2a: every row, is_mine first, caller ignored entirely."""
-    lineages: dict = {}
-    order: list = []
-    for r in rows:
-        key = r["lineage_id"]
-        if key not in lineages:
-            lineages[key] = {"lineage_id": key, "name": r["name"], "scoring_key": r["scoring_key"],
-                             "is_mine": bool(r["is_mine"]), "seasons": []}
-            order.append(key)
-        lineages[key]["seasons"].append({"season": int(r["season"]), "league_id": r["league_id"],
-                                         "weeks_available": [], "viewer_roster_id": None,
-                                         "panels": {}})
-    leagues = [lineages[k] for k in order]
+    """What `load_leagues` did before S2a: every row, is_mine first, caller ignored entirely.
+
+    Emitted in the CURRENT (flat, P5/S2e) shape on purpose. This stands in for the old
+    *visibility* behaviour so the ownership checks can be shown to fail without it; dressing it in
+    the old *payload* shape too would make `_ids` fail for the wrong reason, and a prove-it-bites
+    that passes because the helper crashed proves nothing.
+    """
+    leagues = [{"lineage_id": r["lineage_id"], "league_id": r["league_id"],
+                "season": int(r["season"]), "name": r["name"], "scoring_key": r["scoring_key"],
+                "is_mine": bool(r["is_mine"]), "weeks_available": [], "viewer_roster_id": None,
+                "panels": {}} for r in rows]
     leagues.sort(key=lambda lg: not lg["is_mine"])
     return {"leagues": leagues}
 
@@ -341,12 +344,26 @@ def check_never_empty_or_duplicated(builder=None) -> None:
     else:
         _fail(f"duplicate entries when the demo is also owned: {ids}")
 
-    seasons = [s["season"] for lg in _catalog(owned={A_LEAGUE, A_PRIOR}).get("leagues", [])
-               for s in lg["seasons"]]
-    if seasons == sorted(seasons, reverse=True):
-        _ok("seasons stay DESC (the SPA's `latestSeason` takes seasons[0])")
+    # Replaces the old "seasons stay DESC" check, which existed because the SPA's `latestSeason`
+    # took seasons[0]. P5/S2e removed the season selector and flattened the catalog, so that
+    # helper is gone — and this is the invariant the flat shape actually rests on. A lineage is
+    # one league across years; if `visible` ever admitted two of its seasons at once, the flat
+    # catalog would list the same league NAME twice in the switcher with no way to tell them
+    # apart. A owns Trap 2025 AND Trap 2024, so this fixture is exactly that case.
+    cat = _catalog(owned={A_LEAGUE, A_PRIOR}, builder=builder)
+    lineages = [lg["lineage_id"] for lg in cat["leagues"]]
+    if len(lineages) == len(set(lineages)):
+        _ok(f"each lineage appears at most ONCE — the premise the flat catalog rests on: {lineages}")
     else:
-        _fail(f"seasons are not DESC: {seasons}")
+        _fail(f"a lineage appears twice, so the league switcher shows one name twice: {lineages}")
+
+    # The season did not vanish with the nesting; it moved onto the row. The reads still receive
+    # it (inert, but carried), so a catalog entry without one would break the slice the SPA builds.
+    missing = [lg["league_id"] for lg in cat["leagues"] if lg.get("season") is None]
+    if not missing:
+        _ok("every flat entry still carries its season")
+    else:
+        _fail(f"catalog entries with no season: {missing}")
 
 
 # --- the override cannot come from a request ------------------------------------------------

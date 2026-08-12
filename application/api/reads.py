@@ -526,7 +526,10 @@ def _all_play_record(by_week, rid):
 
 
 def load_standings(as_of_week=None, league_id=None, season=None, viewer_roster_id=None) -> list[dict]:
-    """The Teams standings: record + all-play + playoff odds/series + posture. Mirrors loadStandings (l.278)."""
+    """The Teams standings: record + all-play + playoff odds/series. Mirrors loadStandings (l.278).
+
+    No `posture` since P5/S2e — see the note at the row build below.
+    """
     lid = _require_league(league_id)
     viewer = resolve_viewer(lid, viewer_roster_id)
     p = _params(as_of_week, lid=lid)
@@ -604,7 +607,24 @@ def load_standings(as_of_week=None, league_id=None, season=None, viewer_roster_i
             "magicWins": int(last["magic_wins"]) if last and last["magic_wins"] is not None else None,
             "remainingGames": int(last["remaining_games"]) if last and last["remaining_games"] is not None else None,
             "oddsSeries": o["series"] if o else [],
-            "posture": calcs.derive_posture(playoff_pct, all_play_pct) if playoff_pct is not None else None,
+            # `posture` is WITHHELD as of P5/S2e — the key is absent, not null, because we are not
+            # failing to compute it, we are declining to serve it. `calcs.derive_posture` stays put
+            # for the session that fixes the metric.
+            #
+            # Measured 2026-08-12 on the live demo, and it is inverted for EVERY league, not just
+            # this one: `gap = all_play_pct - playoff_odds_pct` compares two quantities that are not
+            # the same unit — odds saturate toward 0 and 100 while all-play compresses toward 50 —
+            # so the gap tracks the shape of the odds curve rather than luck. With BAND = 9 and the
+            # smallest |gap| in the league at 12.0, every team read Riding luck or Unlucky,
+            # Contender/Rebuild/On pace were unreachable, and the highest all-play team in the
+            # league was labelled sell. That is a correctness defect, not a calibration one, so
+            # retuning BAND cannot fix it and this is a withholding rather than a retune.
+            #
+            # One line closes it everywhere: this is derive_posture's only caller, and it reaches
+            # both /api/standings and /api/league (which nests the same object again under `me`).
+            # It also retires a latent — nothing here gates on season shape, so an all-play record
+            # of 0/0 coerces to 0 above and manufactured "Riding luck" at week 0/1; only the
+            # client's `hasShape` was holding that back, and two colour sites bypassed it.
         })
 
     # Rank by playoff odds desc (nulls -> -1), then all-play % as the tiebreak.
@@ -1230,33 +1250,30 @@ def authorize_slice(league_id, season, viewer_roster_id, *, user_id, demo_league
 def build_catalog(rows, weeks_by, cross_time_by, *, demo_league_id, owned, current_season) -> dict:
     """Shape + filter + order the catalog. Pure, so ``check_ownership`` can drive it with fixtures.
 
-    Ordering is not cosmetic: the SPA lands on ``leagues[0]`` and its latest season, so **a
-    caller's own leagues come first and the demo last** is what makes a signed-in user with a
-    league land on THEIR league instead of the demo. Seasons stay DESC for the same reason.
+    **FLAT since P5/S2e — one entry per visible (league, season), no lineage→seasons nesting.**
+    The nesting existed to feed a season selector, and that selector is gone: prior seasons are
+    corpus, not product. Flattening is safe rather than lossy, because ``visible`` already admits
+    at most one season per lineage — a lineage is one league across years, and the owned term
+    requires ``season == current_season`` while the demo term names a single ``league_id``. So the
+    nested shape could only ever hold one season per lineage anyway.
+
+    ``lineage_id`` stays on the row. It is the stable identity across years, and the ordering rule
+    below is expressed in terms of it.
+
+    Ordering is not cosmetic: the SPA lands on ``leagues[0]``, so **a caller's own leagues come
+    first and the demo last** is what makes a signed-in user with a league land on THEIR league
+    instead of the demo. The SQL's ``ORDER BY lineage_id, season DESC`` is preserved underneath,
+    so a caller with more than one league gets a stable order rather than an arbitrary one.
     """
     # `owned` is a {league_id: roster_id} map in production and may be a bare set of ids in a
     # fixture; normalise so the seat lookup below works either way.
     seats = owned if isinstance(owned, dict) else {str(x): None for x in owned}
 
-    lineages: dict = {}
-    order: list = []
-    owned_lineages: set = set()
+    leagues: list = []
     for r in rows:
         if not visible(r["league_id"], r["season"], demo_league_id=demo_league_id,
                        owned=owned, current_season=current_season):
             continue
-        key = r["lineage_id"]
-        if key not in lineages:
-            lineages[key] = {
-                "lineage_id": r["lineage_id"],
-                "name": r["name"],
-                "scoring_key": r["scoring_key"],
-                "is_mine": bool(r["is_mine"]),
-                "seasons": [],
-            }
-            order.append(key)
-        if str(r["league_id"]) in owned:
-            owned_lineages.add(key)
         # The seat the CALLER should occupy, which is why this is a user × league property now
         # (P5/S2b). Their grant wins over the manifest's league-wide default; without this the
         # `roster_id` column could never take effect through the UI, because the client sends back
@@ -1264,9 +1281,13 @@ def build_catalog(rows, weeks_by, cross_time_by, *, demo_league_id, owned, curre
         seat = seats.get(str(r["league_id"]))
         if seat is None:
             seat = r["viewer_roster_id"]
-        lineages[key]["seasons"].append({
-            "season": int(r["season"]),
+        leagues.append({
+            "lineage_id": r["lineage_id"],
             "league_id": r["league_id"],
+            "season": int(r["season"]),
+            "name": r["name"],
+            "scoring_key": r["scoring_key"],
+            "is_mine": bool(r["is_mine"]),
             "weeks_available": weeks_by.get((r["league_id"], int(r["season"])), []),
             "viewer_roster_id": int(seat) if seat is not None else None,
             "panels": {
@@ -1276,11 +1297,10 @@ def build_catalog(rows, weeks_by, cross_time_by, *, demo_league_id, owned, curre
             },
         })
 
-    leagues = [lineages[k] for k in order]
     # Owned first, everything else (i.e. the demo) last; stable within each group. Replaces the
     # is_mine-first sort, which was a stand-in for "the viewer's league" back when there was only
-    # one viewer. A lineage that is BOTH owned and the demo counts as owned — it is your league.
-    leagues.sort(key=lambda lg: lg["lineage_id"] not in owned_lineages)
+    # one viewer. A league that is BOTH owned and the demo counts as owned — it is your league.
+    leagues.sort(key=lambda lg: str(lg["league_id"]) not in owned)
 
     if not leagues:
         # The SPA's only applySlice call is guarded by `if (lgs.length)`, so an empty catalog is
@@ -1303,8 +1323,9 @@ def load_leagues(user_id=None) -> dict:
 
     ``weeks_available`` is derived at query time from the loaded ``season`` (the PLAYED weeks — the
     same source ``load_weeks`` uses — so a frozen slice like is_mine 2025 reports [1..4], not the
-    schedule's full forward [1..18]). Name + viewer mirror the manifest exactly. Shape is unchanged
-    from the B3 contract; only the row set and the ordering move.
+    schedule's full forward [1..18]). Name + viewer mirror the manifest exactly. The shape is FLAT
+    as of P5/S2e — the B3 contract's lineage→seasons tree existed for the season selector, which
+    is gone; see ``build_catalog``.
 
     ``panels.market`` is the ONE flag not taken straight from the manifest — see ``_market_panel``.
     """

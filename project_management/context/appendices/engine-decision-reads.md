@@ -181,6 +181,23 @@ tension. This read is the **lens** that sets the risk appetite for how Outcome-S
 **Chosen:** Monte Carlo over expected-wins — it yields honest probabilities and captures variance
 (the law-2 confidence signal), at the cost of being the deepest computation in the spec.
 
+> **§5 status — checked 2026-08-12 (P5/S2e). The build had drifted from this spec, and the drift is
+> what broke.** The shipped code *did* compute a label: `api/calcs.derive_posture` scored
+> `gap = all_play_pct - playoff_odds_pct` against `BAND = 9` and stamped every standings row with
+> `Contender` / `Unlucky` / `On pace` / `Riding luck` / `Rebuild`. Measured on the live demo it was
+> **inverted for every league** — the two axes are not the same unit, so the gap tracked the shape of
+> the odds curve rather than luck, three of the five labels were unreachable, and the best team by
+> both measures was told to sell. S2e **withheld it**: the API no longer serves `posture`, and the
+> map keeps its scatter but loses the diagonal and the buy/sell quadrants — i.e. the surface is back
+> to *adjacency*, which is what this section specified all along.
+>
+> So the open question for the metric session is not only "which axes" but **whether a computed label
+> should exist at all** — this spec says it should not, and the one that was built is the concrete
+> evidence for why. If a label is wanted anyway, compare like with like (all-play % vs actual win %,
+> same unit, so the gap *is* luck) and re-measure `BAND`/`LEVEL_CUT` on that scale. `derive_posture`
+> is retained, callerless, for whoever picks this up. The rest of this appendix was **not**
+> re-verified in that session.
+
 ---
 
 ## 6. Positional Depth *(league read — the VOR read, re-sliced)*
