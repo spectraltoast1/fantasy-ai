@@ -1119,11 +1119,16 @@ SELECT 1 FROM teams WHERE league_id = %(lid)s AND roster_id = %(rid)s LIMIT 1
 # attacker-triggerable write amplification — and because a counter that fired on *unowned* but not
 # on *nonexistent* would rebuild the very timing oracle the single lookup above exists to prevent.
 # Both refusal branches increment it identically.
+#
+# READ IT AS A FLOOR (S2c audit). It is per-PROCESS and there are TWO Fly machines (measured
+# 2026-08-11, `fly scale show`), so this number is roughly half the real total and which half
+# depends on routing. That is a consequence of the in-process decision above, not a defect in it —
+# but a counter nobody knows is halved is a number that will eventually be quoted as if it weren't.
 _denied_reads = 0
 
 
 def denied_reads() -> int:
-    """How many slice requests have been refused since this process started."""
+    """Slice requests refused since this process started — a FLOOR: per-process, and two machines run."""
     return _denied_reads
 
 

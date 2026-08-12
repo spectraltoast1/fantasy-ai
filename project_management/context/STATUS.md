@@ -2,7 +2,7 @@
 
 **What this is:** SurplusFF — a fantasy-football decision-support dashboard whose unit is the manager's
 *decision*, not the player. Live, single-league, on the server stack.
-**Live at:** https://surplusff.com/ (also https://fantasy-ai-api.fly.dev/) · **Updated:** 2026-08-11
+**Live at:** https://surplusff.com/ (also https://fantasy-ai-api.fly.dev/) · **Updated:** 2026-08-12
 **Name + domain:** the official name is **SurplusFF**, commonly shortened to **Surplus** in speech and
 writing (Will, 2026-08-05); "Gridiron" was a working name — retire it. **surplusff.com** is registered
 (SSL live) and is
@@ -178,10 +178,22 @@ retired the pageview de-dupe); and the `email_confirm`-before-send question is d
 does not care, since an account confers nothing without an operator's grant.
 → `sessions/v1/P5-Self_Serve/SESSION_P5_S2C_REPORT.md` + *appendix: auth*.
 
-**Next: P5/S2d**, which has the nearer deadline: clone the demo away from Will's lineage **before** Gate A,
-then remove the season selector. It also inherits the **`--emit` RLS fix** (below), deliberately moved out of
-S2c: its prove-it-bites needs a `--load`, which DROPs tables on the one production database, so it is a
-scheduled event rather than a punch-list line. Two things still queue behind calendar
+**P5/S2d done — the demo is no longer Will's league.** It is now **`DEMO-2025` / "DEMO League"**: a
+GENERATED, anonymised clone of LoRP 2025 at week 5 — invented names, no `is_mine`, no viewer seat, so no
+"you" highlight and none of the ten real Sleeper handles that were on the landing page until today (swept:
+**0 hits across 51.5KB of live payload**). Generated, not inserted, so `--load` re-materialises it rather
+than it surviving only to the next schema change — the failure that cost `ros_player_band` its RLS; proven
+by regenerate + re-publish, **14/14 tables value-identical**. `--emit` now emits RLS for all **15** served
+tables and `--verify` asserts it. **Two checks state the layer split**: `check_matchup_result` 31 (engine),
+`build_db --verify` 32 (serve). The catalog TABLE is now **`league_catalog`**; the parquet keeps its name
+and its 31 frozen rows.
+→ `sessions/v1/P5-Self_Serve/SESSION_P5_S2D_REPORT.md`.
+
+**Next: P5/S2e** — remove the season selector and flatten the catalog's lineage→seasons grouping. Split out
+of S2d deliberately (it was that session's named release valve, and the commit map had no slot for it); its
+ordering constraint is now satisfied, because the demo has its own lineage. It is visibly pending: the
+demo has exactly one season, so the switcher currently offers one option. Frontend + catalog only —
+`season` is not a SQL filter anywhere. Two things still queue behind calendar
 gates, neither blocking P5: **loading the first real 2026 league** at Will's draft (~late Aug) — a manual admin load, not
 P5 — which data-proves S2's refresh, S3b's band panel and S4a's regimes at once and **must verify the
 ROS-range panel against real band data**; and **S4b** (market turn-on) post-launch.
@@ -192,22 +204,22 @@ ROS-range panel against real band data**; and **S4b** (market turn-on) post-laun
 The model is now code — the mechanism lives in `ARCHITECTURE.md` and `appendices/auth.md`, not here. One
 thing from that decision is still outstanding:
 
-- **The season selector still needs removing** (prior seasons are corpus, not product; `season` is not a SQL
-  filter anywhere, so it is frontend + catalog only). The **league** and **week** switchers stay. It moved
-  from S2b to **S2d** for a reason worth keeping: the demo *is* LoRP 2025 and LoRP is Will's own lineage, so
-  the catalog fuses them into one switcher entry the moment his 2026 league is onboarded — and removing the
-  selector then makes the demo unreachable from the one account that most needs to show it. **The clone has
-  to land first** (audit F3).
+- **The season selector still needs removing — now S2e, and now unblocked.** The **league** and **week**
+  switchers stay. Its blocker is cleared: the demo used to share Will's lineage, so removing the selector
+  would have made it unreachable from his account the moment his 2026 league landed (audit F3). S2d's clone
+  gave the demo its own `lineage_id`, so the ordering constraint is satisfied.
 - **The 31 corpus slices stay in the database** — engineering fixtures for `compute_demo_slices`,
   `build_demo_manifest`, B6's 31/31 and `check_scoped_reload`'s parity oracle. Only the public catalog
   shrank. Nothing was deleted.
 
-**The demo league becomes an anonymized clone** of LoRP 2025 at week 5 under a dedicated id, hard-excluded
-from every engine component — real computed data everywhere it exists (including a rest-of-season band
-computed at live constants into a *demo-only* file, never the frozen-corpus path), with the **AI outlook
-populated synthetically** and derived from real numbers until P4 ships. **P4 therefore moves ahead of P3**
-— it is the session that retires a placeholder a visitor can see.
-→ `sessions/v1/P5-Self_Serve/SESSION_P5_S2_OWNERSHIP_AND_ISOLATION.md` + `SESSION_P5_DEMO_LEAGUE_CLONE.md`.
+**The demo clone shipped in S2d** — real computed data everywhere it exists, identities fictional, and
+`is_synthetic()` keeps it invisible to every producer (the concrete hazard being `weekly_refresh` trying to
+fetch a league that does not exist on Sleeper). **Two pieces of the original clone brief did NOT ship and
+are deliberate:** the rest-of-season band (the clone is season 2025, below `FIRST_HONEST_BAND_SEASON`, so
+that panel is dark exactly as it was for the old demo) and the **synthetic AI outlook** — `ros_synthesis`
+has no 2025 file, so the panel is empty by construction. **P4 stays ahead of P3** and retires that
+placeholder for real.
+→ `sessions/v1/P5-Self_Serve/SESSION_P5_S2D_REPORT.md` + `SESSION_P5_DEMO_LEAGUE_CLONE.md`.
 
 ## Deferred / parked (not blocking; each picked up in its project)
 
@@ -246,13 +258,11 @@ populated synthetically** and derived from real numbers until P4 ships. **P4 the
   confidence tier, because asserting an unmeasured confidence is exactly how `ros_cv` shipped inverted.
   Note `bracket_odds.proj_wins` reaches **no client** today, so "playoff wins" has no surface to carry a
   signal until it does.
-- **`ros_player_band` has RLS disabled** while the other 13 served tables have it enabled (found in P5/S1) —
-  RLS was turned on by hand, then a later `--emit`/`--load` recreated that table without it. Zero practical
-  exposure today (the owner role bypasses RLS and the Data API is off), but it shows the general failure:
-  **any out-of-band property on a `schema.sql` table is destroyed by the next full load.** The durable fix is
-  to make `--emit` emit the `ALTER TABLE … ENABLE ROW LEVEL SECURITY` lines. **Moved out of S2c to S2d (or
-  its own slot):** proving it bites means re-running `--load`, which DROPs every table it names against the
-  single Supabase project that also serves production — a scheduled event, not a punch-list line.
+- ~~**`ros_player_band` has RLS disabled**~~ **CLOSED in P5/S2d.** `--emit` now emits
+  `ALTER TABLE … ENABLE ROW LEVEL SECURITY` for all 15 served tables and `--verify` asserts it, so the
+  general failure it exemplified — **any out-of-band property on a `schema.sql` table is destroyed by the
+  next full load** — is retired for RLS specifically. The count was also wrong: it was never "the other
+  13", it was 14 of 15 (measured 2026-08-11; `demo_manifest`/`league_catalog` was the unaccounted one).
 - **`weekly_refresh._resolve_scoring_key` would silently mis-score a stranger's league** (found in P5/S0).
   A league absent from `demo_manifest` falls back to `data_layer._active_league(season)[1]` — *the owner's*
   scoring key. Every user's league is absent from the catalog until the connect flow catalogs it, so this

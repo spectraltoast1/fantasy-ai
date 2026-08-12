@@ -49,7 +49,7 @@ fetchers → cache/ + snapshots/ → join → derived transforms (parquet) → b
 - **Load** — `application/data/serve/build_db.py` loads the derived parquet into Postgres. Two paths: a
   whole-DB **DROP+CREATE `--load`** (the full rebuild + the parity oracle's baseline), and a **per-league
   scoped reload** (`load_league` / `--reload-league`) — delete + re-COPY one league in a single transaction,
-  others + the `demo_manifest` catalog untouched, proven byte-parity-identical to the full load
+  others + the `league_catalog` untouched, proven byte-parity-identical to the full load
   (`serve/check_scoped_reload.py`). The scoped path is the in-season incremental unit.
 - **In-season refresh (P2/S2)** — `serve/weekly_refresh.py` advances one league to the current week:
   fetch (Sleeper current state + weekly nfl_stats + projections) → `join_nfl_sleeper_weekly` → rebuild the
@@ -61,7 +61,8 @@ fetchers → cache/ + snapshots/ → join → derived transforms (parquet) → b
 
 ## The store (Postgres)
 
-**14 tables + a `demo_manifest` catalog**, every row keyed `league_id` / `season` and indexed on its filter
+**14 tables + the `league_catalog`** (renamed from `demo_manifest` in S2d), all 15 carrying RLS emitted
+by `--emit`, every row keyed `league_id` / `season` and indexed on its filter
 columns: `season` (player×week), `teams`, `lineup_slots`, `league_settings`, `player_signal`,
 `production_vor`, `market_vor`, `ros_synthesis`, `bracket_odds`, `positional_depth`, `manager_dossiers`,
 `projection_consensus`, `ros_player_band`, `schedule`. The last two are **scoring-keyed** — NFL-global
@@ -115,7 +116,7 @@ ladder, keyed to **`weeksOfData`** — weeks with real RESULTS as of the viewed 
 because it hides a column or half a toggle. `Gate` no longer carries a catalog arm; no call site ever used it.
 
 **Panel gating.** `/api/leagues` carries a per-slice `panels` map the SPA gates on (`readiness.jsx`:
-`Gate`/`PanelOff`/`marketOn`). `manager` and `ros_synthesis` mirror `demo_manifest` directly. **`market` does
+`Gate`/`PanelOff`/`marketOn`). `manager` and `ros_synthesis` mirror `league_catalog` directly. **`market` does
 not**: it is the manifest's *structural* flag (does this slice have a `market_vor` read at all — kept
 structural because `build_db._ref()` selects its schema-reference league by it) **AND the read's own
 `is_cross_time`** (`reads._market_panel`). A cross-time read prices today's market against a past season's
@@ -144,7 +145,8 @@ fallback, so the band is the honest, wide, position-typical prior until games sh
   current)`. Ownership is `public.user_leagues` (`user_id` × `league_id`, cascading off `auth.users`), written
   today by `scripts/users.py --grant` and by S4's connect flow later. **`DEMO_LEAGUE_ID` is config, not a
   table** — one public league makes a table pure overhead, and repointing the demo at the anonymized clone
-  stays one line. **"Current season" is derived locally** (`settings.current_season`, S2c): the calendar
+  stays one line — and S2d used it: it now points at **`DEMO-2025`, a generated clone**, not at Will's
+  real league. **"Current season" is derived locally** (`settings.current_season`, S2c): the calendar
   year, or the year before it until **August 1** — a boundary that deliberately *leads* Sleeper's own flip,
   because flipping early drops last season's league from a catalog slightly sooner than necessary while
   flipping late hides a league somebody has just connected. It is pure, total and does no I/O, so nothing
@@ -175,7 +177,7 @@ fallback, so the band is the honest, wide, position-typical prior until games sh
   *find* another user's league; and **all eleven per-panel reads inherit the predicate**, so knowing a
   `league_id` is no longer enough to *read* one. One seam: `routes.slice_params` (the FastAPI adapter) over
   `reads.authorize_slice` (pure, injectable, so the isolation matrix runs from fixtures). Existence + season
-  come from `teams`, **not** `demo_manifest` — catalog membership used to double as the authorization
+  come from `teams`, **not** the catalog — catalog membership used to double as the authorization
   boundary, which held only while the manifest happened to contain exactly the demo set.
   **An unowned league is byte-identical to a nonexistent one** (same status, body and headers; the 404 detail
   is a constant that interpolates nothing) because a 403 — or any response that varies — confirms existence,
