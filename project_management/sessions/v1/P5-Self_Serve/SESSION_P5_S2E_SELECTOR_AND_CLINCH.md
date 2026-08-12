@@ -243,3 +243,100 @@ a dot that appears above the line may not actually be above it — and the whole
 
 **Also note:** this panel is gated behind `REGIME.TREND` in `readiness.jsx`, which is **shared with other
 panels** — so changing *when* it appears has blast radius beyond this map, unlike changing how it looks.
+
+---
+
+## The brief to paste to Code — S2e
+
+```
+Goal: V1 Project 5, Session S2e (projects/v1/P5_ACCOUNTS_SELF_SERVE_ONBOARDING.md) — the honesty pass on
+the League screen, plus the season selector S2d deferred. Five items. Frontend + ONE server line. No
+outage; nothing here needs a --load.
+
+Read first: sessions/v1/P5-Self_Serve/SESSION_P5_S2E_SELECTOR_AND_CLINCH.md (this brief — every item is
+decided, nothing is open), SESSION_P5_S2D_AUDIT.md, context/CODING_BIBLE.md, SESSION_GUIDE.md. Check the
+brief against observable reality before executing.
+
+Items 2-5 are ONE defect in four costumes: the UI asserting more certainty than the model has. They stack
+on the same row — rank 9 currently reads "0%, no path" when the truth is "0.3%, needs help".
+
+1. SEASON SELECTOR. Remove it from the frontend and flatten the catalog's lineage->seasons grouping.
+   Unblocked since S2d gave the demo its own lineage. `season` is not a SQL filter anywhere in the read
+   layer, so this is frontend + catalog shape and touches NO data path. The LEAGUE and WEEK switchers STAY.
+
+2. THE BLANK CLINCH LINE. League.jsx magicLine() returns null when magicWins is null; the team row renders
+   it `?? ''` (:131) while the your-team panel renders the same null `?? '—'` (:89). Same value, two
+   treatments. A null magicWins means "no number of wins guarantees a spot" — which is exactly what the
+   existing, currently-UNREACHABLE 'Needs help to clinch' branch says. Make it fire: if remainingGames is
+   known and magicWins is null -> 'Needs help to clinch'. `—` only when remainingGames is unknown too.
+   THEN CHECK whether `magicWins > remainingGames` was ever reachable. If the producer only ever signals
+   that case as null, that branch is dead — a condition that has never fired is untested, not correct.
+   Report which.
+
+3. PLAYOFF ODDS — integers, with <1% and >99% at the ends. Math.round is at League.jsx:74, :135, :186, so
+   0.3% currently prints as 0%, which reads as mathematically eliminated.
+     0 < p < 1  -> "<1%"      1 <= p <= 99 -> the integer      p > 99 -> ">99%"
+   A sim result of 0 is ALSO "<1%": 0 out of 10,000 means "did not occur in ten thousand tries" (below
+   ~0.03%), NOT eliminated. Never print 0% or 100%.
+
+4. THE MAGIC-LINE LABEL SET (copy, not math — do NOT retune MAGIC_ODDS; it is a measured constant):
+     magicWins <= 0                        -> "Likely a playoff team"
+     0 < magicWins < remainingGames        -> "X of the next Y should clinch a spot"
+     magicWins == remainingGames           -> "Has to win out"
+     magicWins null, remainingGames known  -> "Needs help to clinch"
+     remainingGames unknown                -> "—"
+   NOTE the existing `magicWins <= 0 -> 'Clinched a spot'` branch MUST GO. That string is the SIMULATION
+   asserting a certainty. MAGIC_ODDS is 0.90 and the engine itself calls the value a "magic-number proxy",
+   so "Clinch" overstates it by construction. Clinched/Eliminated may only ever come from real bracket
+   math — which does not exist, and Will has DEFERRED building it. Do not build it.
+
+5. WITHHOLD `posture`. It is INVERTED for EVERY league (not just the demo): BAND=9 and the smallest |gap|
+   in the live league is 12.0, so every team is Riding luck or Unlucky and Contender/Rebuild/On pace are
+   unreachable. The label is the playoff line relabelled, and the best team by both measures is told to
+   sell. Cause: playoff odds and all-play % are not the same unit. This session WITHHOLDS it; fixing the
+   metric is its own measured session — do NOT attempt it here, and do not retune BAND/LEVEL_CUT.
+   It renders in FOUR places: League.jsx:75-77 (Your Race chip), :134 (sparkline COLOUR), :157-190 (the
+   map), Teams.jsx:82-87 (chip on every Teams row).
+   - Cleanest: ONE server switch — stop serving `posture` from reads.py:607. Three of the four sites
+     already null-guard and degrade correctly (chips vanish; the sparkline falls back to var(--violet)).
+     VERIFY that rather than trusting it.
+   - The MAP needs handling, because an empty chart is what PanelOff's own docstring says not to draw.
+     Will chose: KEEP THE SCATTER, DROP THE INTERPRETATION. Teams still plot by odds x all-play. DELETE
+     the diagonal, the quadrant polygons, the four corner labels (UNLUCKY/CONTENDER/REBUILD/RIDING LUCK)
+     and the buy/sell language. The dot POSITIONS are true; the interpretation was not.
+   - Replace the caption entirely (the current one is written end-to-end about off-diagonal reads):
+       "Each team by playoff odds and true record. Strong on both sits top-right; strong on neither,
+        bottom-left."
+   - Use PanelOff (with its `note` override) if any slot is needed. Do NOT use Gate — that is the
+     readiness/weeks mechanism and would state the wrong reason: this panel is not too early, it is wrong.
+
+Prove it:
+- Every state of magicLine renders the right string, including the null case, driven by fixtures.
+- No served payload can produce "0%", "100%" or "Clinched a spot".
+- `posture` is absent from the API payload, and all four sites render sensibly without it — screenshot the
+  League and Teams surfaces signed out.
+- The season selector is gone; the LEAGUE and WEEK switchers still work; a league/week switch still
+  re-scopes every surface.
+- Parity: every read payload except `posture` and the catalog shape is value-identical.
+
+Scope guard — does NOT: fix the posture METRIC (its own measured session); retune MAGIC_ODDS, BAND or
+LEVEL_CUT; build clinch/elimination bracket math (deferred by Will); touch read scoping (done, S2a/S2b);
+touch any pipeline, transform, loader, engine constant, the store or the frozen corpus. No --load, no
+outage.
+
+Also fold in if cheap, else report: the two pre-existing client bugs S2b filed — TeamDetail and
+MatchupDetail spin forever on a legitimate `200 null`. And add SESSION_P5_S2C_AUDIT.md to the project
+doc's audit list.
+
+Follow SESSION_GUIDE.md: fresh worktree, <=3 commits, update STATUS.md + ARCHITECTURE.md per §7 (replace,
+don't append), then close/merge/push. Touches application/api/* and application/frontend/* — REDEPLOY and
+confirm live on https://surplusff.com/. Sweep .git for stale lock files at closedown.
+```
+
+## Will's checks after the deploy
+
+1. `https://surplusff.com/` signed out — the Playoff Picture bottom rows say **`<1%`**, not `0%`, and
+   **rank 9 has a sentence** like every other row.
+2. The Posture Map still shows every team as a dot, with **no diagonal and no buy/sell corners**, and no
+   posture chip anywhere on League or Teams.
+3. The **season selector is gone**; the league and week switchers still work.
