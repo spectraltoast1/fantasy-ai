@@ -4,6 +4,7 @@ import { TrendLine, DepthBar, WinProbBar } from './charts.jsx';
 import { POS_COLORS } from './posColors.js';
 import { IconShieldCheck } from './icons.jsx';
 import { marketOn } from './readiness.jsx';
+import { fmtOdds } from './format.js';
 
 // Team detail (drill-down from the standings). Consumes the assembled object from
 // queries.loadTeamDetail: 4 stat blocks, the this-week matchup bar, positional depth per
@@ -55,7 +56,7 @@ export default function TeamDetail({ rosterId, asOfWeek, panels, onOpenPlayer, o
       <div className="td-stats">
         <Stat label="Record" value={s.record} />
         <Stat label="True Rec" value={s.trueRec} sub="all-play" />
-        <Stat label="Playoff %" value={s.playoffPct != null ? `${Math.round(s.playoffPct)}%` : '—'} sub={s.seed != null ? `seed ${s.seed}` : null} />
+        <Stat label="Playoff %" value={fmtOdds(s.playoffPct) ?? '—'} sub={s.seed != null ? `seed ${s.seed}` : null} />
         <Stat label="Pts / Wk" value={s.ptsWk != null ? s.ptsWk.toFixed(1) : '—'} />
       </div>
 

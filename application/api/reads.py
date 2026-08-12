@@ -526,7 +526,10 @@ def _all_play_record(by_week, rid):
 
 
 def load_standings(as_of_week=None, league_id=None, season=None, viewer_roster_id=None) -> list[dict]:
-    """The Teams standings: record + all-play + playoff odds/series + posture. Mirrors loadStandings (l.278)."""
+    """The Teams standings: record + all-play + playoff odds/series. Mirrors loadStandings (l.278).
+
+    No `posture` since P5/S2e — see the note at the row build below.
+    """
     lid = _require_league(league_id)
     viewer = resolve_viewer(lid, viewer_roster_id)
     p = _params(as_of_week, lid=lid)
@@ -604,7 +607,24 @@ def load_standings(as_of_week=None, league_id=None, season=None, viewer_roster_i
             "magicWins": int(last["magic_wins"]) if last and last["magic_wins"] is not None else None,
             "remainingGames": int(last["remaining_games"]) if last and last["remaining_games"] is not None else None,
             "oddsSeries": o["series"] if o else [],
-            "posture": calcs.derive_posture(playoff_pct, all_play_pct) if playoff_pct is not None else None,
+            # `posture` is WITHHELD as of P5/S2e — the key is absent, not null, because we are not
+            # failing to compute it, we are declining to serve it. `calcs.derive_posture` stays put
+            # for the session that fixes the metric.
+            #
+            # Measured 2026-08-12 on the live demo, and it is inverted for EVERY league, not just
+            # this one: `gap = all_play_pct - playoff_odds_pct` compares two quantities that are not
+            # the same unit — odds saturate toward 0 and 100 while all-play compresses toward 50 —
+            # so the gap tracks the shape of the odds curve rather than luck. With BAND = 9 and the
+            # smallest |gap| in the league at 12.0, every team read Riding luck or Unlucky,
+            # Contender/Rebuild/On pace were unreachable, and the highest all-play team in the
+            # league was labelled sell. That is a correctness defect, not a calibration one, so
+            # retuning BAND cannot fix it and this is a withholding rather than a retune.
+            #
+            # One line closes it everywhere: this is derive_posture's only caller, and it reaches
+            # both /api/standings and /api/league (which nests the same object again under `me`).
+            # It also retires a latent — nothing here gates on season shape, so an all-play record
+            # of 0/0 coerces to 0 above and manufactured "Riding luck" at week 0/1; only the
+            # client's `hasShape` was holding that back, and two colour sites bypassed it.
         })
 
     # Rank by playoff odds desc (nulls -> -1), then all-play % as the tiebreak.

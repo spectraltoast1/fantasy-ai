@@ -614,16 +614,10 @@ body {
   position: relative; height: 412px; background: var(--map-well);
   border: 1px solid var(--border); border-radius: 14px; overflow: hidden;
 }
-.lg-map-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
-.lg-map-onpace {
-  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%) rotate(-45deg);
-  font-size: 9px; letter-spacing: 0.16em; color: var(--faint);
-}
-.lg-map-corner { position: absolute; font-size: 9.5px; letter-spacing: 0.06em; }
-.lg-map-corner.tl { left: 14px; top: 12px; }
-.lg-map-corner.tr { right: 14px; top: 12px; }
-.lg-map-corner.bl { left: 14px; bottom: 26px; }
-.lg-map-corner.br { right: 14px; bottom: 26px; }
+/* The quadrant wash, the "on pace" diagonal and its four corner labels were deleted in P5/S2e
+   along with their rules (.lg-map-svg, .lg-map-onpace, .lg-map-corner) — they drew a comparison
+   between two axes that are not the same unit. The dots and the axis label are measurements
+   and stay. */
 .lg-map-axis {
   position: absolute; left: 0; right: 0; bottom: 8px; text-align: center;
   font-size: 8px; letter-spacing: 0.14em; color: var(--faint);
