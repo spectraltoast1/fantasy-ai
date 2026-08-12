@@ -28,6 +28,19 @@ signed up for anything.
 
 Three options were on the table and two are wrong:
 
+**When does a full `--load` actually happen? Not on a schedule — that was the PM's error, corrected
+2026-08-11.** `build_db` is *"read-only on all parquet — never recompute derived data"*; it copies finished
+numbers. The routine in-season path is `--reload-league <id>`, which DELETEs and re-COPYs **one** league
+and drops nothing. A full `--load` is a manual DROP+CREATE, run when the **schema changes** — this session
+is one, S3's store-ownership work and S4's jobs table are likely others, and the annual re-backfill is a
+third. **The precedent is not hypothetical: `ros_player_band` lost its RLS to exactly this**, which is why
+Part 3 of this session exists.
+
+So the cost of "inserted" is not "it gets wiped on a timer". It is: **it works fine until the next schema
+change silently blanks the public landing page — and the person making that change has no reason to be
+thinking about the demo.** That is the same shape as the RLS loss, and the same argument as wiring `--emit`
+to emit RLS rather than remembering to re-add it.
+
 - **Inserted into the database** — a script copies rows under a new id. **Wrong**, doubly so here:
   `--load` DROPs and rebuilds every table it names, so the clone survives exactly until the next full load
   and then the demo silently renders blank for every visitor. **Part 3 of this very session runs a
@@ -38,7 +51,11 @@ Three options were on the table and two are wrong:
   ledger's reproducibility, and standing instruction #6 says compute into a *different* path rather than
   overwrite a frozen one.
 - **✅ A dedicated, deterministic generator** that **reads** the frozen LoRP 2025 slice and **writes a new
-  artifact under its own path**, wired into the load so `--load` reproduces it. The frozen corpus is read,
+  artifact under its own path**, wired into the load so `--load` reproduces it. **This recomputes
+  nothing** — it copies finished output rows and swaps the identifiers and names, exactly the
+  "(1+2) becomes 3" a hand-written copy would do. The only difference from inserting is that its
+  output is an artifact the loader knows how to re-materialise, instead of rows typed in once.
+  **Same work; one extra wire.** The frozen corpus is read,
   never rewritten. The clone is a new artifact beside it.
 
 ### The layer split — and `demo_manifest` is the trap
@@ -75,8 +92,27 @@ until P4 ships). That is real work, and **P4 retires it anyway** — which is wh
 
 ---
 
+### Part 0 — rename the catalog TABLE to `league_catalog` (Will, 2026-08-11)
+
+`demo_manifest` names both a parquet and a Postgres table, and after this session they hold different
+counts. **Rename the one that is changing, not the one that is staying the same:** the parquet keeps its 31
+frozen rows and its meaning, while the table gains the clone and becomes what `build_db`'s own comment
+already calls it — *"the lineage catalog `GET /api/leagues` reads"*.
+
+- **`corpus_manifest` is NOT available** — it already names the frozen 271-league corpus manifest
+  (`data_layer.read_corpus_manifest`, used by `league_registry` and `compute_spine`). Renaming into it
+  would trade a small collision for a much worse one.
+- **Table only.** `build_db` already indirects through `_MANIFEST_TABLE`, so this is one constant plus the
+  query sites in `reads.py` and `check_isolation.py`, and `serve/MANIFEST.md`. **It touches no corpus-side
+  code**, which is the side that must not move.
+- **Do it first, in its own commit, and prove parity** — a rename changes no numbers, so equivalence is
+  demonstrable. **Renaming a loaded table is free during a `--load` and expensive at any other time**,
+  and this is the only session in the plan that runs one.
+- **Guard: if it touches more than ~10 files, stop and defer it.** It is a convenience, not the session.
+
 ## Order of work — the single `--load` has to serve both proofs
 
+0. **Part 0 — the rename** (above), first and separately.
 1. **Part 1 — the generator.** Deterministic; reads the frozen slice, writes the clone under its own path
    with its own `league_id` and `lineage_id`, anonymised. Hard-excluded from every engine component.
 2. **Part 3 — the `--emit` RLS fix.** `--emit` emits `ALTER TABLE … ENABLE ROW LEVEL SECURITY` for every
@@ -121,6 +157,14 @@ generated-not-inserted decision at the top is not up for re-derivation), SESSION
 SESSION_GUIDE.md. Check the brief against observable reality before executing.
 
 Build, IN THIS ORDER — the ordering is the proof, not a preference:
+
+0. FIRST, its own commit: rename the Postgres table `demo_manifest` -> `league_catalog`. The parquet KEEPS
+   its name (it keeps its 31 frozen rows and its meaning); the table is the thing that changes, and it is
+   already what build_db's comment calls "the lineage catalog GET /api/leagues reads". Do NOT use
+   `corpus_manifest` — that name is taken by the frozen 271-league corpus manifest. build_db indirects
+   through _MANIFEST_TABLE, so this is one constant plus reads.py, check_isolation.py and
+   serve/MANIFEST.md. Touch no corpus-side code. Prove parity — a rename moves no numbers. If it reaches
+   more than ~10 files, STOP and defer it; it is a convenience, not the session.
 
 1. A deterministic GENERATOR for the clone. It READS the frozen LoRP 2025 slice and WRITES a new artifact
    under its OWN path — never rewriting the frozen corpus, which is what the immutable L2 ledger was
