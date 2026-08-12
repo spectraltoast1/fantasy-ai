@@ -46,8 +46,12 @@ confidence-**honesty**.
 i.e. below roughly 0.03% — not impossible. So it takes `<1%` like any other sub-1% value.
 
 **`Clinched` and `Eliminated` may only come from real bracket math, never from the simulation** (Will).
-Neither exists yet; when it does, they become their own labels. Until then the display never asserts
-either.
+**Verified 2026-08-12: that math does not exist** — zero hits for "clinch"/"eliminat" anywhere in project
+code. **DEFERRED by Will, 2026-08-12: do not build it.** *"There's still enough value in the estimates."*
+The display simply never asserts either. When someone does build it, the cheap version is the right one —
+a conservative bound (your best case vs rivals' worst, losing every tiebreak when proving elimination and
+winning every one when proving a clinch) is sound-but-incomplete, which is exactly the honest posture: it
+can never falsely declare, only stay silent.
 
 ## 4. "Clinch in N of next 10" overstates what the number is
 
@@ -135,6 +139,32 @@ both.
 the same unit. Retuning `BAND` cannot fix it; it would only move which rank the split lands on.
 
 ### What to do — two pieces, different sessions
+
+**IT IS NOT ONE SURFACE. `posture` renders in FOUR places** — gating only the map leaves the same wrong
+label on three of them:
+
+| site | what it shows | behaviour if `posture` is null |
+|---|---|---|
+| `League.jsx:75-77` | the posture **chip** on *Your Race* | `shape && me.posture ?` → renders nothing ✅ |
+| `League.jsx:134` | the **sparkline colour** in Playoff Picture | `t.posture ? tone : 'var(--violet)'` → default ✅ |
+| `League.jsx:157-190` | the **map** | `.filter(… && t.posture)` → **empty chart** ❌ |
+| `Teams.jsx:82-87` | the posture **chip on every Teams row** | `shape && t.posture ?` → renders nothing ✅ |
+
+**Will's own screenshot confirms the blast radius:** the sparkline colours in Playoff Picture break at
+exactly the playoff line — ranks 1-4 one tone, 5-10 another. That is the same broken classification
+colouring a different panel.
+
+**Recommended implementation — one server switch, not four client edits.** Stop serving `posture` from
+`reads.py:607` (return `None`). Three of the four sites already have null-guards and degrade correctly
+on their own; only the map needs handling, because an empty chart is exactly what `PanelOff`'s own
+docstring says not to draw. **Use `PanelOff` with its `note` override** — it exists for precisely this
+(*"honest 'not here' rather than an empty chart… `note` overrides the default sentence when a panel is
+off for a reason worth naming"*). **Do NOT use `Gate`** — that is the readiness/weeks mechanism, and
+using it here would state the wrong reason: this panel is not too early, it is wrong.
+
+Enforcing it in one place rather than four is the same seam principle S2b established, and re-enabling it
+after the metric is fixed is one line. **Code should verify those null-guards behave as read** rather
+than trusting this table.
 
 1. **NOW, in S2e: gate the panel off.** The project's own standing rule is *"gate a panel OFF only when a
    read is **misleading**, not merely uncertain."* This read is mechanically misleading, it is on the
