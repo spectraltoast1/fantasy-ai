@@ -43,7 +43,7 @@ primary_region = "iad"
 # failure mode, and `/health` reports the value AND its source so a stray one cannot hide.
 [env]
   SUPABASE_URL = "https://llanqdqzgncekvybasyd.supabase.co"
-  DEMO_LEAGUE_ID = "1182101676608823296"
+  DEMO_LEAGUE_ID = "DEMO-2025"
 
 [http_service]
   internal_port = 8080

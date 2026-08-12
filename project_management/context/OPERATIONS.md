@@ -46,6 +46,14 @@ bundle can survive a deploy (see `PM_SESSION_STARTUP.md`); trust `/api/*` JSON a
 - **Something is deployed and wrong** → `fly deploy` from `application/` (build context is that
   directory). A merged-but-undeployed change has bitten this project before, so confirm the deploy, not
   the merge.
+- **A full store reload (`build_db --load`) — how long the site is down.** Measured **2026-08-11**, the
+  first planned outage this project has taken: **82s for the load itself, 145s end to end** (load →
+  `fly deploy` → serving again), publishing 32 slices across 15 tables. Two things that number teaches:
+  the load is the smaller half, and **the window is load → REDEPLOY, not the load** — the deployed code
+  is what breaks first if the schema moved under it (that reload renamed a table). At Week 1, with real
+  people on the site, budget the round trip and deploy immediately after the load rather than verifying
+  first. A *scoped* reload (`--reload-league <id>`) is not an outage at all: it DELETEs and re-COPYs one
+  league in a transaction and drops nothing.
 - **Sleeper is down** → nothing to do. **No request path calls Sleeper any more (S2c).** The season is
   derived from the calendar, so a Sleeper outage no longer costs a read anything. This entry used to be a
   button (`CURRENT_SEASON` in `[env]`, to skip the network call); it is kept only so that anyone
