@@ -80,6 +80,24 @@ compares `teams` ↔ the `demo_manifest` table — both serve-layer, both gain t
 **Enumerate the count sites before changing any of them, and say in the report which layer each belongs
 to.** A grep for "31" is a starting point, not the answer.
 
+### The naming — DECIDED (Will, 2026-08-11)
+
+- **The league is literally `DEMO League`.** Not an invented realistic league name. This is a deliberate
+  departure from the clone brief's "make it look real" rule, and it resolves a tension in it: realistic
+  names stop the demo reading as a mock-up, but a realistic *league* name invites "whose league is this?".
+  Naming the league DEMO answers that in the switcher itself, while the team names keep doing the
+  looks-like-a-real-product job. Both goals, no trade.
+- **Team and manager names: realistic invented ones, Code proposes, Will approves** — the clone brief's
+  existing rule stands ("realistic fantasy team names, not `Team 1`"). Will has no preference beyond that.
+- **PLAYER names are NOT anonymised.** They are real NFL players and they are the demo's actual content.
+  Anonymise the *managers*, never the roster.
+- **The map is a COMMITTED LITERAL lookup** — a checked-in dict of `real handle -> fake handle`, not a
+  hash or any generated scheme. Ten entries, reviewable in ten seconds, and deterministic by construction:
+  a hash could produce something offensive or accidentally real, and could not be eyeballed before it went
+  on the landing page. This is also what makes the value-identical re-load proof meaningful.
+- **No `is_mine`, and no viewer seat that resolves to `MY_USERNAME`** — the clone must render with no "you"
+  highlight at all for a signed-out visitor.
+
 ### Anonymise now — reversing "re-key now, anonymise later"
 
 The earlier split said re-key here and anonymise later. **That was wrong: the privacy benefit is the
@@ -170,6 +188,12 @@ Build, IN THIS ORDER — the ordering is the proof, not a preference:
    under its OWN path — never rewriting the frozen corpus, which is what the immutable L2 ledger was
    derived from (standing instruction #6). New league_id, new lineage_id, anonymised manager and team
    names via a DETERMINISTIC map. Same week-5 freeze. Wired into the load so a --load REPRODUCES it.
+   - NAMING, decided by Will: the league is literally "DEMO League". Team and manager names are realistic
+     invented ones (propose a list, Will approves) — NOT "Team 1"; a demo that reads as a mock-up answers
+     the trust question the wrong way. PLAYER names stay REAL — they are the content; anonymise managers,
+     never the roster. The map is a COMMITTED LITERAL dict of real->fake, not a hash or generated scheme:
+     ten entries, reviewable before they go on the landing page, deterministic by construction. No
+     is_mine, and no viewer seat resolving to MY_USERNAME — a signed-out visitor sees no "you" highlight.
    - SERVE-layer artifact, not a corpus member. corpus/engine stays 31 (demo_slate.csv,
      demo_manifest.PARQUET, compute_demo_slices, check_matchup_result, the L2 ledger, B6's 31/31); serve
      becomes 32 (the demo_manifest TABLE, teams/season/standings/matchups, build_db's load span,

@@ -6,7 +6,7 @@ the season selector is removed. Deadline is Gate A. **Part 1 (re-key the data un
 `league_id` + `lineage_id`) is what S2d needs; the anonymization below can follow.**
 
 **Last reviewed:** 2026-08-05 · **Status:** ready, **DEFERRED by Will 2026-08-05** — S2 goes first ·
-**Owner:** Code drives; Will approves the team names and the look.
+**Owner:** Code drives; Will approves the team names and the look. **The LEAGUE name is settled: literally `DEMO League`** (Will, 2026-08-11) — team/manager names stay realistic-invented per below, but the league itself says what it is, so nobody has to wonder whose it is. See S2d.
 **Related:** `SESSION_P5_S2_OWNERSHIP_AND_ISOLATION.md` (which consumes `DEMO_LEAGUE_ID`).
 
 > **What this session does:** builds the one league the public can see. It is a clone of LoRP 2025 at
