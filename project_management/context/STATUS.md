@@ -173,7 +173,11 @@ tables and `--verify` asserts it. The catalog TABLE is now **`league_catalog`**;
 and its 31 frozen rows.
 → `sessions/v1/P5-Self_Serve/SESSION_P5_S2D_REPORT.md`.
 
-**P5/S2e done — the honesty pass on the League screen, and the season selector is gone.** Four defects in
+**P5/S2e built and merged — the honesty pass on the League screen, and the season selector is gone.**
+**NOT YET DEPLOYED as of 2026-08-12** — `main` is correct but production still serves the pre-S2e
+payloads (`posture` present, catalog nested); verified on four cache-busted probes against a
+baseline captured before the merge. **Run `fly deploy`, re-check, then delete these three lines.**
+→ `sessions/v1/P5-Self_Serve/SESSION_P5_S2E_AUDIT.md`. Four defects in
 one shape: *the UI asserting more certainty than the model has*, stacked on one row of the landing page
 (rank 9 read "0%, no path"; the truth is "0.3%, needs help"). Playoff odds are hedged at both ends —
 **`<1%` / `>99%`** — because a sim 0 means "did not occur in 10,000 tries", not eliminated; there were
