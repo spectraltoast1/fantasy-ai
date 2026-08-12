@@ -274,7 +274,7 @@ def check_every_route_is_accounted_for() -> None:
 
 
 def check_store_agrees_with_itself() -> None:
-    """`teams` is now the authorization source; `demo_manifest` is still the catalog source.
+    """`teams` is now the authorization source; `league_catalog` is still the catalog source.
 
     Two tables holding the same fact will eventually disagree, and the dangerous direction is
     silent: a league the catalog hides but the reads would serve. S2a's audit (F2) is the lesson —
@@ -283,14 +283,14 @@ def check_store_agrees_with_itself() -> None:
     print("\nthe two sources of a league's season agree")
     try:
         rows = db.fetch_all("""
-            SELECT count(*)::int AS n FROM demo_manifest dm
+            SELECT count(*)::int AS n FROM league_catalog dm
             JOIN (SELECT league_id, min(season) s, count(DISTINCT season) c
                   FROM teams GROUP BY league_id) t ON t.league_id = dm.league_id
             WHERE t.s <> dm.season OR t.c <> 1
         """)
         missing = db.fetch_all("""
             SELECT count(*)::int AS n
-            FROM (SELECT league_id FROM demo_manifest EXCEPT SELECT league_id FROM teams) x
+            FROM (SELECT league_id FROM league_catalog EXCEPT SELECT league_id FROM teams) x
         """)
     except Exception as exc:  # noqa: BLE001 — no database here is a skip, not a failure
         print(f"  --  SKIPPED (no database: {exc})")

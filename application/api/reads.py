@@ -1281,9 +1281,9 @@ def build_catalog(rows, weeks_by, cross_time_by, *, demo_league_id, owned, curre
         # The SPA's only applySlice call is guarded by `if (lgs.length)`, so an empty catalog is
         # not a blank slate — it is a permanent "Loading…" with no error state. The demo term is
         # supposed to make this unreachable, so reaching it means DEMO_LEAGUE_ID is unset or is
-        # missing from demo_manifest. Loud, because the symptom is silent.
+        # missing from league_catalog. Loud, because the symptom is silent.
         _LOG.error("EMPTY league catalog — demo_league_id=%r is unset or absent from "
-                   "demo_manifest. The app will hang on 'Loading…' for every visitor.",
+                   "league_catalog. The app will hang on 'Loading…' for every visitor.",
                    demo_league_id)
     return {"leagues": leagues}
 
@@ -1311,7 +1311,7 @@ def load_leagues(user_id=None) -> dict:
         cur.execute(
             "SELECT lineage_id, league_id, season, name, scoring_key, is_mine, "
             "viewer_roster_id, panels_market, panels_manager, panels_ros "
-            "FROM demo_manifest ORDER BY lineage_id, season DESC"
+            "FROM league_catalog ORDER BY lineage_id, season DESC"
         )
         rows = cur.fetchall()
         cur.execute(

@@ -101,7 +101,7 @@ def _db():
 _OWNED = """
 SELECT ul.user_id::text AS user_id, ul.league_id, ul.roster_id, dm.season, dm.name
 FROM public.user_leagues ul
-LEFT JOIN demo_manifest dm ON dm.league_id = ul.league_id
+LEFT JOIN league_catalog dm ON dm.league_id = ul.league_id
 ORDER BY ul.created_at
 """
 
@@ -123,7 +123,7 @@ ON CONFLICT (user_id, league_id) DO UPDATE SET roster_id = EXCLUDED.roster_id
 
 _REVOKE = "DELETE FROM public.user_leagues WHERE user_id = %(uid)s AND league_id = %(lid)s"
 
-_IN_CATALOG = "SELECT season, name FROM demo_manifest WHERE league_id = %(lid)s"
+_IN_CATALOG = "SELECT season, name FROM league_catalog WHERE league_id = %(lid)s"
 
 
 def _owned_by_user() -> dict[str, list[dict]]:
@@ -200,7 +200,7 @@ def grant(email: str, league_id: str, roster_id: str | None = None) -> None:
     # refusing here would make this tool useless the moment it is needed for a real user.
     rows = _db().fetch_all(_IN_CATALOG, {"lid": str(league_id)})
     if not rows:
-        print(f"  ⚠ {league_id} is not in demo_manifest, so it cannot surface in the catalog yet.")
+        print(f"  ⚠ {league_id} is not in league_catalog, so it cannot surface in the catalog yet.")
         print("    The grant is recorded and will take effect once the league is catalogued (S4).")
     else:
         print(f"  in the catalog as {rows[0]['name']} {rows[0]['season']}")
