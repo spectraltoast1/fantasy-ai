@@ -1,7 +1,10 @@
 """Derived-store -> Postgres loader: the multi-league publish seam (Stage-B B3).
 
-Loads ALL demo slices (`data_layer.read_demo_manifest()` — 31 (league_id, season) rows across
-12 lineages) from the **derived store** into Supabase Postgres, keyed by league_id + season.
+Loads ALL served slices — the 31 frozen corpus demo slices (`data_layer.read_demo_manifest()`,
+12 lineages) PLUS any generated synthetic league (`read_synthetic_catalog`, P5/S2d: the public demo
+clone) — from the **derived store** into Supabase Postgres, keyed by league_id + season. The two
+sources are unioned by `_catalog()`; keeping them separate is what lets the CORPUS stay at 31 while
+the SERVED catalog grows.
 Every read is routed through ``data_layer`` (the I/O-through-data_layer rule) — the readers know
 each dataset's tree (some derived reads live under ``derived/league/<id>/``, the base reads under
 the raw/join tree), so there are no hand-built paths.
@@ -172,10 +175,22 @@ INDEXES: dict[str, list[tuple[str, ...]]] = {
 }
 
 
+def _catalog() -> pl.DataFrame:
+    """THE served catalog: the 31 frozen corpus slices PLUS any generated synthetic league (P5/S2d).
+
+    The concatenation is the layer boundary in one expression. ``demo_manifest.parquet`` is a CORPUS
+    artifact and stays at 31 rows — ``compute_demo_slices``, ``check_matchup_result`` and the L2
+    ledger all count on that. The demo clone is a SERVE artifact with its own parquet. Appending the
+    clone to the corpus manifest instead would have been one line shorter and would have quietly made
+    the engine's work-list 32.
+    """
+    return pl.concat([dl.read_demo_manifest(), dl.read_synthetic_catalog()], how="vertical")
+
+
 def _slices() -> list[tuple[str, int, str]]:
-    """(league_id, season, scoring_key) for the 31 demo slices, deterministic order (season, league)."""
+    """(league_id, season, scoring_key) for every served slice, deterministic order (season, league)."""
     rows = [(str(r["league_id"]), int(r["season"]), str(r["scoring_key"]))
-            for r in dl.read_demo_manifest().iter_rows(named=True)]
+            for r in _catalog().iter_rows(named=True)]
     rows.sort(key=lambda t: (t[1], t[0]))
     return rows
 
@@ -263,6 +278,24 @@ def _index_stmts(table: str, extra_composite=("league_id", "season")) -> list[st
     return out
 
 
+def _rls_stmt(table: str) -> str:
+    """Row-level security for a generated table (P5/S2d).
+
+    **Why this is emitted rather than remembered.** RLS was enabled by hand in the Supabase console.
+    A later `--emit`/`--load` recreated `ros_player_band` — and it came back WITHOUT RLS, because a
+    DROP takes every out-of-band property with it and nothing put this one back. That is the general
+    failure, not a one-off: any property applied outside the generator (RLS, a grant, a trigger) is
+    destroyed by the next full load. Emitting it makes the property reproducible instead of
+    remembered, which is the same argument as generating the demo clone rather than inserting it.
+
+    Defence-in-depth, not the authorization boundary: the app connects as an owner-role user that
+    BYPASSES RLS, and isolation is enforced in the API layer (`reads.authorize_slice`). What this
+    protects is the Data API surface, which is off today and would otherwise be one console toggle
+    away from exposure.
+    """
+    return f'ALTER TABLE "{table}" ENABLE ROW LEVEL SECURITY;'
+
+
 def emit() -> None:
     """Regenerate schema.sql + MANIFEST.md from the derived-store schemas (reference = is_mine slice)."""
     rs, rl, rk = _ref()
@@ -285,7 +318,8 @@ def emit() -> None:
         col_defs = ",\n".join(f"    {name} {typ}" for name, typ in cols)
         stmts = [f'DROP TABLE IF EXISTS "{ds.table}" CASCADE;',
                  f'CREATE TABLE "{ds.table}" (\n{col_defs}\n);',
-                 *_index_stmts(ds.table)]
+                 *_index_stmts(ds.table),
+                 _rls_stmt(ds.table)]
         ddl_parts.append("\n".join(stmts) + "\n")
 
         display_schema = dict(schema)
@@ -295,14 +329,18 @@ def emit() -> None:
         man_rows.append(f"| `{ds.table}` | derived-store | per-slice | ~{n} | {len(display_schema)} | {coltypes}{note} |")
 
     # The league_catalog table — loaded whole, no league_id/season stamping (native columns).
-    man_schema = dl.read_demo_manifest().schema
+    man_schema = _catalog().schema
     man_defs = ",\n".join(f"    {name} {pg_type(dt)}" for name, dt in man_schema.items())
+    # The catalog table is a SEPARATE block from the DATASETS loop, which is exactly how it would
+    # have been missed: it is the 15th table and the easiest one to forget.
     stmts = [f'DROP TABLE IF EXISTS "{_MANIFEST_TABLE}" CASCADE;',
              f'CREATE TABLE "{_MANIFEST_TABLE}" (\n{man_defs}\n);',
-             *_index_stmts(_MANIFEST_TABLE)]
+             *_index_stmts(_MANIFEST_TABLE),
+             _rls_stmt(_MANIFEST_TABLE)]
     ddl_parts.append("\n".join(stmts) + "\n")
     man_coltypes = ", ".join(f"{name}:{pg_type(dt)}" for name, dt in man_schema.items())
-    man_rows.append(f"| `{_MANIFEST_TABLE}` | demo_manifest.parquet | catalog | 31 | {len(man_schema)} | {man_coltypes} |")
+    man_rows.append(f"| `{_MANIFEST_TABLE}` | demo_manifest.parquet + synthetic_catalog.parquet | "
+                    f"catalog | {_catalog().height} | {len(man_schema)} | {man_coltypes} |")
 
     _SCHEMA_SQL.write_text("\n".join(ddl_parts))
 
@@ -388,7 +426,7 @@ def reload_manifest() -> None:
     re-COPY in one transaction, leaving the 31 data-slice tables untouched. The table schema is
     unchanged (only panel-flag values differ), so no DROP/CREATE/--emit is needed; atomic, so a
     concurrent reader never sees the catalog empty."""
-    df = dl.read_demo_manifest()
+    df = _catalog()          # the union, or a catalog-only refresh would drop the synthetic rows
     jsonb_cols = {n for n, dt in df.schema.items() if pg_type(dt) == "JSONB"}
     with psycopg.connect(database_url()) as conn:
         with conn.cursor() as cur:
@@ -435,7 +473,7 @@ def load_league(conn, lid: str, *, verify_schema: bool = True) -> dict[str, int]
     # league_id ever spanned seasons the DELETE (by league_id) clears all and every slice is re-COPYd.
     slices = [(s, sk) for l, s, sk in _slices() if l == lid]
     if not slices:
-        raise SystemExit(f"league {lid} is not a demo_manifest slice — nothing to reload (cataloging a "
+        raise SystemExit(f"league {lid} is not a served slice — nothing to reload (cataloging a "
                          "brand-new league is onboarding/P5, not the scoped reload).")
     counts: dict[str, int] = defaultdict(int)
     with conn.cursor() as cur:
@@ -476,7 +514,7 @@ def load() -> None:
         conn.commit()
 
         # the catalog table (once, whole, unstamped)
-        n = _copy_plain(conn, _MANIFEST_TABLE, dl.read_demo_manifest())
+        n = _copy_plain(conn, _MANIFEST_TABLE, _catalog())
         print(f"loaded {_MANIFEST_TABLE:22s} {n:>6d} rows  (catalog)")
 
         totals: dict[str, int] = defaultdict(int)
@@ -515,8 +553,8 @@ def dry_run() -> None:
     print(f"{'table':22s} {'slices':>7s} {'rows':>9s}")
     for ds in DATASETS:
         print(f"{ds.table:22s} {len(exp_leagues[ds.table]):>7d} {exp_rows[ds.table]:>9d}")
-    print(f"{_MANIFEST_TABLE:22s} {'1':>7s} {dl.read_demo_manifest().height:>9d}  (catalog)")
-    print("\nexpected panel gating: base datasets = 31 slices, manager_dossiers = "
+    print(f"{_MANIFEST_TABLE:22s} {'1':>7s} {_catalog().height:>9d}  (catalog)")
+    print(f"\nexpected panel gating: base datasets = {len(_slices())} slices, manager_dossiers = "
           f"{len(exp_leagues['manager_dossiers'])}, market_vor = {len(exp_leagues['market_vor'])}, "
           f"ros_synthesis = {len(exp_leagues['ros_synthesis'])} (year-match; empty by design).")
 
@@ -537,11 +575,38 @@ def verify() -> None:
                 ok = ok and db_n == e
                 print(f"{ds.table:22s} {e:>8d} {db_n:>9d} {n_leagues:>8d}  {match}")
 
+            # Derived from the same union the load reads, not a literal. It WAS a literal 31, which
+            # would have been the one executable count-site to fail the moment the clone landed —
+            # and it would have failed as "the loader is broken" rather than "a constant is stale".
             cur.execute(f'SELECT count(*) FROM "{_MANIFEST_TABLE}"')
             man_n = cur.fetchone()[0]
-            man_match = "OK" if man_n == 31 else "*** MISMATCH ***"
-            ok = ok and man_n == 31
-            print(f"{_MANIFEST_TABLE:22s} {31:>8d} {man_n:>9d} {'-':>8s}  {man_match}")
+            man_exp = _catalog().height
+            man_match = "OK" if man_n == man_exp else "*** MISMATCH ***"
+            ok = ok and man_n == man_exp
+            print(f"{_MANIFEST_TABLE:22s} {man_exp:>8d} {man_n:>9d} {'-':>8s}  {man_match}")
+
+            # RLS, asserted for the first time (P5/S2d). Nothing anywhere read `relrowsecurity`
+            # before this, which is precisely why `ros_player_band` sat with RLS off for weeks
+            # without anything noticing. A property that is emitted but never checked is still
+            # remembered rather than guaranteed.
+            print("\n-- row-level security (every generated table) --")
+            cur.execute("""
+                SELECT c.relname, c.relrowsecurity FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname = ANY(%s)
+            """, ([ds.table for ds in DATASETS] + [_MANIFEST_TABLE],))
+            rls = dict(cur.fetchall())
+            expected = [ds.table for ds in DATASETS] + [_MANIFEST_TABLE]
+            off = sorted(t for t in expected if not rls.get(t))
+            missing = sorted(t for t in expected if t not in rls)
+            if missing:
+                print(f"*** {len(missing)} table(s) MISSING from the database: {missing}")
+                ok = False
+            if off:
+                print(f"*** RLS OFF on {len(off)}: {off}  — re-run --emit then --load")
+                ok = False
+            else:
+                print(f"all {len(expected)} generated tables have RLS enabled  OK")
 
             # Parity spot-check: the is_mine live slice's per-table counts (ros_synthesis intended 0).
             print(f"\n-- is_mine parity spot-check (league {rl}, season {rs}) --")

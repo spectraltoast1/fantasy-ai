@@ -87,6 +87,16 @@ def refresh_league(lid: str | None = None, season: int | None = None, *,
     if season is None:
         raise SystemExit("--season is required (or --live)")
     lid = lid or league_resolver.resolve_league_id(season)
+    # A synthetic league is GENERATED, not harvested (P5/S2d). This is the producer side of that
+    # rule and the concrete hazard it exists for: the demo clone IS in the loader's work-list, so
+    # `_resolve_scoring_key` below resolves it happily and everything after this line would then try
+    # to fetch `DEMO-2025` from Sleeper — a league that does not exist. Refuse loudly; regenerating
+    # the clone is `build_demo_clone`'s job and re-publishing it is `--reload-league`'s.
+    if data_layer.is_synthetic(lid):
+        raise SystemExit(f"{lid} is a SYNTHETIC league — it is generated, not harvested, so there is "
+                         "nothing to refresh from Sleeper. Re-run "
+                         "`python -m application.data.serve.build_demo_clone` and then "
+                         f"`build_db --reload-league {lid}`.")
     scoring_key = _resolve_scoring_key(lid, season)
 
     report: dict = {"league_id": lid, "season": season, "target_week": target_week,

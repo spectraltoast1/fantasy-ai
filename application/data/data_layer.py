@@ -2079,3 +2079,65 @@ def read_demo_manifest() -> pl.DataFrame:
 
 def demo_manifest_exists() -> bool:
     return _demo_manifest_path().exists()
+
+
+# --- Synthetic leagues (P5/S2d): the generated demo clone ------------------------------------
+# A synthetic league is GENERATED, not harvested: `serve/build_demo_clone.py` reads a frozen corpus
+# slice and writes a re-keyed, anonymised copy under its own league_id. It exists so the public demo
+# is not Will's real league with ten real managers' Sleeper handles on it.
+#
+# THE RULE, and it is the whole reason this lives here rather than as scattered checks:
+#
+#     A synthetic league is visible to everything that READS FOR SERVING (the loader, the API) and
+#     invisible to everything that WRITES OR COMPUTES (harvest, weekly_refresh, the corpus builders,
+#     league_registry).
+#
+# Producers consult `is_synthetic()` and refuse. The hazard is concrete rather than theoretical: the
+# clone is in the loader's work-list, so `weekly_refresh --league DEMO-2025` would otherwise try to
+# fetch a league that does not exist on Sleeper. Scattered `if league_id != DEMO` checks are how one
+# of those gets missed, so there is exactly one predicate and every producer calls it.
+#
+# A committed literal, not a lookup: the set is reviewable in one line, cannot drift from a generated
+# artifact, and needs no I/O on a hot path. `check_demo_clone` asserts it agrees with the catalog.
+# The ids are deliberately NOT Sleeper-shaped — a Sleeper league_id is an 18-19 digit snowflake, so
+# anything that mistakes `DEMO-2025` for a real league fails loudly instead of silently succeeding.
+SYNTHETIC_LEAGUE_IDS = frozenset({"DEMO-2025"})
+
+
+def is_synthetic(league_id) -> bool:
+    """True if this league is generated rather than harvested — see SYNTHETIC_LEAGUE_IDS."""
+    return str(league_id) in SYNTHETIC_LEAGUE_IDS
+
+
+# The synthetic slices' catalog rows — same 12 columns as the demo manifest, its OWN artifact.
+#
+# Deliberately NOT appended to demo_manifest.parquet. That parquet is the frozen CORPUS slate (31
+# rows) that `compute_demo_slices`, `check_matchup_result` and the L2 ledger all count on; the clone
+# is a SERVE-layer artifact. Keeping them separate is what lets the corpus stay 31 while the served
+# `league_catalog` table becomes 32, and it is why the table was renamed in the same session.
+def _synthetic_catalog_path() -> Path:
+    return _SNAPSHOT_DIR / "synthetic_catalog.parquet"
+
+
+def write_synthetic_catalog(df: pl.DataFrame) -> None:
+    """Write the synthetic slices' catalog rows; overwrite. Same column order as the demo manifest,
+    because `build_db` concatenates the two into one table."""
+    path = _synthetic_catalog_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.select(_DEMO_MANIFEST_COLS).write_parquet(path)
+
+
+def read_synthetic_catalog() -> pl.DataFrame:
+    """The synthetic catalog rows, or an EMPTY frame with the right schema when none exist.
+
+    Empty-not-absent on purpose: every caller concatenates this with the demo manifest, and a store
+    that has never generated a clone must still load cleanly rather than special-casing the absence.
+    """
+    path = _synthetic_catalog_path()
+    if not path.exists():
+        return read_demo_manifest().clear()
+    return pl.read_parquet(path)
+
+
+def synthetic_catalog_exists() -> bool:
+    return _synthetic_catalog_path().exists()
