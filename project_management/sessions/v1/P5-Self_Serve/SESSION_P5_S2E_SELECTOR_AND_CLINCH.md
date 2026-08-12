@@ -145,7 +145,7 @@ both.
 **This is a correctness defect, not a calibration one.** The formula compares two quantities that are not
 the same unit. Retuning `BAND` cannot fix it; it would only move which rank the split lands on.
 
-### OPEN — how much to withhold. Will's call.
+### DECIDED (Will, 2026-08-12) — **(b)**: keep the scatter, drop the interpretation.
 
 "Withhold posture" is broader than "hide the map", so here is exactly what goes and what stays.
 
@@ -160,7 +160,7 @@ The fork is only about the map's panel:
 | | what the visitor sees | cost |
 |---|---|---|
 | **(a) withhold the whole panel** | a `PanelOff` slot with an honest reason | smallest |
-| **(b) keep the scatter, drop the interpretation** ← *recommended* | every team plotted by odds × all-play, **no diagonal, no corner labels, no buy/sell** | slightly more — delete a few JSX elements and rewrite the caption |
+| **(b) keep the scatter, drop the interpretation** ← **CHOSEN** | every team plotted by odds × all-play, **no diagonal, no corner labels, no buy/sell** | slightly more — delete a few JSX elements and rewrite the caption |
 
 **Recommendation: (b).** The dot *positions* are true — 94% odds against 82% all-play is a real
 measurement. What is false is the **diagonal** (which implies the two axes are comparable) and the
@@ -171,6 +171,20 @@ corner divs, the axis label, then the dots), so this is deletion, not a rebuild.
 rewritten** — it is currently entirely about off-diagonal reads.
 
 It also means the eventual metric fix reuses this plot with better axes rather than rebuilding it.
+
+**What (b) actually leaves:** the picture, not the sentence. Every team still plotted by playoff odds ×
+all-play, so a reader can see who is strong on both and who is strong on neither — both true readings,
+since the axes point the same direction for quality. What goes is the *luck* claim, which is the part
+that was junk. **If the panel feels pointless without a sentence once it is live, that is a signal for the
+metric session, not a reason to revisit now** — and flipping to (a) later is deleting a component rather
+than unpicking anything.
+
+**Proposed caption** (Will to overrule — it is his voice, not the PM's):
+
+> *Each team by playoff odds and true record. Strong on both sits top-right; strong on neither, bottom-left.*
+
+It states only what the two axes measure and makes no claim about the distance between them. **Delete the
+old caption entirely** — it is written end to end about off-diagonal reads.
 
 ### What to do — two pieces, different sessions
 
