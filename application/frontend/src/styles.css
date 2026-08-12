@@ -152,17 +152,17 @@ body {
 .gr-tab.active { background: var(--violet); color: var(--on-violet); }
 .gr-tab-icon { display: inline-flex; }
 
-/* Season + week switchers + avatar (right). The two selectors share the one `week` grid slot. */
+/* Week switcher + avatar (right). The season switcher shared this `week` grid slot until P5/S2e
+   removed it, taking `.gr-season` with it. */
 .gr-controls { grid-area: week; display: flex; align-items: center; gap: 14px; }
 .gr-week { display: flex; align-items: center; gap: 8px; }
-.gr-season { display: flex; align-items: center; gap: 8px; }
 .gr-week-label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
-.gr-week select, .gr-season select {
+.gr-week select {
   background: var(--surface); color: var(--text);
   border: 1px solid var(--border-2); border-radius: var(--r-ctl);
   padding: 6px 10px; font-family: var(--mono); font-size: 12px; font-weight: 500; cursor: pointer;
 }
-.gr-week select:hover, .gr-season select:hover { border-color: var(--violet-border); }
+.gr-week select:hover { border-color: var(--violet-border); }
 .gr-avatar {
   grid-area: avatar;
   width: 30px; height: 30px; border-radius: var(--r-pill);
@@ -741,7 +741,7 @@ body {
    Gridiron Mobile mockup: a 2-row top header + fixed bottom tab bar, vertical
    stacks, full-screen details, and tap-through Matchups.
    ============================================================================ */
-/* The desktop topbar (brand · league · 4 tabs · season · week · avatar) needs ~1080px to breathe;
+/* The desktop topbar (brand · league · 4 tabs · week · avatar) needs ~1080px to breathe;
    below that it goes to the polished 2-row layout with a bottom tab bar. */
 @media (max-width: 1024px) {
   /* No sideways scroll — wide content scrolls inside its own container, not the page. */
@@ -771,13 +771,13 @@ body {
   .gr-league-name, .gr-league-select { font-size: 15px; max-width: none; }
   .gr-league-meta { font-size: 11px; }
   .gr-controls { flex-direction: row; gap: 8px; justify-self: end; }
-  .gr-week, .gr-season {
+  .gr-week {
     flex-direction: column; align-items: flex-start; gap: 2px;
     border: 1px solid var(--border-2); border-radius: var(--r-ctl);
     background: var(--surface); padding: 7px 12px;
   }
   .gr-week-label { font-size: 8.5px; }
-  .gr-week select, .gr-season select {
+  .gr-week select {
     border: none; background: transparent; padding: 0; font-size: 15px; font-weight: 700;
   }
 

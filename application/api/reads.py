@@ -1250,33 +1250,30 @@ def authorize_slice(league_id, season, viewer_roster_id, *, user_id, demo_league
 def build_catalog(rows, weeks_by, cross_time_by, *, demo_league_id, owned, current_season) -> dict:
     """Shape + filter + order the catalog. Pure, so ``check_ownership`` can drive it with fixtures.
 
-    Ordering is not cosmetic: the SPA lands on ``leagues[0]`` and its latest season, so **a
-    caller's own leagues come first and the demo last** is what makes a signed-in user with a
-    league land on THEIR league instead of the demo. Seasons stay DESC for the same reason.
+    **FLAT since P5/S2e — one entry per visible (league, season), no lineage→seasons nesting.**
+    The nesting existed to feed a season selector, and that selector is gone: prior seasons are
+    corpus, not product. Flattening is safe rather than lossy, because ``visible`` already admits
+    at most one season per lineage — a lineage is one league across years, and the owned term
+    requires ``season == current_season`` while the demo term names a single ``league_id``. So the
+    nested shape could only ever hold one season per lineage anyway.
+
+    ``lineage_id`` stays on the row. It is the stable identity across years, and the ordering rule
+    below is expressed in terms of it.
+
+    Ordering is not cosmetic: the SPA lands on ``leagues[0]``, so **a caller's own leagues come
+    first and the demo last** is what makes a signed-in user with a league land on THEIR league
+    instead of the demo. The SQL's ``ORDER BY lineage_id, season DESC`` is preserved underneath,
+    so a caller with more than one league gets a stable order rather than an arbitrary one.
     """
     # `owned` is a {league_id: roster_id} map in production and may be a bare set of ids in a
     # fixture; normalise so the seat lookup below works either way.
     seats = owned if isinstance(owned, dict) else {str(x): None for x in owned}
 
-    lineages: dict = {}
-    order: list = []
-    owned_lineages: set = set()
+    leagues: list = []
     for r in rows:
         if not visible(r["league_id"], r["season"], demo_league_id=demo_league_id,
                        owned=owned, current_season=current_season):
             continue
-        key = r["lineage_id"]
-        if key not in lineages:
-            lineages[key] = {
-                "lineage_id": r["lineage_id"],
-                "name": r["name"],
-                "scoring_key": r["scoring_key"],
-                "is_mine": bool(r["is_mine"]),
-                "seasons": [],
-            }
-            order.append(key)
-        if str(r["league_id"]) in owned:
-            owned_lineages.add(key)
         # The seat the CALLER should occupy, which is why this is a user × league property now
         # (P5/S2b). Their grant wins over the manifest's league-wide default; without this the
         # `roster_id` column could never take effect through the UI, because the client sends back
@@ -1284,9 +1281,13 @@ def build_catalog(rows, weeks_by, cross_time_by, *, demo_league_id, owned, curre
         seat = seats.get(str(r["league_id"]))
         if seat is None:
             seat = r["viewer_roster_id"]
-        lineages[key]["seasons"].append({
-            "season": int(r["season"]),
+        leagues.append({
+            "lineage_id": r["lineage_id"],
             "league_id": r["league_id"],
+            "season": int(r["season"]),
+            "name": r["name"],
+            "scoring_key": r["scoring_key"],
+            "is_mine": bool(r["is_mine"]),
             "weeks_available": weeks_by.get((r["league_id"], int(r["season"])), []),
             "viewer_roster_id": int(seat) if seat is not None else None,
             "panels": {
@@ -1296,11 +1297,10 @@ def build_catalog(rows, weeks_by, cross_time_by, *, demo_league_id, owned, curre
             },
         })
 
-    leagues = [lineages[k] for k in order]
     # Owned first, everything else (i.e. the demo) last; stable within each group. Replaces the
     # is_mine-first sort, which was a stand-in for "the viewer's league" back when there was only
-    # one viewer. A lineage that is BOTH owned and the demo counts as owned — it is your league.
-    leagues.sort(key=lambda lg: lg["lineage_id"] not in owned_lineages)
+    # one viewer. A league that is BOTH owned and the demo counts as owned — it is your league.
+    leagues.sort(key=lambda lg: str(lg["league_id"]) not in owned)
 
     if not leagues:
         # The SPA's only applySlice call is guarded by `if (lgs.length)`, so an empty catalog is
@@ -1323,8 +1323,9 @@ def load_leagues(user_id=None) -> dict:
 
     ``weeks_available`` is derived at query time from the loaded ``season`` (the PLAYED weeks — the
     same source ``load_weeks`` uses — so a frozen slice like is_mine 2025 reports [1..4], not the
-    schedule's full forward [1..18]). Name + viewer mirror the manifest exactly. Shape is unchanged
-    from the B3 contract; only the row set and the ordering move.
+    schedule's full forward [1..18]). Name + viewer mirror the manifest exactly. The shape is FLAT
+    as of P5/S2e — the B3 contract's lineage→seasons tree existed for the season selector, which
+    is gone; see ``build_catalog``.
 
     ``panels.market`` is the ONE flag not taken straight from the manifest — see ``_market_panel``.
     """

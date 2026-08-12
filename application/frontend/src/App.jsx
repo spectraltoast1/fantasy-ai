@@ -50,21 +50,22 @@ const DETAILS = {
   matchup: { path: '/matchup-detail', title: 'Matchup detail' },
 };
 
-// The demo catalog groups seasons under a lineage; the latest season is first (seasons desc).
-const latestSeason = (lineage) => lineage.seasons[0];
-const sliceFrom = (lineage, s) => ({
-  lineageId: lineage.lineage_id,
-  leagueId: s.league_id,
-  season: s.season,
-  viewerRosterId: s.viewer_roster_id,
-  name: lineage.name,
-  panels: s.panels,
+// The catalog is FLAT as of P5/S2e — one entry per visible league, its season on the row. It used
+// to nest seasons under a lineage to feed a season selector; that selector is gone (prior seasons
+// are corpus, not product), so there is no longer a latest-season to pick. `season` still travels
+// in the slice because every read carries it, inert but carried.
+const sliceFrom = (lg) => ({
+  leagueId: lg.league_id,
+  season: lg.season,
+  viewerRosterId: lg.viewer_roster_id,
+  name: lg.name,
+  panels: lg.panels,
 });
 
 export default function App() {
   const [tab, setTab] = useState('league');
   // Drill-downs form a stack so multi-level paths (team → player, team → dossier) get a
-  // correct "‹ Back" that pops one level. Switching tabs — or leagues/seasons — clears it. The
+  // correct "‹ Back" that pops one level. Switching tabs — or leagues — clears it. The
   // top is the active detail; empty stack = the tab's own surface.
   const [stack, setStack] = useState([]);
   const detail = stack.length ? stack[stack.length - 1] : null;
@@ -72,8 +73,8 @@ export default function App() {
   const [playedWeeks, setPlayedWeeks] = useState(null);   // weeks with RESULTS — the honest-depth clock
   const [asOfWeek, setAsOfWeek] = useState(null);
   const [league, setLeague] = useState(null);
-  const [leagues, setLeagues] = useState(null);   // the /api/leagues catalog (lineages → seasons)
-  const [slice, setSlice] = useState(null);       // active { lineageId, leagueId, season, viewerRosterId, name, panels }
+  const [leagues, setLeagues] = useState(null);   // the /api/leagues catalog (a flat league list)
+  const [slice, setSlice] = useState(null);       // active { leagueId, season, viewerRosterId, name, panels }
   const [switching, setSwitching] = useState(false);
   const [session, setSession] = useState(null);   // the Supabase session (P5/S1), null = signed out
   const [signInOpen, setSignInOpen] = useState(false);
@@ -198,7 +199,7 @@ export default function App() {
       .then((data) => {
         const lgs = data.leagues || [];
         setLeagues(lgs);
-        if (lgs.length) applySlice(sliceFrom(lgs[0], latestSeason(lgs[0])));
+        if (lgs.length) applySlice(sliceFrom(lgs[0]));
         else setCatalogError(new Error('The catalog came back empty.'));
       })
       .catch((e) => { console.error('Could not load leagues', e); setCatalogError(e); });
@@ -239,17 +240,11 @@ export default function App() {
   const openMatchup = (id) => push({ type: 'matchup', id });
   const back = () => setStack((s) => s.slice(0, -1));
 
-  // Switch handlers: a league change defaults to that lineage's latest season; a season change
-  // stays within the current lineage.
-  const currentLineage = leagues && slice ? leagues.find((l) => l.lineage_id === slice.lineageId) : null;
-  const switchLeague = (lineageId) => {
-    const lineage = leagues.find((l) => l.lineage_id === lineageId);
-    if (lineage) applySlice(sliceFrom(lineage, latestSeason(lineage)));
-  };
-  const switchSeason = (season) => {
-    if (!currentLineage) return;
-    const s = currentLineage.seasons.find((x) => x.season === season);
-    if (s) applySlice(sliceFrom(currentLineage, s));
+  // A league IS a catalog entry now (P5/S2e), so switching is a straight lookup by league_id —
+  // no lineage indirection, and no season to default to.
+  const switchLeague = (leagueId) => {
+    const lg = leagues.find((l) => l.league_id === leagueId);
+    if (lg) applySlice(sliceFrom(lg));
   };
 
   return (
@@ -263,9 +258,7 @@ export default function App() {
         league={league}
         leagues={leagues}
         slice={slice}
-        lineage={currentLineage}
         onLeague={switchLeague}
-        onSeason={switchSeason}
         session={session}
         onSignIn={() => { track('sign_in_opened'); setSignInOpen(true); }}
         onSignOut={signOut}
@@ -308,7 +301,7 @@ export default function App() {
 }
 
 // Routes tab/detail to a surface; all four surfaces render real data. The view is keyed on the
-// slice too, so switching leagues/seasons remounts the surface → it reloads against the new slice.
+// slice too, so switching leagues remounts the surface → it reloads against the new slice.
 // Detail views render centered behind a "‹ Back" affordance. `panels` = the slice's catalog panel
 // map (market/manager/ros_synthesis), threaded to the surfaces for gating. `weeks` = weeks of real
 // RESULTS as of the viewed week (readiness.weeksOfData) — the one depth clock every surface reads.
@@ -372,8 +365,8 @@ function DetailShell({ onBack, children }) {
   );
 }
 
-function TopBar({ tab, onTab, weeks, asOfWeek, onWeek, league, leagues, slice, lineage, onLeague,
-                  onSeason, session, onSignIn, onSignOut }) {
+function TopBar({ tab, onTab, weeks, asOfWeek, onWeek, league, leagues, slice, onLeague,
+                  session, onSignIn, onSignOut }) {
   return (
     <header className="gr-topbar">
       <div className="gr-brand">
@@ -401,8 +394,10 @@ function TopBar({ tab, onTab, weeks, asOfWeek, onWeek, league, leagues, slice, l
         })}
       </nav>
 
+      {/* The season switcher was removed in P5/S2e — prior seasons are corpus, not product, and
+          the catalog now offers one entry per league rather than a lineage of seasons. The week
+          switcher (season replay) stays. */}
       <div className="gr-controls">
-        <SeasonSwitcher lineage={lineage} value={slice?.season} onChange={onSeason} />
         <WeekSwitcher weeks={weeks} value={asOfWeek} onChange={onWeek} />
       </div>
 
@@ -456,20 +451,21 @@ function Account({ session, league, onSignIn, onSignOut }) {
   );
 }
 
-// The league selector — a real dropdown over the 12 lineages (is_mine first, from /api/leagues),
-// leading the derived format label (team count · scoring · QB structure) + the user's record, all
-// real. The selected lineage's display name comes from the catalog.
+// The league selector — a real dropdown over whatever the caller can see (their own leagues
+// first, the demo last, from /api/leagues), leading the derived format label (team count ·
+// scoring · QB structure) + the user's record, all real. Keyed on `league_id` since P5/S2e: the
+// catalog is flat, so a league is an entry rather than a lineage with seasons under it.
 function LeagueSwitcher({ league, leagues, slice, onLeague }) {
   return (
     <div className="gr-league">
       {leagues && slice ? (
         <select
           className="gr-league-select"
-          value={slice.lineageId}
+          value={slice.leagueId}
           onChange={(e) => onLeague(e.target.value)}
         >
           {leagues.map((l) => (
-            <option key={l.lineage_id} value={l.lineage_id}>
+            <option key={l.league_id} value={l.league_id}>
               {l.name}
             </option>
           ))}
@@ -490,22 +486,6 @@ function LeagueSwitcher({ league, leagues, slice, onLeague }) {
   );
 }
 
-// The season selector — mirrors WeekSwitcher, over the selected lineage's seasons (desc).
-function SeasonSwitcher({ lineage, value, onChange }) {
-  if (!lineage || value == null) return null;
-  return (
-    <label className="gr-season">
-      <span className="gr-week-label">Season</span>
-      <select value={value} onChange={(e) => onChange(Number(e.target.value))}>
-        {lineage.seasons.map((s) => (
-          <option key={s.season} value={s.season}>
-            {s.season}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
 
 // The global week selector (season replay). Travels back only; hidden until weeks load.
 function WeekSwitcher({ weeks, value, onChange }) {
