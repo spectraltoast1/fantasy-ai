@@ -40,7 +40,9 @@ anywhere in the repo tree.
 
 1. **BACK UP THE TWO SURVIVING JSONs, off this folder, before running anything.** They are the
    regeneration inputs, they are untracked, and nothing currently protects them. If they go, so does
-   the fallback.
+   the fallback. *(A full Time Machine backup ran 2026-08-13 — the first since Jan 2026, so the ledger
+   and these two JSONs are now on a second physical device. Still take a working copy you can reach
+   without a TM restore.)*
 2. **Exhaust exact restore first.** APFS keeps hourly **local** snapshots even with no Time Machine
    disk attached, for roughly 24 hours — `tmutil listlocalsnapshots /`, and `tmutil destinationinfo`
    for a detached backup disk. **A byte-exact restore ends this session at step 2** and is strictly
@@ -134,7 +136,23 @@ Prove it:
 - A stated verdict on whether the restore is EXACT (byte- or value-identical to what the ledger
   implies) or merely CONSISTENT. Say which. Do not use "identical" for "consistent".
 
-Scope guard — does NOT: build the durability/versioning tier (its own session — see below); re-run or
+CLOSEDOWN — MAKE THE RESTORED FILES UN-LOSABLE. This is part of THIS session, not a follow-up.
+Once the three parquets are restored and the reconciliation is defended, TRACK application/data/
+snapshots/corpus/ IN GIT: add a negation to .gitignore (the blanket `application/data/snapshots/`
+exclusion at :194 stays; carve out corpus/ only) and commit all five files.
+  MEASURED 2026-08-13: leagues.parquet holds 278 rows in 6,150 bytes, so the 271-league manifest is
+  ~6 KB; the whole corpus dir is ~276 KB today and under ~400 KB restored. It is also FROZEN — nothing
+  has written it since mid-July — so it adds no repo churn.
+  I KNOW THIS CUTS AGAINST A STANDING RULE. SESSION_GUIDE says player_id_map.parquet and
+  nfl_stats_2025.parquet were deliberately `git rm --cached`'d and not to re-add data files. That rule
+  is right and this is a principled exception, not an erosion: those are RUNTIME DATA — large,
+  regenerable, constantly changing. The corpus manifest is FROZEN PROVENANCE, closer to a lockfile than
+  to data, and it defines the population the immutable L2 ledger was derived from. Lockfiles belong in
+  version control precisely because everything downstream is defined against them.
+  If you disagree after seeing the restored sizes, say so and leave it — do not silently skip it.
+
+Scope guard — does NOT: build the durability/versioning tier for the LEDGER (its own session — see
+below; the corpus carve-out above is in scope because it is 400 KB and it is what broke); re-run or
 re-tune anything downstream of the corpus; touch the ledger, engine constants, any transform's maths,
 the store's serve layer, or P5/S3's work.
 ```
