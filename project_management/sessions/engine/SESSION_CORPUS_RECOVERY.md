@@ -1,6 +1,8 @@
 # Engine · Corpus recovery — restoring the frozen manifest
 
-**Written 2026-08-13.** **Status: DRAFT — do NOT start until the snapshot avenue is exhausted (see §0).**
+**Written 2026-08-13.** **Status: DONE (2026-08-13) — restored by offline reconstruction.
+Results, and three corrections to this brief, in [`SESSION_CORPUS_RECOVERY_REPORT.md`](./SESSION_CORPUS_RECOVERY_REPORT.md).
+`corpus_discovery` is deliberately NOT restored.**
 **Cause + the rule it bought:** `CODING_BIBLE` §5, prove-it-bites bullet.
 **Blocked by this:** the engine-track gates (`check_corpus`, `check_harvest`, `check_spine`,
 `check_predictions`). **NOT blocked:** the live site, and P5/S3.
@@ -58,7 +60,15 @@ This is why this is a session and not a command. Measured 2026-08-13:
 |---|---|---|
 | the lost manifest | **271** league-seasons | per `STATUS` and `check_matchup_result` |
 | `nfl_sleeper_weekly_joined/league/` | **272** dirs | everything ever joined |
-| the **L2 ledger** (`predictions_2020..2025`) | **276** distinct `(season, league_id)` | everything ever predicted on |
+| the **L2 ledger** (`predictions_2020..2025`) | ~~**276**~~ → **270** distinct `(season, league_id)` | everything ever predicted on |
+
+> **⚠️ CORRECTED 2026-08-13 (measured twice, independently).** The ledger holds **270**, not 276. The
+> 276 counts six phantom `(season, null)` pairs — 158,086 `ros_player_band` claims are **player-level
+> and league-agnostic**, so their `league_id` is null by design. The only `276` in the codebase is a
+> stale Session-2-era projection at `transforms/audit_join.py:43`, not a measurement. The ledger is a
+> strict **subset** of the joins, and the whole three-way disagreement resolves with zero residue:
+> `272 joins − 1 synthetic (DEMO-2025) = 271 manifest`, and `271 − 1 (the is_mine 2024 slice) = 270
+> ledger`. Both subtrahends are already-documented entities.
 
 **None of these is a drop-in oracle.** The ledger is the richest — it carries `league_id`, `season`
 **and `scoring_key`**, so most of the manifest's likely content is independently attested for 276
@@ -84,6 +94,13 @@ broken — and that claim is what the whole engine-honesty argument rests on. **
 that stops the session and gets escalated to Will. It is never quietly accepted.**
 
 ## §3 — One live degradation to close
+
+> **⚠️ CORRECTED 2026-08-13 — the diagnosis below names the wrong guard.** The no-op was real, but the
+> `except` **never fired**: `audit_join._two_way_ids` returns `set()` without raising (the file existed,
+> and `iter_rows` on a 0×0 frame yields nothing), and `weekly_refresh.py:166` short-circuits on
+> `if flag_ids and …`. So there was **no `skipped` log line at all** — the refresh report was
+> indistinguishable from a league with no two-way players. A session hunting for that breadcrumb would
+> have found nothing and concluded the path was healthy. Closed 2026-08-13 by restoring the flags.
 
 `weekly_refresh`'s `is_two_way` re-apply reads the flags table and is wrapped in a
 **skip-on-any-exception** guard, so with `corpus_two_way_flags` at 0 rows it now **silently no-ops**.
