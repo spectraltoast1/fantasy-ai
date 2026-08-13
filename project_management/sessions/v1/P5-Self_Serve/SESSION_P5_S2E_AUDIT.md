@@ -1,5 +1,30 @@
 # P5 · S2e — PM audit of the honesty pass
 
+> **CLOSED 2026-08-13 — deployed (Fly v27) and confirmed live.** `/api/standings` carries no
+> `posture` key and `/api/leagues` is flat, on both `surplusff.com` and `fantasy-ai-api.fly.dev`.
+> The body below is left exactly as written at audit time.
+>
+> **The blocking finding was correct, and one of my follow-up probes was not.** Will's
+> `fly releases` settles the first half: at audit time the current release was **v25, 22h old —
+> older than the S2e merge**, so production genuinely was not running it. **v26** and **v27**
+> are his deploys after the audit.
+>
+> **My error, and it cost Will a round trip.** After he deployed I kept reading pre-S2e payloads
+> and told him the release had not taken. It had. **`WebFetch` does not honour an appended
+> cache-buster** — `?…&_cb=<new value>` returned my *morning's* cached body every time, which is
+> why every "fresh" probe came back byte-identical down to the floating-point noise. Changing the
+> **parameter order** (`?zz=1&league_id=…`) produced a genuine fetch, and it showed the deploy
+> live. **Reordering works; appending does not.**
+>
+> The lesson is the one this audit is about, turned around on me: *check the instrument before
+> trusting the reading.* I verified the site and never verified the tool I was verifying it with —
+> a byte-identical repeat reading is evidence of a cache, not of a stable system, and I had
+> already written the "identical bytes" observation down twice without asking what else explains
+> it. **A second hostname was the cheap independent check** (`fantasy-ai-api.fly.dev` disagreed
+> with `surplusff.com` while DNS proved both resolve to the same Fly IP — same app, so the
+> difference could only be in my read path).
+
+
 **Audited:** 2026-08-12 · **Report:** `SESSION_P5_S2E_REPORT.md` · **Brief:**
 `SESSION_P5_S2E_SELECTOR_AND_CLINCH.md` · **Range:** `84a08c1..3c0aed2` (3 commits + merge, pushed) ·
 **Verdict: CODE ENDORSED — SESSION NOT COMPLETE. One blocker: it is not deployed.**
