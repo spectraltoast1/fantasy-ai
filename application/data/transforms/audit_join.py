@@ -40,7 +40,7 @@ def _load_sleeper_players() -> pl.DataFrame:
     keep/discard flipped with whatever the registry said on rebuild day — the reproducibility hole. It now
     reads the immutable pinned snapshot, so the resolution is deterministic across rebuilds and re-harvests.
     This path is dormant today (the real 2025 league produces no remainders) but it is the SAME drift class
-    the join corrects, and it wakes the moment a 276-league corpus yields non-empty remainders (Session 3).
+    the join corrects, and it wakes the moment the 271-league corpus yields non-empty remainders (Session 3).
     Raises with capture instructions if the pin has not been created.
     """
     return data_layer.read_pinned_sleeper_players()

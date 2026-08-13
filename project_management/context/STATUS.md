@@ -2,7 +2,7 @@
 
 **What this is:** SurplusFF — a fantasy-football decision-support dashboard whose unit is the manager's
 *decision*, not the player. Live, single-league, on the server stack.
-**Live at:** https://surplusff.com/ (also https://fantasy-ai-api.fly.dev/) · **Updated:** 2026-08-12
+**Live at:** https://surplusff.com/ (also https://fantasy-ai-api.fly.dev/) · **Updated:** 2026-08-13
 **Name + domain:** the official name is **SurplusFF**, commonly shortened to **Surplus** (Will,
 2026-08-05); "Gridiron" was a working name — retire it. **surplusff.com** is registered (SSL live), serves
 the app (Fly cert + DNS), and is the **Resend sending domain** for auth email — Supabase's custom SMTP
@@ -229,6 +229,49 @@ that panel is dark exactly as it was for the old demo) and the **synthetic AI ou
 has no 2025 file, so the panel is empty by construction. **P4 stays ahead of P3** and retires that
 placeholder for real.
 → `sessions/v1/P5-Self_Serve/SESSION_P5_S2D_REPORT.md` + `SESSION_P5_DEMO_LEAGUE_CLONE.md`.
+
+## The frozen corpus was destroyed and rebuilt (2026-08-13)
+
+A `check_store_boundary --prove-bites` run overwrote `corpus_manifest`, `corpus_discovery` and
+`corpus_two_way_flags` with empty frames (0 rows **and** 0 columns) — three writers take only a
+dataframe, so they had no throwaway target and hit the real and only copy. Nothing was tracked by git.
+The rule this bought is `CODING_BIBLE` §5. **The L2 ledger, the raw harvest and both crawl JSONs were
+untouched, and the live site was never affected.**
+
+**Restored by offline reconstruction from surviving artifacts — zero Sleeper calls.** Nothing was
+re-crawled or re-selected, so the manifest still names the population the immutable ledger was derived
+from. `corpus_two_way_flags` is **EXACT** (10 rows). `corpus_manifest` is **CONSISTENT, not identical**:
+271 rows, strata 221 matched / 48 generalization / 2 mine, verified against the ledger on all 270
+shared league-seasons with **0 `scoring_key` mismatches**. Gates green — `check_corpus`, `check_harvest`,
+`check_spine` (269 leagues), `check_matchup_result --full-corpus` (271 swept, 4 ties);
+`check_predictions` keeps its **one known pre-existing red** (the is_mine 2024 slice), which is the
+correct outcome — a green there would have meant the reconstruction dropped that row.
+
+**Not recovered, and not faked:**
+- **`corpus_discovery` is LOST and deliberately not reconstructed.** The crawl state is the frontier at
+  save time, not a record of what was discovered (it misses 320 of the 427 judged leagues), so any
+  rebuild would be *wrong*, not partial. **Corpus selection can no longer be re-run against the July
+  universe; any future re-selection defines a NEW corpus, not a continuation of this one.**
+  `corpus_crawl_state.json` + `corpus_filter_cache.json` are now its authoritative surviving record.
+- **`league_format` is NULL on 36 of 271 rows** (all generalization). Sleeper's `settings.type` was
+  never persisted, and absence on disk does **not** mean redraft — 7 known keeper/dynasty leagues also
+  lack the key. No stratum, gate or partition depends on it. A 36-call targeted top-up would fill it.
+- **`selected_at`** is wall-clock and lost for every row — this is why the verdict is CONSISTENT.
+- The ~41 `excluded` rows were never harvested, so they are omitted rather than invented. **Consequence:
+  `check_corpus`'s filter pass-rate line now reads `100.0% over 269` instead of `86.8% over 310` — that
+  tooth is vacuous and is not evidence of anything.**
+
+**`application/data/snapshots/corpus/` is now tracked in git** (a `.gitignore` carve-out; the blanket
+exclusion stays) — ~281 KB of frozen provenance, closer to a lockfile than to runtime data. Note
+`.git/info/exclude:9` is the operative local rule, and the data files can only be committed from `main`
+(a worktree's `snapshots` is a symlink git will not descend).
+→ `sessions/engine/SESSION_CORPUS_RECOVERY_REPORT.md`
+
+**Still open, and this incident is the second time it has bitten:** irreplaceable laptop-owned state has
+exactly one copy and nothing versioning it. A mirror would not have helped (a sync at 02:26 would have
+pushed three empty files over three good ones) — the fix is **object versioning**, and it now covers
+`derived/ledger` (145 MB, regenerable by nothing) and `derived/scoring`. Sits in P6; worth pulling
+forward, and P5/S3 makes it worse by adding a second machine with write access.
 
 ## Deferred / parked (not blocking; each picked up in its project)
 
