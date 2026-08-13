@@ -191,8 +191,25 @@ venv/
 
 #FOLDERS & Files to ignore
 application/data/cache/
-application/data/snapshots/
+application/data/snapshots/*
 application/data_sources.txt
+
+# --- EXCEPTION: the frozen corpus provenance (2026-08-13 recovery) -------------------------------
+# SESSION_GUIDE says data files were deliberately `git rm --cached`'d and must not be re-added. That
+# rule is right and this is a principled exception, not an erosion of it: those are RUNTIME DATA —
+# large, regenerable, constantly changing. These four are FROZEN PROVENANCE (~280 KB total, unwritten
+# since mid-July), closer to a lockfile than to data. They define the population the immutable L2
+# ledger was derived from, and lockfiles belong in version control precisely because everything
+# downstream is defined against them. Untracked, one copy, they were destroyed by a single bad run.
+#
+# Named individually, not by glob, so a NEW file under corpus/ stays ignored until someone decides
+# it belongs here. `corpus_discovery.parquet` is deliberately absent — see the session report.
+!application/data/snapshots/corpus/
+application/data/snapshots/corpus/*
+!application/data/snapshots/corpus/corpus_manifest.parquet
+!application/data/snapshots/corpus/corpus_two_way_flags.parquet
+!application/data/snapshots/corpus/corpus_crawl_state.json
+!application/data/snapshots/corpus/corpus_filter_cache.json
 **/__pycache__/
 **/*.pyc
 **/*.pyo
