@@ -1,6 +1,6 @@
 # ADR — The store boundary: what the laptop owns, what the worker owns
 
-**Current as of: 2026-08-13.** **Status: PROPOSED — Will to accept before P5/S3 is briefed.**
+**Current as of: 2026-08-13.** **Status: ACCEPTED (Will, 2026-08-13). Option (b).**
 **Scope:** P5/S3 (the Fly worker). **Supersedes:** the four-bullet rule in
 `projects/v1/P5_ACCOUNTS_SELF_SERVE_ONBOARDING.md` § Context, which this expands and **corrects**.
 
@@ -70,7 +70,7 @@ unattended is promoting constants without a human.
 | | what it means | verdict |
 |---|---|---|
 | **(a) Move `derived/scoring` to worker-owned** | Redraw the line; let the worker write the shared substrate | **Reject.** Makes the shared artifact the divergent one — the worst possible thing to put on the wrong side. |
-| **(b) The band is READ-ONLY on the worker** ← **RECOMMENDED** | Worker reads the substrate; if it is stale or missing, it **fails loudly** and that is a laptop job | Preserves one-directional flow, keeps constant-promotion human, and turns the rule into a property rather than a habit |
+| **(b) The band is READ-ONLY on the worker** ← **ACCEPTED (Will, 2026-08-13)** | Worker reads the substrate; if it is stale or missing, it **fails loudly** and that is a laptop job | Preserves one-directional flow, keeps constant-promotion human, and turns the rule into a property rather than a habit |
 | **(c) Worker rebuilds and pushes back** | Two-directional | **Reject.** This is the divergence the rule exists to prevent. |
 
 ### What (b) costs, honestly
@@ -156,9 +156,28 @@ post-launch, not at S3.
 5. **P5/S0's sizing stands:** 1 GB `shared-cpu-1x` + a 1 GB volume, ~$7/mo flat to 200 leagues. The
    volume figure is comfortable against a measured 244 MB.
 
-## Open question for Will
+## The decision, recorded
 
-**(b) is a recommendation, not a decision.** It trades an occasional manual step for a guarantee that
-no machine can quietly rebuild the shared substrate. If you would rather the worker be able to rebuild
-the band unattended, say so — but then the ledger-style protection has to move somewhere else, because
-the "never sends anything back" rule stops being true and the annual re-tune stops being human-gated.
+**Will accepted (b) on 2026-08-13**, on this reasoning:
+
+**(c) is ruled out on principle, not cost.** Two machines writing the same fact and reconciling is the
+classic distributed-data problem and this project has no mechanism for it. It would leave two versions
+of a shared artifact with no way to say which is correct — and because nothing crashes, the first
+alarm would be a user.
+
+**(a) vs (b) is narrower than it looks** — both keep exactly one writer, so the only question is which
+machine holds the pen. Two facts settle it. The worker's disk is **explicitly disposable** (the design
+says lose the host and rebuild), so (a) puts the most-shared, most-consequential artifact on the
+machine we are prepared to throw away. And changing this artifact means changing **engine constants**,
+which are human-approved by standing rule — so the pen belongs where the human is.
+
+**What (b) costs, accepted with eyes open:** when engine constants change (realistically the annual
+re-tune, ~February), the worker refuses to onboard leagues on that scoring key until Will rebuilds the
+substrate locally and pushes it up.
+
+**The refusal is the point, not the price.** It is the same instinct as the rest of the product — the
+UI prints `<1%` rather than `0%` because a confident wrong answer is worse than an honest stop. This is
+that principle applied to infrastructure: a machine declining to build something it is not authorised
+to build, rather than silently producing a version nobody approved. The failure it prevents is the kind
+with no alarm attached — nothing errors, the site just serves numbers built from a recipe that was
+never signed off, to everyone, until somebody happens to notice.
