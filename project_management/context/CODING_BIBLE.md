@@ -63,7 +63,20 @@ These are *why* the product can be trusted. Violating one is a correctness bug, 
 - **Verify numbers, don't trust "it runs."** Especially across SQL dialects — reproduce the values, don't
   assume equivalence.
 - **Stay auth-ready.** Don't bake in assumptions like "no auth," "single league," or "the whole dataset fits
-  in the browser."
+  in the browser.
+- **A prove-it-bites leg must never be able to aim a writer at the real store.** Proving a gate has teeth
+  means deliberately running the thing it guards — so the destructive leg needs a *throwaway target*, and
+  the rule is keyed on **shape, not on which writers happen to look safe**: if a writer takes only a
+  dataframe (no season, no id, no path), there is nowhere safe to point it and **it does not go in the
+  destructive leg** — assert it some other way. **This rule cost the frozen corpus.** On 2026-08-13 a new
+  `check_store_boundary --prove-bites` neutered its own guard and drove every laptop-owned writer for
+  real; a throwaway season (`99998`) isolated the ones taking a season or an id, but
+  `write_corpus_manifest` / `write_corpus_discovery` / `write_two_way_flags` take only `df`, so their
+  target *was* the real and only copy — the 271-league manifest went to 0 rows. The near-misses were
+  luck, not design: three neighbouring writers survived only because `.select()` on a fixed schema
+  raised `ColumnNotFoundError` on an empty frame, and the ledger appenders survived only on their dedup
+  key. **Corollary: an irreplaceable artifact with exactly one copy is a bug independent of any gate** —
+  see `context/appendices/store-boundary.md` for which tier is which."
 
 ## 6. Auditability & session hygiene
 
