@@ -69,6 +69,21 @@ When you hit 3 commits (or finish the task, whichever comes first), close down.
 The cap is a forced checkpoint — it keeps sessions bounded and guarantees the
 doc-update + merge happen regularly, which is what prevents worktree drift.
 
+### Commit FLOOR: bank before you run anything destructive
+The cap stops sprawl. Nothing stopped the opposite failure, so this is the floor.
+
+**Before running anything that writes the real store — a prove-it-bites leg, a
+`--load`, a generator, any destructive verification — commit what you have.**
+Uncommitted work plus a destructive run is how 2026-08-13 cost the frozen
+271-league corpus manifest: a `--prove-bites` leg drove three writers at the only
+copy, and hours of unbanked work sat in the same worktree. Committing first makes
+the blast radius `git checkout` instead of an evening.
+
+This does not conflict with the cap. A bank-before-destructive commit is a real
+commit and counts toward the three; if that pushes you to the cap, close down —
+that is the cap working, not a reason to skip the floor. **A destructive run is
+exactly the moment the cheapest possible insurance is worth taking.**
+
 ---
 
 ## Phase 3 — Closedown

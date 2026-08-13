@@ -85,6 +85,13 @@ These are *why* the product can be trusted. Violating one is a correctness bug, 
 - **Update `STATUS.md` at the end of a session.** State is reloaded from docs, not chat history.
 - **Follow the session lifecycle** (`SESSION_GUIDE.md`): fresh worktree → setup → 3-commit cap → update
   STATUS → close/merge. One brief per session.
+- **Bank before you run anything destructive — the commit FLOOR.** The 3-commit cap bounds sprawl;
+  nothing bounded the opposite failure. **Before any run that writes the real store — a prove-it-bites
+  leg, a `--load`, a generator, any destructive verification — commit what you have.** On 2026-08-13
+  hours of unbanked work sat in a worktree while a `--prove-bites` leg drove three writers at the only
+  copy of the frozen corpus manifest; committing first would have made the whole incident a
+  `git checkout`. Pairs with §5's rule about what a destructive leg may be aimed at: **§5 limits what
+  can be hit, this limits what is at risk when something is.**
 - **Keep the seams clean.** If a fix wants to sprawl a view into data access, or a transform into I/O, stop
   and reconsider — that's the signal something's wrong.
 
