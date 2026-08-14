@@ -1,7 +1,7 @@
 # ADR — The store boundary: what the laptop owns, what every other machine only reads
 
 **Current as of: 2026-08-14.** **Status: ACCEPTED (Will, 2026-08-13), BUILT (P5/S3), EXTENDED
-(P5/S4a).** Option (b).
+(P5/S4a), CLOBBER GUARD BUILT (P5/S4b).** Option (b).
 
 > **Built, with three corrections this ADR did not anticipate** — all three are folded in below:
 > the model is **one writer**, not laptop-vs-worker (there is a third machine); the classification
@@ -128,9 +128,33 @@ catalog row, and `build_db --load` drops its data rows as well.
 
 Two things make it sharp: the documented remedy for an un-emitted column (`--emit` + `--load`) *is*
 this failure, and the laptop's `build_db --verify` now legitimately reports **VERIFY FAILED** — so the
-one alarm that would catch it has already been explained away as expected. **Guard: `reload_manifest`
-and `load` must refuse when Postgres holds `league_id`s absent from the local `_catalog()`, naming
-them. Assigned to P5/S4b.**
+one alarm that would catch it has already been explained away as expected.
+
+**BUILT in P5/S4b.** `build_db.assert_catalog_covers_postgres` compares the local `_catalog()`'s
+`league_id` **set** against `SELECT DISTINCT league_id FROM league_catalog` and raises
+`StoreBoundaryError` naming the orphans — before the `TRUNCATE` in `reload_manifest()` and before the
+DROPs in `load()`. Note *why* `--verify` could never have caught this: it compares **counts**, never
+sets. `pg_ids` is injectable so `check_store_boundary`'s fifth leg drives both halves (refuses on
+drift, permits on agreement) with no database; the live half is one read-only `SELECT`.
+
+**Consequence — the second artifact to change machines: the full `--load` now belongs on the WORKER.**
+Copying `connected_catalog.parquet` down to the laptop is *not* a sufficient remedy, because the
+loader is skip-if-absent: without each connected league's `derived/league` artifacts they would get a
+catalog row and **zero data rows**. So `--emit` stays on the laptop (it writes a git-tracked source
+file) and `--load` runs where the artifacts are. `_assert_columns_live`'s remedy string used to print
+`--emit && --load` on both machines — the codebase instructing the operator into the loss — and is
+machine-aware now. → `OPERATIONS.md`.
+
+### The queue lives in Postgres, and that is a boundary decision too (P5/S4b)
+
+The worker leases work from `public.jobs`. Two properties matter to this ADR. **The queue is in the
+app-side schema (`api/auth_schema.sql`), not `serve/schema.sql`** — the same structural argument as
+the auth tables: `--load` DROPs every table it names, so a jobs table there would be destroyed by the
+next full load. And **`STORE_ROLE=worker` is asserted at worker startup and the loop refuses to lease
+without it** — a long-running process is a new way to lose an env var, and losing that one would let
+the worker author the shared substrate every league reads. The refusal **idles rather than exits**:
+an exiting process crash-loops the machine, and a crash-looping machine cannot be `fly ssh`ed into to
+fix the config that caused it.
 
 **Volume size — measured, not quoted.** Total `snapshots/` is **389 MB**; minus the ledger it is
 **244 MB**, which is where the project's existing "~245 MB" figure comes from. That number **still

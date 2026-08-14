@@ -27,6 +27,7 @@ failed has not been tested; it has only been observed agreeing with the code it 
 from __future__ import annotations
 
 import argparse
+import contextlib
 
 import polars as pl
 
@@ -279,6 +280,48 @@ def check_coldness() -> None:
             _ok("classify() calls it a RE-ONBOARD rather than refusing — DoD clause 4's shape")
         else:
             _fail("classify() did not recognise an already-connected league as a re-onboard")
+
+    # RESUME (P5/S4b) — the crashed cold run. `write_connected_league` happens AFTER `run_chain`, so
+    # a crash inside those ~10 seconds leaves the on-disk directories and NO catalog row. Before
+    # S4b `classify` called that warm and refused, permanently and by every route; under the queue
+    # that refusal is a `rejected` job, which is terminal, so the first crash on a real user's
+    # league would have been the last time it could ever be connected.
+    #
+    # The throwaway here is a DIRECTORY, and it is created and removed inside this leg — the same
+    # care CODING_BIBLE §5 demands, since the thing being simulated is wreckage in the real store.
+    wreck = onboard_league._league_dirs(TMP_LEAGUE, TMP_SEASON)["derived"]
+    made = not wreck.exists()
+    try:
+        wreck.mkdir(parents=True, exist_ok=True)
+        if onboard_league.classify(TMP_LEAGUE, TMP_SEASON) == "resume":
+            _ok("a league with artifacts on disk but NO catalog row classifies as RESUME — an "
+                "interrupted run is completed, not refused for ever")
+        else:
+            _fail("a half-built league did not classify as resume — the first crash on a user's "
+                  "league would make it permanently un-onboardable")
+        # …but `assert_cold` must still refuse it, because a BENCHMARK aimed at a half-built league
+        # measures the pipeline's gates rather than the work. The two callers want different answers
+        # and that is exactly why the split exists.
+        try:
+            onboard_league.assert_cold(TMP_LEAGUE, TMP_SEASON)
+            _fail("assert_cold accepted a league with artifacts on disk — bench_cold_league would "
+                  "measure the gates instead of the work")
+        except SystemExit:
+            _ok("assert_cold still refuses it, so the benchmark's contract is unchanged")
+    finally:
+        if made:
+            with contextlib.suppress(OSError):
+                wreck.rmdir()
+
+    # A DECIDED league is still refused outright, even with nothing on disk — the other half of the
+    # split. Recorded-vs-on-disk is the distinction; a corpus row is a decision, a directory is not.
+    corpus_lid_only = str(data_layer.read_corpus_manifest()["league_id"][0])
+    try:
+        onboard_league.classify(corpus_lid_only, TMP_SEASON)
+        _fail("a corpus league classified as resumable — a catalog row is a DECISION, and the "
+              "split must not let one be mistaken for wreckage")
+    except SystemExit:
+        _ok("a league RECORDED in a catalog is still refused, never resumed")
 
     # A corpus league is emphatically not cold, and must never be reachable from the onboarder.
     corpus_lid = str(data_layer.read_corpus_manifest()["league_id"][0])

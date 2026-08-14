@@ -26,7 +26,10 @@ file — the same shape as `check_store_boundary`'s connected-catalog purge (S4a
 from __future__ import annotations
 
 import argparse
+import ast
+import inspect
 import sys
+import textwrap
 import time
 
 import psycopg
@@ -34,6 +37,8 @@ from psycopg.rows import dict_row
 
 from application.api import db
 from application.data.serve import job_queue as q
+from application.data.serve import onboard_league
+from application.data.serve import worker_loop as wl
 
 # Not Sleeper-shaped, so these cannot collide with a real league. Same idiom as check_onboard's
 # `__ONBOARDCHECK__` and check_store_boundary's `__STOREBOUNDARY__`.
@@ -266,6 +271,103 @@ def check_live() -> None:
         main.close()
 
 
+# --- leg 3: the worker loop's classification, offline -------------------------------------------
+
+class _FakeConn:
+    """Enough of a connection for the classification legs. They never reach SQL — every job_queue
+    call is recorded instead — which is the point: what a refusal MEANS is not a database question."""
+
+
+def _drive(kind: str, boom: BaseException | None):
+    """Run `_run_job` against a fake executor and return the (state, error) it landed on."""
+    landed: dict = {}
+
+    def fake_finish(_conn, job_id, state, *, error=None):
+        landed.update(id=job_id, state=state, error=error)
+        return {"id": job_id, "state": state}
+
+    def fake_executor(_conn, _job, _worker):
+        if boom is not None:
+            raise boom
+
+    saved_finish, saved_execs = wl.q.finish, wl._EXECUTORS
+    wl.q.finish = fake_finish
+    wl._EXECUTORS = {"onboard": fake_executor}
+    try:
+        wl._run_job(_FakeConn(), {"id": "j1", "kind": kind, "league_id": "L", "season": 2025,
+                                  "attempts": 1, "state": "validating"}, "gate")
+    finally:
+        wl.q.finish, wl._EXECUTORS = saved_finish, saved_execs
+    return landed.get("state"), landed.get("error")
+
+
+def check_classification() -> None:
+    print("\nthe loop's classification — what a refusal MEANS, without a database")
+
+    # THE TRAP, as an executable assertion rather than a comment. If this ever became false the
+    # `except SystemExit` clause below would be redundant; while it is true, a loop written with a
+    # plain `except Exception` exits the process on the first out-of-scope league.
+    if not issubclass(SystemExit, Exception) and issubclass(SystemExit, BaseException):
+        _ok("SystemExit is a BaseException and NOT an Exception — so `except Exception` alone would "
+            "let every onboard_league refusal kill the worker")
+    else:
+        _fail("SystemExit's base classes have changed — re-read _run_job's handlers")
+
+    # Ordering: `except SystemExit` must be reachable, i.e. come BEFORE `except Exception`.
+    src = inspect.getsource(wl._run_job)
+    i_sys, i_exc = src.find("except SystemExit"), src.find("except Exception")
+    if 0 <= i_sys < i_exc:
+        _ok("_run_job handles SystemExit BEFORE Exception, so refusals are reachable")
+    else:
+        _fail("_run_job's `except SystemExit` is missing or comes after `except Exception`")
+
+    state, err = _drive("onboard", SystemExit("league X is dynasty — V1 supports REDRAFT only."))
+    if state == "rejected" and err and "REDRAFT" in err:
+        _ok("a deliberate refusal (SystemExit) lands `rejected`, carrying its reason")
+    else:
+        _fail(f"a SystemExit landed {state!r} err={err!r} — a deterministic refusal must not retry")
+
+    state, err = _drive("onboard", RuntimeError("Sleeper timed out"))
+    if state == "failed" and err and "RuntimeError" in err:
+        _ok("a transient error lands `failed` (retryable), naming the exception type")
+    else:
+        _fail(f"a RuntimeError landed {state!r} err={err!r}")
+
+    state, _ = _drive("onboard", None)
+    _ok("a clean run lands `ready`") if state == "ready" else _fail(f"a clean run landed {state!r}")
+
+    # The `kind` column's proof. It exists for S4d's refresh jobs, and a column whose only unusable
+    # value crashes the process is worse than no column.
+    state, err = _drive("weekly_refresh", None)
+    if state == "rejected" and err and "unknown job kind" in err:
+        _ok("an UNKNOWN kind lands `rejected` cleanly — the loop survives a job it cannot run")
+    else:
+        _fail(f"an unknown kind landed {state!r} err={err!r} — one bad row would be an outage for "
+              "every other user's league")
+
+    # Every stage the chain actually emits must map to a state. Driven off the SOURCE, so a stage
+    # added to run_chain without a mapping fails here instead of silently leaving the row behind.
+    emitted = set()
+    for fn in (onboard_league.run_chain, onboard_league.onboard):
+        for node in ast.walk(ast.parse(textwrap.dedent(inspect.getsource(fn)))):
+            if (isinstance(node, ast.Call)
+                    and getattr(node.func, "id", None) == "stage"
+                    and node.args and isinstance(node.args[0], ast.Constant)):
+                emitted.add(node.args[0].value)
+    unmapped = sorted(emitted - set(wl._STATE_BY_STAGE))
+    if unmapped:
+        _fail(f"stage(s) {unmapped} have no job state — a job would sit in the previous state "
+              "through them, and DoD 2 says the table alone must say what is happening")
+    else:
+        _ok(f"all {len(emitted)} stages the chain emits map to a state {sorted(emitted)}")
+
+    bad = sorted(s for s in wl._STATE_BY_STAGE.values() if s not in q.RUNNING_STATES)
+    if bad:
+        _fail(f"stage states {bad} are not in RUNNING_STATES — the lease could not reclaim them")
+    else:
+        _ok("every mapped state is a RUNNING state, so an expired lease can reclaim mid-build")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--live", action="store_true",
@@ -274,6 +376,7 @@ def main() -> int:
 
     print("=== job queue ===")
     check_shape()
+    check_classification()
     if args.live:
         check_live()
     else:
