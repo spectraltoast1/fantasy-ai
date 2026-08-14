@@ -69,6 +69,22 @@ When you hit 3 commits (or finish the task, whichever comes first), close down.
 The cap is a forced checkpoint — it keeps sessions bounded and guarantees the
 doc-update + merge happen regularly, which is what prevents worktree drift.
 
+### The commit FLOOR: bank before anything destructive
+The cap bounds how much a session sprawls. The **floor** bounds the opposite
+failure — how much is at risk when something goes wrong. **Before running
+anything that writes the real store** (a prove-it-bites leg, a `--load`, a
+generator, any destructive verification), **commit what you have first.**
+
+This is not hypothetical: a gate's prove-it-bites leg once overwrote the frozen
+271-league corpus manifest, and the session's work had been uncommitted for
+hours. **A bank-before-destructive commit counts toward the cap** — if that takes
+you to three, close down; that is the cap working, not something to route around.
+
+Two things make the floor cheap to honour. The store is shared — a worktree's
+`snapshots/`/`cache/` are links into main — so a destructive run in a worktree
+hits main's real data. And since the corpus recovery, `snapshots/corpus/` is
+**git-tracked**, so `git status` after a risky run is a one-command damage check.
+
 ### Commit FLOOR: bank before you run anything destructive
 The cap stops sprawl. Nothing stopped the opposite failure, so this is the floor.
 
@@ -122,8 +138,16 @@ The next task starts a fresh session and a fresh worktree.
 
 - **Some data was once committed.** `player_id_map.parquet` and
   `nfl_stats_2025.parquet` were untracked via `git rm --cached`. Don't re-add data
-  files; the `.gitignore` keeps them out. (This is why the setup script can safely
-  symlink the whole `data/snapshots` and `cache` dirs — nothing tracked lives there.)
+  files; the `.gitignore` keeps them out.
+- **`data/snapshots` is no longer wholly gitignored, and the setup script links its
+  CHILDREN because of it.** The corpus recovery put `snapshots/corpus/` under version
+  control so the frozen manifest can never again be lost to a bad write. That makes a
+  whole-directory symlink impossible: git has to materialise the tracked files at that
+  path, which replaces the link and leaves the worktree holding a **280 KB stub of the
+  389 MB store**, with every pipeline read resolving to nothing. `worktree-setup.sh`
+  now links the ten gitignored children and leaves the tracked one real. It also
+  clears an **empty** leftover directory before linking — a check script that creates
+  and sweeps a throwaway path leaves exactly that, and it silently blocks the link.
 - **`.gitignore` + symlinks.** Trailing-slash patterns (`node_modules/`) match
   directories but not symlinks, so the setup script adds the linked paths to
   `.git/info/exclude` (local-only) to keep `git status` clean.

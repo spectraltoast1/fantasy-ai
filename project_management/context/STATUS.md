@@ -112,33 +112,27 @@ change verdict, all genuine ties outside the demo slate.
 critical-path long pole. Everything but S6 is buildable against the 2025 replay now, so the preseason
 runway is for building and Gate A is for verifying.
 
-**P5/S0 done — the cold-league latency spike, and it reshaped the connect UX.** A cold league is loadable in
-a **measured 8.4–10.3s**, but the Manager Dossier's cross-league fan-out adds **80s / 248 Sleeper calls**,
-and its own source calls that a once-per-season job. So connect is **staged**: the four fast surfaces on a
-spinner, manager profiling as a separate deferred job class. Network-bound, not compute-bound → the S3
-worker is **1 GB `shared-cpu-1x` + a 1 GB volume, ~$7/mo flat to 200 leagues** (that's *worker* cost; the
-per-league cost that scales is metered per token). Shared-substrate reuse proven.
-`serve/bench_cold_league.py` is committed so **S3 re-runs it unchanged on the worker**.
+**P5/S0 done — the cold-league latency spike, and it reshaped the connect UX.** A cold league is loadable
+in a **measured 8.4–10.3s**, but the Manager Dossier's cross-league fan-out adds **80s / 248 Sleeper
+calls** — so connect is **staged**: the four fast surfaces on a spinner, manager profiling as a separate
+deferred job class. Network-bound, not compute-bound, which is what sized the S3 worker.
 → `sessions/v1/P5-Self_Serve/SESSION_P5_S0_REPORT.md` + its audit.
 
-**P5/S1 done — the app has a front door, and it is live.** Supabase Auth, **magic link**. The API verifies
-access tokens (ES256) against the project's JWKS and exposes **`/api/me`**, the only *authenticated*
-endpoint; it 401s on missing/garbage/forged/expired tokens and 503s when the verifier is unreachable
-(denied either way, but an outage stays distinguishable from a bad credential). Every read stays open by
-design — authentication without scoping is a half-gate, so closing and scoping the reads is **S2**, one
-change with one proof. → `sessions/v1/P5-Self_Serve/SESSION_P5_S1_REPORT.md`.
+**P5/S1 done — the app has a front door, and it is live.** Supabase Auth, **magic link**. The API
+verifies access tokens (ES256) against the project's JWKS and exposes **`/api/me`**, the only
+*authenticated* endpoint; it 401s on a missing/forged/expired token and 503s when the verifier is
+unreachable — denied either way, but an outage stays distinguishable from a bad credential.
+→ `sessions/v1/P5-Self_Serve/SESSION_P5_S1_REPORT.md` + *appendix: auth*.
 
-**P5/S1b done — the signup model corrected.** S1 shipped an *invite* gate because the brief read "word of
-mouth" as Will provisioning each person; he meant only that he wouldn't promote the site. So signup is now
-**self-serve behind a shared access code**, enforced **server-side** at `POST /api/signup` — the API holds
-the secret key and does the admin create itself, which is what makes platform-signup-OFF compatible with
-zero per-user work. The code is required from everyone on every request, so *no valid code → no email ever
-sent*. The rate limiter lives in Postgres, not memory: two Fly machines with scale-to-zero would otherwise
-let an attacker reset it by waiting out the idle window. `scripts/invite.py` → `scripts/users.py`
-(`--list`/`--ban`/`--unban`) — nobody is invited now, but self-serve creates the need to remove someone.
-**Custom SMTP is a hard dependency**: Supabase's built-in sender *refuses* addresses that aren't project
-team members, so without it no friend can receive a link at all.
-→ `sessions/v1/P5-Self_Serve/SESSION_P5_S1B_REPORT.md` + `SIGNUP_MODEL_ASSESSMENT.md`.
+**P5/S1b done — the signup model corrected.** Signup is **self-serve behind a shared access code**,
+enforced **server-side** at `POST /api/signup`: the API holds the secret key and does the admin create
+itself, which is what makes platform-signup-OFF compatible with zero per-user work. The code is required
+from everyone on every request, so *no valid code → no email ever sent*. The rate limiter lives in
+Postgres, not memory — two Fly machines with scale-to-zero would otherwise let an attacker reset it by
+waiting out the idle window. `scripts/users.py` (`--list`/`--ban`/`--unban`) exists because self-serve
+creates the need to remove someone. **Custom SMTP is a hard dependency**: Supabase's built-in sender
+refuses any address that isn't a project team member.
+→ `sessions/v1/P5-Self_Serve/SESSION_P5_S1B_REPORT.md` + *appendix: auth*.
 
 **P5/S2a + S2b done — per-user isolation is closed, discovery *and* access.** S2a gave leagues owners
 (`public.user_leagues`) and scoped the **catalog**, so you cannot *find* someone else's league; S2b scoped
@@ -175,36 +169,60 @@ and its 31 frozen rows.
 
 **P5/S2e done — the honesty pass on the League screen, and the season selector is gone.**
 **Deployed 2026-08-13 (Fly v27); confirmed live** — `/api/standings` carries no `posture` key and
-`/api/leagues` is flat. → `sessions/v1/P5-Self_Serve/SESSION_P5_S2E_AUDIT.md`. Four defects in
-one shape: *the UI asserting more certainty than the model has*, stacked on one row of the landing page
-(rank 9 read "0%, no path"; the truth is "0.3%, needs help"). Playoff odds are hedged at both ends —
-**`<1%` / `>99%`** — because a sim 0 means "did not occur in 10,000 tries", not eliminated; there were
-**five** render sites, not the three the brief named. A null magic number now says **"Needs help to
-clinch"** — the producer's only way of saying *no win total guarantees a spot* — instead of rendering blank
-on one panel and `—` on another. **"Clinched a spot" is retired**: `MAGIC_ODDS` is 0.90 and the engine
-calls the value a *proxy*; Clinched/Eliminated may come only from real bracket math, which is deferred.
-`check_league_copy.mjs` gates it — 39 checks, dependency-free, **26 fail against the pre-S2e code**. The
-**season selector is removed and the catalog is flat** (one entry per visible league, season on the row):
-the nesting only ever fed that selector, and `visible` already admitted at most one season per lineage.
-League + week switchers stay. Also fixed: `TeamDetail`/`MatchupDetail` spun for ever on a legitimate
-`200 null` (filed in S2b) — `null` was both the in-flight sentinel and the "no such thing" payload.
-**Parity: 40 of 43 demo payloads byte-identical**, the other three identical once `posture` is stripped and
-the baseline hand-flattened. → `sessions/v1/P5-Self_Serve/SESSION_P5_S2E_REPORT.md`.
+`/api/leagues` is flat. Four defects in one shape — *the UI asserting more certainty than the model
+has* — stacked on one row of the landing page (rank 9 read "0%, no path"; the truth is "0.3%, needs
+help"). Playoff odds are hedged at both ends (**`<1%` / `>99%`**: a sim 0 means "did not occur in
+10,000 tries", not eliminated) across **five** render sites, not the three the brief named. A null
+magic number now says **"Needs help to clinch"**; **"Clinched a spot" is retired** because
+`MAGIC_ODDS` is 0.90 and the engine calls the value a *proxy* — Clinched/Eliminated may come only from
+real bracket math, which is deferred. The **season selector is gone and the catalog is flat**; league
++ week switchers stay. `TeamDetail`/`MatchupDetail` no longer spin for ever on a legitimate
+`200 null`. Gated by `check_league_copy.mjs` (39 checks, **26 fail against the pre-S2e code**);
+parity 40 of 43 demo payloads byte-identical.
+→ `sessions/v1/P5-Self_Serve/SESSION_P5_S2E_REPORT.md` + `SESSION_P5_S2E_AUDIT.md`.
 
-**`posture` is WITHHELD from the API — the metric is wrong, and that is the next session.** `gap =
-all_play_pct - playoff_odds_pct` subtracts two quantities that are not the same unit: odds saturate toward
-0 and 100 while all-play compresses toward 50, so the gap tracks the shape of the odds curve rather than
-luck. Measured 2026-08-12: with `BAND = 9` and the smallest |gap| in the league at 12.0, **every** team read
-*Riding luck* or *Unlucky*, three of the five labels were unreachable, and the highest all-play team was
-told to sell. It is inverted for **every** league, not just the demo — `derive_posture` runs on every
-standings row served. A correctness defect, not a calibration one, so retuning `BAND` cannot fix it. One
-server line withholds it (`reads.load_standings` is the only caller, feeding both `/api/standings` and
-`/api/league`); `calcs.derive_posture` stays for the fix. The map **kept its scatter and lost its
-interpretation** — dot positions are true, the diagonal and buy/sell quadrants were not. **The fix is its
-own measured session:** compare like with like (**all-play % vs actual win %** — same unit, so the gap
-*is* luck; rank-vs-rank is the fallback), then **re-measure `BAND`/`LEVEL_CUT` on the new scale**. Note
-`derive_posture` now lives in exactly **one** place (`api/calcs.py`) — the `frontend/src/posture.js` mirror
-that older notes refer to went with the DuckDB-WASM client, so the fix is cheaper than it was sized.
+**`posture` is WITHHELD from the API — the metric is wrong, and fixing it is its own measured session.**
+`gap = all_play_pct - playoff_odds_pct` subtracts two quantities that are not the same unit, so it tracks
+the shape of the odds curve rather than luck: measured 2026-08-12, **every** team read *Riding luck* or
+*Unlucky*, three of five labels were unreachable, and the best team by both measures was told to sell.
+Inverted for every league, not just the demo. A correctness defect, not calibration, so retuning `BAND`
+cannot fix it. One server line withholds it; the map kept its scatter and lost its interpretation.
+**The fix:** compare like with like (all-play % vs actual **win %** — same unit, so the gap *is* luck;
+rank-vs-rank is the fallback), then re-measure `BAND`/`LEVEL_CUT` on that scale. Cheaper than it was
+sized — `derive_posture` has exactly one home (`api/calcs.py`); the `posture.js` mirror older notes
+name went with the DuckDB-WASM client. → *appendix: engine-decision-reads §5, which specified posture as
+adjacency and "not a computed label" all along.*
+
+**P5/S3 done — the laptop is no longer the only machine that can build a league, and the store has a
+boundary.** A **separate Fly app `fantasy-ai-worker`** (1 GB `shared-cpu-1x` + a 1 GB volume, ~$7/mo,
+no HTTP service — a job box) runs the pipeline off a seeded volume. **Seeded and measured 2026-08-14:
+37s end to end** (6s tar · 18s upload · 13s extract) for **244 MB → 248 MB on the volume, 28% full**.
+That number *is* the recovery procedure — "reconstructible cache, lose the host and re-seed" had never
+been tested — and it is in OPERATIONS with the exact commands. `derived/ledger` (145 MB) is excluded by
+design. **`COPYFILE_DISABLE=1` is mandatory on macOS**: the first seed shipped **16,089** AppleDouble
+`._` files, inflated the volume to 311 MB and made `*.parquet` globs raise on files that were never
+parquet.
+
+**The boundary is one predicate in one place.** The rule is **ONE WRITER — the authoring laptop —
+everything else reads**, not "laptop vs worker": *three* machines run this pipeline (laptop, Fly
+worker, GitHub Actions), so `STORE_ROLE=worker` is set on the worker and the GHA job. Enforced as an
+**allow-list** in `data_layer` over **16** laptop-owned writers, so an unclassified destination or a
+writer added later refuses by default; the ADR's three-row table is now **eleven**. Consolidating the
+`frozen_writers` list was a **bug fix** — three rescore gates each carried a copy and all had drifted
+(4/5/6 entries), so two would not have caught a `write_center_gap` call.
+
+**The band could not simply raise, and that is the finding.** `weekly_refresh` rebuilds
+`ros_player_band` *unconditionally* for `season >= 2026`, so a blanket refusal would have broken every
+2026 refresh — and a 2025 replay proof would never have exposed it. On a worker the writer
+**verifies** instead: identical → proceed (reported, not silent); different or missing → raise with
+the operator step. **Value**-identical via `data_layer.canonical_rows` (moved from
+`check_scoped_reload` — one home, same function). Proven live against the real 2026 ppr substrate:
+identical → proceeds, one field perturbed → raises, restored → proceeds. `check_store_boundary.py`
+gates it, **21/21 green, prove-bites failing all 10**. Worker **parity** proven the same way: the
+spine was cleared on the volume so the run could not pass by skipping, and all **10** recomputed
+league artifacts hash-match the laptop's canonical row multisets. The scoring key came from the
+catalog, **not** `_resolve_scoring_key`'s owner-key fallback (S4 owns that).
+→ `sessions/v1/P5-Self_Serve/SESSION_P5_S3_REPORT.md`.
 
 Two things still queue behind calendar gates, neither blocking P5: **loading the first real 2026 league**
 at Will's draft (~late Aug) — a manual admin load, not P5 — which data-proves S2's refresh, S3b's band

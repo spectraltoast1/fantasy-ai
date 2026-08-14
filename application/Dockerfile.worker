@@ -46,26 +46,33 @@ COPY api/ /app/application/api/
 COPY data/ /app/application/data/
 COPY shared/ /app/application/shared/
 
-# cache/ is BAKED IN, and it is not optional (P5/S3 finding C).
-#
-# `_CACHE_DIR` is application/data/cache — a SIBLING of snapshots/, so the volume mounted at
-# .../data/snapshots does not cover it. It holds the pinned Sleeper players registry, and
-# join_nfl_sleeper_weekly and compute_player_signal both read it through
-# read_pinned_sleeper_players(); weekly_refresh runs both. A worker without it fails on its first
-# league.
-#
-# Baking is right rather than merely cheap (384 KB): the pinned snapshot is the join's
-# reproducibility anchor and a DELIBERATE versioned event (ACTIVE_PLAYERS_SNAPSHOT), so tying it to
-# an image build is more honest than letting it drift on a mutable volume. Consequence: the two
-# refreshable files beside it (player_id_map, players.parquet) live on the container's ephemeral
-# layer, so the worker re-fetches them from Sleeper after a restart. Correct for a 24h cache.
-COPY data/cache/ /app/application/data/cache/
-
 # The volume mounts over this path at runtime (fly.worker.toml [mounts]). It must exist in the image
 # so the mount has somewhere to land, and it must be EMPTY — data_layer._SNAPSHOT_DIR is computed
 # from the source file's location and is not configurable, which is why the mount point is fixed
 # rather than chosen.
-RUN mkdir -p /app/application/data/snapshots
+#
+# cache/ IS A SYMLINK ONTO THE VOLUME, and it is not optional (P5/S3 finding C).
+#
+# `_CACHE_DIR` is application/data/cache — a SIBLING of snapshots/, so the mount does not cover it,
+# and it is load-bearing: it holds the pinned Sleeper players registry that
+# join_nfl_sleeper_weekly and compute_player_signal both read through read_pinned_sleeper_players(),
+# and weekly_refresh runs both. A worker without it fails on its first league.
+#
+# It is NOT baked into the image, and the reason is worth writing down because the first attempt
+# was: `COPY data/cache/` cannot work from a worktree. There, application/data/cache is a symlink
+# into main (worktree-setup.sh puts it there), and a Docker build context will not follow a symlink
+# out of its root — the build fails with "not found" on main's absolute path. Building only ever
+# from main would fix it and would also make the image un-buildable from the very place sessions are
+# supposed to run.
+#
+# Pointing it at the volume is better than a workaround anyway. The cache persists across restarts
+# instead of living on the container's ephemeral layer, seeding covers it in the same pass as
+# everything else, and the pinned snapshot being on a MUTABLE volume is safe precisely because of
+# this session's other half: write_sleeper_players_snapshot is laptop-owned, so the guard refuses it
+# here. The worker can read the anchor and can never drift it.
+RUN mkdir -p /app/application/data/snapshots \
+    && rm -rf /app/application/data/cache \
+    && ln -s /app/application/data/snapshots/_cache /app/application/data/cache
 
 # No CMD that does work. This box is driven by `fly ssh console` / `fly machine run` for now — the
 # job queue and the connect endpoint are P5/S4. Idling here rather than exiting keeps a machine

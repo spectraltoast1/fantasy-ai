@@ -47,6 +47,18 @@ on:
     - cron: "0 15 * * 3"   # Wed 15:00 UTC — idempotent catch-up (no-op if Tue already advanced)
 
 env:
+  # The store boundary (P5/S3, context/appendices/store-boundary.md). The rule is NOT
+  # "laptop vs the Fly worker" — it is ONE WRITER, everything else reads, and this runner is one of
+  # the everything-else. Without this flag it is a third machine that could author the shared
+  # scoring substrate and the ledger, unattended, on a cron.
+  #
+  # Honest scope: this is defence in depth, not a hole being closed. The `--live` path has never
+  # worked and currently dies at shared/league_resolver.py before any pipeline step, because the
+  # hardcoded LEAGUE_ID is a 2025 league and the resolver now asks Sleeper for 2026. But a manual
+  # workflow_dispatch in `replay` mode with an explicit league bypasses the resolver entirely and
+  # WOULD reach the band rebuild, so the flag earns its line. P5/S4 guts this file to a pure
+  # trigger and retires MY_USERNAME/LEAGUE_ID, at which point this goes with them.
+  STORE_ROLE: worker
   SNAPSHOT_BACKEND: supabase
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
   SUPABASE_S3_ENDPOINT: ${{ secrets.SUPABASE_S3_ENDPOINT }}

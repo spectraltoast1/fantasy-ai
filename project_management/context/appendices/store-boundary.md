@@ -1,6 +1,11 @@
-# ADR — The store boundary: what the laptop owns, what the worker owns
+# ADR — The store boundary: what the laptop owns, what every other machine only reads
 
-**Current as of: 2026-08-13.** **Status: ACCEPTED (Will, 2026-08-13). Option (b).**
+**Current as of: 2026-08-14.** **Status: ACCEPTED (Will, 2026-08-13) and BUILT (P5/S3, 2026-08-14).**
+Option (b).
+
+> **Built, with three corrections this ADR did not anticipate** — all three are folded in below:
+> the model is **one writer**, not laptop-vs-worker (there is a third machine); the classification
+> needed **eleven** rows, not three; and the band could **not** simply raise — see "what (b) costs".
 **Scope:** P5/S3 (the Fly worker). **Supersedes:** the four-bullet rule in
 `projects/v1/P5_ACCOUNTS_SELF_SERVE_ONBOARDING.md` § Context, which this expands and **corrects**.
 
@@ -8,13 +13,42 @@
 
 ## The decision
 
-Data flows **one direction only: laptop → worker.**
+Data flows **one direction only: ONE WRITER — the authoring laptop — and everything else reads.**
 
-| | owns (may write) | measured 2026-08-13 |
+**Corrected in build (P5/S3):** this was written as "laptop → worker", which undercounts the
+machines. There are **three** that run this pipeline — the laptop, the Fly worker, and the GitHub
+Actions runner — so the rule is stated by role, not by hostname. Anything that is not the authoring
+laptop sets `STORE_ROLE=worker` and gets the shared substrate read-only.
+
+**The classification is now complete.** The three rows below described a store with eleven
+destinations; the rest were unclassified, which is how the guard would have been written with holes
+in it. Enforced as an **allow-list** in `data_layer` — the worker may write only what it is granted,
+so a destination nobody has thought about, and any writer added later, refuses by default.
+
+| destination | owner | why |
 |---|---|---|
-| **Laptop** | `derived/ledger` — the certification spine, never leaves | **145 MB** |
-| **Laptop** | `derived/scoring` — the shared scoring-keyed substrate, authored locally, pushed up | **16 MB** |
-| **Worker** | `derived/league` + the joins | **66 MB** (`derived/league`) |
+| `derived/ledger` (**6** writers, not 4) | **laptop** | the certification spine; immutable, append-only, never leaves. `write_tune_proposals` and `write_center_gap` live here too |
+| `derived/scoring` (2 writers) | **laptop** | SHARED by every league on a scoring key, and built under engine constants — propose-only, human-promoted |
+| `derived/adp_points_curve` | **laptop** | the leak-free per-holdout curve; corpus-shaped, not per-league |
+| `corpus/*` manifests (3 writers) | **laptop** | corpus selection is a human, versioned decision |
+| `leagues.parquet` | **laptop** | whole-file overwrite of the shared registry — see the S4 wall below |
+| `demo_manifest` / `synthetic_catalog` | **laptop** | the served catalog; generated, not harvested |
+| `cache/` pinned players snapshot | **laptop** | an immutable versioned event (already write-once guarded) |
+| `derived/league` (12 writers) | **worker** | per-league — this is the worker's job |
+| the joins (3 writers) | **worker** | per-league |
+| per-league raw (Sleeper teams/matchups/transactions) | **worker** | it is the fetcher |
+| `cache/` player-id map + Sleeper registry | **worker** | a routine 24h refresh from Sleeper |
+
+Measured 2026-08-13: `derived/ledger` **145 MB** · `derived/scoring` **16 MB** ·
+`derived/league` **66 MB**.
+
+### The wall P5/S4 must see coming
+
+`write_leagues` **overwrites the whole file** on a fixed 7-column schema — including `onboarded_at`
+and `pilot_cohort`, the connect-flow hooks. A worker calling it would replace the shared registry
+with only the leagues that machine knows about. The *shape* of the writer is wrong for a worker, not
+just its owner, so it stays laptop-owned and **S4 needs an append-shaped per-league writer before
+the worker can catalog a league.** Recorded here so S4 sees the wall instead of hitting it.
 
 **Postgres stays the served truth.** The worker's volume is a **reconstructible cache, not precious
 data** — lose the host, re-seed it.
@@ -79,6 +113,28 @@ An operator step. When engine constants change, Will rebuilds the band locally a
 *before* the worker can serve leagues on that key. Between those two moments the worker refuses to
 refresh rather than quietly building its own. **That refusal is the feature** — a loud stop beats a
 silent divergence, and this is a once-a-season event (the annual re-tune), not a weekly one.
+
+### CORRECTION from the build: a plain refusal would have bricked the worker
+
+This ADR says the worker fails loudly "if it is stale or missing". **There was no staleness test
+behind that sentence.** `weekly_refresh` rebuilds the band *unconditionally* for
+`season >= FIRST_HONEST_BAND_SEASON` — deliberately, because an existence check passes on a stale
+file, which is the drift it exists to catch. So a guard that simply refused `write_ros_player_band`
+would have refused **every** 2026 refresh, not only the unsafe ones, and the worker could never have
+onboarded a real league at all.
+
+Worse, it would not have been caught: the S3 proving run is a **2025** replay, which takes the
+`season < 2026` branch and never reaches the band. The session could have gone green and shipped a
+worker that cannot do its job.
+
+**So on a worker the writer VERIFIES instead of writing**, and distinguishes three outcomes:
+identical → return and let the refresh proceed (reported, not silent); different → raise; missing →
+raise. The comparison is **value**-identical via `data_layer.canonical_rows` — polars' parquet
+writer is physically non-deterministic, so a byte comparison would have blocked the worker on
+layout noise, which is the same outage by another route.
+
+*Proven on the live worker, 2026-08-14, against the real 2026 ppr substrate: identical → proceeds;
+one field perturbed by +0.1 → raises with the operator step; restored → proceeds again.*
 
 ---
 

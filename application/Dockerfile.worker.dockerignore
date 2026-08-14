@@ -21,8 +21,11 @@ venv/
 # with no data_layer in it.
 data/snapshots/
 
-# data/cache is NOT excluded — it is 384 KB and load-bearing (the pinned players registry the join
-# reads). See the COPY and its rationale in Dockerfile.worker.
+# data/cache too — it lives on the VOLUME (Dockerfile.worker symlinks it there), not in the image.
+# Excluding it is not merely tidy: in a worktree this path is a SYMLINK into main, and `COPY data/`
+# would otherwise carry a dangling symlink into the image that then collides with the real one the
+# Dockerfile creates. Excluded here, the build behaves identically from a worktree and from main.
+data/cache/
 
 # The frontend is the API's business, not the worker's.
 frontend/
