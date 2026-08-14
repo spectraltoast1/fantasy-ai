@@ -15,6 +15,9 @@ FANTASY_PROS_API_KEY = "your-key-here"
 # Durable secret home: lives here in config.py (gitignored, symlinked into worktrees).
 # The FastAPI app + the parquet->Postgres loader read it via application.api.db.database_url().
 # On Fly it is set as a secret env var instead. Slot your DB password in for [YOUR-PASSWORD].
+# SESSION pooler (5432), and since P5/S4b that is load-bearing rather than a preference: the
+# worker waits for jobs on LISTEN/NOTIFY, which does not survive the TRANSACTION pooler (6543).
+# Switching would not error — the worker would just silently stop being woken. See api/.env.example.
 DATABASE_URL = "postgresql://postgres.[PROJECT-REF]:[YOUR-PASSWORD]@aws-0-us-east-1.pooler.supabase.com:5432/postgres"
 
 # --- Auth (P5/S1, S1b) -------------------------------------------------------------------

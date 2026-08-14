@@ -2,7 +2,7 @@
 
 **What this is:** SurplusFF — a fantasy-football decision-support dashboard whose unit is the manager's
 *decision*, not the player. Live, single-league, on the server stack.
-**Live at:** https://surplusff.com/ (also https://fantasy-ai-api.fly.dev/) · **Updated:** 2026-08-13
+**Live at:** https://surplusff.com/ (also https://fantasy-ai-api.fly.dev/) · **Updated:** 2026-08-14
 **Name + domain:** the official name is **SurplusFF**, commonly shortened to **Surplus** (Will,
 2026-08-05); "Gridiron" was a working name — retire it. **surplusff.com** is registered (SSL live), serves
 the app (Fly cert + DNS), and is the **Resend sending domain** for auth email — Supabase's custom SMTP
@@ -252,10 +252,7 @@ tables unchanged, no duplicate row). Signed-out prod still returns **exactly the
 league 404s byte-for-byte identically to one that never existed.
 → `sessions/v1/P5-Self_Serve/SESSION_P5_S4A_REPORT.md`.
 
-**Two consequences worth knowing before the next session.** (1) **`build_db --verify` has moved
-machines**: it compares *local* disk to Postgres, and the worker now builds leagues the laptop never
-sees, so the laptop reports a mismatch (measured: laptop FAILED, worker **VERIFY OK** on all 15
-tables). Run it on the worker. (2) A **2025** league takes the `season < FIRST_HONEST_BAND_SEASON`
+**One consequence carried forward:** a **2025** league takes the `season < FIRST_HONEST_BAND_SEASON`
 branch and never reaches the band, and production's derived season is **2026**, so a 2025 connected
 league is correctly invisible to its own owner on the deployed API. Both halves were proven —
 positive against a `CURRENT_SEASON=2025` process on production Postgres, negative on live prod — and
@@ -263,10 +260,50 @@ the 2026 arm is pinned as a fixture in `check_ownership`/`check_isolation`. **Wh
 is the combination: a *cold 2026* league whose scoring key's substrate must already be on the volume.
 That is Gate A's to close.**
 
+**P5/S4b — work reaches the worker without a human, and the laptop can no longer clobber the
+catalog.** `Dockerfile.worker` was `CMD ["sleep","infinity"]`: always on, doing nothing, waiting for
+somebody to `fly ssh` in. **The API physically cannot call it** — `api/requirements.txt` is
+fastapi-only and the worker has no `[http_service]` — so the two machines can only meet in Postgres.
+*That*, not latency, is why there is a queue. `public.jobs` lives in `api/auth_schema.sql` (a fourth
+app-side table; `--load` DROPs everything in the generated schema), work is claimed with
+`FOR UPDATE SKIP LOCKED`, and the worker waits on `LISTEN` with a 60s safety-net poll. **The lease
+expires** (120s, renewed per stage), `attempts` caps retries, and a reaper turns the last one into a
+terminal `failed` — so a killed worker never strands a league. **`rejected` is a refusal that will
+never succeed; `failed` is retryable.** Mechanism in ARCHITECTURE + *appendix: store-boundary*.
+
+**The guard S4a's audit assigned here shipped first.** The worker authors
+`connected_catalog.parquet` and the laptop does not have it, so the laptop held the *stale* catalog —
+measured live: laptop 32 ids, production 33. `assert_catalog_covers_postgres` compares the id **sets**
+(`--verify` only ever compared counts, which is why it never caught this) and refuses before the
+TRUNCATE and before the DROPs. **Consequence: the full `--load` has moved to the worker**, the second
+artifact after `--verify` to change machines — copying the catalog parquet down is not enough,
+because the loader is skip-if-absent and the laptop lacks the leagues' `derived/league` artifacts.
+`_assert_columns_live` used to print `--emit && --load` on both machines, i.e. the codebase itself
+instructed the operator into the loss; it is machine-aware now. → `OPERATIONS.md`.
+
+**Two latent defects the queue made reachable, fixed in the same session.** (1) A crash inside the
+~10s chain left the on-disk directories and no catalog row, and `assert_cold` then called the league
+warm — so the first crash on a real user's league made it **permanently** un-onboardable, and under
+the queue that is a terminal `rejected`. `classify()` now separates *recorded* warmth (a catalog row
+— somebody decided) from *on-disk* warmth (wreckage) and returns `resume`. (2) `harvest._raw_present`
+is true on config + teams + **week one**, while `_pull_raw` writes every week inside a loop — so a
+fetch that died at week 6 of 14 read as complete and the league would reach `ready` **on a truncated
+season**, the risk register's exact "half-built league that looks complete". The fetch stage now
+verifies coverage against Sleeper's own completed-week count and repairs it.
+
+**Deployed and proven live 2026-08-14, all five DoD clauses.** A hand-inserted row was leased **0.2s**
+later (the NOTIFY, not the poll) and reached `ready` in **10.6s** — 14,999 rows, nobody touching
+`fly ssh`. **The kill drill:** killed mid-`loading`, the lease dangled, Fly restarted the process by
+itself, and the job was reclaimed at **attempt 2, 130s** after the kill — Postgres **identical on all
+14 tables**, because `load_league` is one transaction and runs last. Reclaim latency is
+`LEASE_SECONDS` + up to `IDLE_WAKE_SECONDS` (120 + ≤60). An idle day costs **~2,880 statements**, no
+polling — but it is a **third** always-open connection against the free tier (P6's item, now worse).
+→ `sessions/v1/P5-Self_Serve/SESSION_P5_S4B_REPORT.md`.
+
 **Gate A is unblocked.** Loading the first real 2026 league at Will's draft (~late Aug) is no longer
-"a manual admin load with nowhere to put the row" — it is `onboard_league --league <id> --season 2026`
-on the worker. It data-proves S2's refresh, S3b's band panel and S4a's regimes at once, and **must
-verify the ROS-range panel against real band data**. **S4b** (market turn-on) stays post-launch.
+"a manual admin load with nowhere to put the row" — it is now a **job row**, and the worker picks it
+up. It data-proves S2's refresh, S3b's band panel and S4a's regimes at once, and **must verify the
+ROS-range panel against real band data**. (Market turn-on stays post-launch.)
 → `ROADMAP.md` + `projects/v1/BUILD_ORDER.md` + `projects/v1/P5_ACCOUNTS_SELF_SERVE_ONBOARDING.md`.
 
 ## The demo, visibility, and what a signed-in user sees (decided 2026-08-05; **built in S2a + S2b**)

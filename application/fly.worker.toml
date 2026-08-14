@@ -33,8 +33,17 @@ primary_region = "iad"          # same region as the API and the Supabase projec
   destination = "/app/application/data/snapshots"
 
 # NO [http_service]. This is a job box, not a server: nothing listens, so there is no health check
-# to pass and no scale-to-zero to configure. It is reached by `fly ssh console`. When P5/S4 adds the
-# job queue this grows a process that leases work; until then a run is triggered by hand.
+# to pass and no scale-to-zero to configure. It is reached by `fly ssh console`.
+#
+# SINCE P5/S4b THE PROCESS LEASES WORK (Dockerfile.worker's CMD), so the machine must stay UP —
+# there is no request to wake it. Nothing here scales it to zero, and nothing should.
+#
+# `kill_timeout` is stated rather than inherited (the default is 5s). On SIGTERM — which is what
+# every `fly deploy` sends — the loop finishes its current STAGE, hands the lease back and exits, so
+# a redeploy does not strand somebody's half-built league for the length of the lease. 30s covers
+# S0's measured 8.4-10.3s onboard with room; if a stage ever outruns it the 120s lease expiry is
+# still the backstop, and the job is retried rather than lost.
+kill_timeout = "30s"
 #
 # A Fly volume attaches to exactly ONE machine and is pinned to a physical host, so this app is a
 # STATEFUL SINGLETON, not a pool. That is intended for an invited cohort and it is a known limit,

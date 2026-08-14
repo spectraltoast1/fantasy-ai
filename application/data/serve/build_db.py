@@ -412,6 +412,12 @@ def _assert_columns_live(conn, table: str, col_names: list[str], lid: str, seaso
     It does NOT fix the problem, deliberately: the remedy is `--emit` + `--load`, which DROPs every
     table on the production database and needs a planned outage (S2d spent 145s on one). A refusal
     that names the column, the table and the remedy is the honest stop.
+
+    **P5/S4b: the remedy is machine-aware, and that is not cosmetic.** This function is reached from
+    `_copy_slice_tx`, which serves BOTH the worker's `load_league` and the laptop's `load()`, so it
+    used to print one command for two machines — and on the laptop that command is now a data-loss
+    event for every connected league (`assert_catalog_covers_postgres`). A guard that intercepts a
+    command while the codebase keeps printing it has only moved the trap.
     """
     with conn.cursor() as cur:
         cur.execute("SELECT column_name FROM information_schema.columns "
@@ -425,9 +431,10 @@ def _assert_columns_live(conn, table: str, col_names: list[str], lid: str, seaso
             f'{lid}/{season}: "{table}" is missing column(s) {missing} in the deployed database.\n'
             f"  This league carries a shape the schema was never emitted for — the DDL is a UNION\n"
             f"  across the slices present at the last --emit, and this slice is outside it.\n"
-            f"  Remedy (OPERATOR, needs a planned outage — it DROPs every table):\n"
-            f"    build_db --emit && build_db --load && fly deploy\n"
-            f"  Do NOT run that from an onboarding job.")
+            f"  Remedy (OPERATOR, needs a planned outage — it DROPs every table, then `fly deploy`):\n"
+            f"    {_full_load_remedy()}\n"
+            f"  Do NOT run that from an onboarding job, and do NOT run the load on the laptop while\n"
+            f"  connected leagues exist — see assert_catalog_covers_postgres.")
 
 
 def _copy_slice_tx(conn, table: str, df: pl.DataFrame, lid: str, season: int) -> int:
@@ -510,6 +517,80 @@ def upsert_catalog_row(conn, lid: str) -> int:
     return rows.height
 
 
+def _full_load_remedy() -> str:
+    """The two-machine dance a full `--emit`/`--load` now needs, phrased for THIS machine.
+
+    `--emit` writes `serve/schema.sql`, a git-tracked SOURCE file, so it belongs where the commit
+    happens: the laptop. `--load` re-COPYs `_slices()` from the LOCAL derived store, so it belongs
+    where the artifacts are: since P5/S4a that is the worker, which holds every connected league's
+    `derived/league/` output and the `connected_catalog.parquet` naming it. The two halves have come
+    apart, exactly as `--verify` did (S4a finding B) and for the same reason.
+    """
+    if dl.store_role() == "worker":
+        return ("run `--emit` on the LAPTOP (it writes serve/schema.sql, a source file — commit it), "
+                "then re-run `--load` HERE, where the derived artifacts are.")
+    return ("run `--emit` HERE (it writes serve/schema.sql, a source file — commit it), then run the "
+            "load on the WORKER, which is the machine that has the connected leagues' artifacts:\n"
+            '    fly ssh console -a fantasy-ai-worker -C "python -m application.data.serve.build_db --load"')
+
+
+def _postgres_catalog_ids(conn) -> set[str]:
+    """Every distinct `league_id` the SERVED catalog table currently holds."""
+    with conn.cursor() as cur:
+        cur.execute(f'SELECT DISTINCT league_id FROM "{_MANIFEST_TABLE}"')
+        return {str(r[0]) for r in cur.fetchall()}
+
+
+def assert_catalog_covers_postgres(conn=None, *, pg_ids: set[str] | None = None) -> None:
+    """Refuse a whole-catalog write when Postgres knows leagues this machine's store does not.
+
+    THE MIRROR OF `reload_manifest`'s STORE_ROLE GUARD, and it points the other way. That one stops a
+    worker publishing its seeded snapshot over the real catalog. After P5/S4a the exposed direction is
+    the reverse: the WORKER authors `connected_catalog.parquet` and the LAPTOP does not have it, so
+    the laptop is now the machine with the stale catalog. Measured 2026-08-14: laptop `_catalog()` 32
+    rows, production `league_catalog` 33.
+
+    `data_layer.read_connected_catalog()` returns an EMPTY FRAME when that file is absent — silently,
+    by design, because every store had none until the first connect. So `_catalog()` succeeds and
+    quietly loses N, and nothing downstream can tell "no connected leagues" from "this machine has
+    never seen the file".
+
+    Why `--verify` does not already catch this: it compares COUNTS (`count(*)`,
+    `count(DISTINCT league_id)`), never the id SETS. This compares the sets. That difference is the
+    whole guard.
+
+    `pg_ids` is injectable so the gate can drive both halves — refuses on drift, permits on
+    agreement — without a database. A guard you can only exercise against production is one nobody
+    re-checks (same reason `rate_limit.counts` takes `counts_fn` and `reads.authorize_slice` takes
+    `lookup`).
+    """
+    if pg_ids is None:
+        pg_ids = _postgres_catalog_ids(conn)
+    local = {str(v) for v in _catalog()["league_id"].to_list()}
+    orphaned = sorted(pg_ids - local)
+    if not orphaned:
+        return
+    raise dl.StoreBoundaryError(
+        f"build_db is refused on this machine: the served catalog holds {len(orphaned)} league(s) "
+        f"this store has never seen.\n"
+        f"  Orphaned in league_catalog: {orphaned}\n"
+        f"  This machine's _catalog() has {len(local)} row(s); Postgres has {len(pg_ids)}. Proceeding "
+        f"would TRUNCATE/DROP and re-COPY the smaller set, so `--reload-manifest` would delete those "
+        f"leagues' catalog rows (their data rows survive as rows nothing names, and /api/leagues "
+        f"stops showing them to their owners) and `--load` would drop the data rows as well.\n"
+        f"  The store boundary is one-directional (context/appendices/store-boundary.md); since "
+        f"P5/S4a the WORKER authors connected_catalog.parquet and this store lacks it.\n"
+        f"  TRAP 1: the documented remedy for an un-emitted column is `--emit && --load` — that "
+        f"command IS this failure when run here. See _assert_columns_live.\n"
+        f"  TRAP 2: `build_db --verify` on the laptop reports VERIFY FAILED legitimately (S4a "
+        f"finding B — the worker builds leagues the laptop never sees). Do NOT reach for `--load` to "
+        f"reconcile it; that is the data-loss path, not the fix.\n"
+        f"  Remedy: {_full_load_remedy()}\n"
+        f"  Copying connected_catalog.parquet down is NOT sufficient on its own: the loader is "
+        f"skip-if-absent, so without those leagues' derived/league artifacts they would get a "
+        f"catalog row and ZERO data rows.")
+
+
 def reload_manifest() -> None:
     """Refresh ONLY the league_catalog table (Stage-B B4 catalog-only write) — TRUNCATE +
     re-COPY in one transaction, leaving the 31 data-slice tables untouched. The table schema is
@@ -534,6 +615,9 @@ def reload_manifest() -> None:
     df = _catalog()          # the union, or a catalog-only refresh would drop the synthetic rows
     jsonb_cols = {n for n, dt in df.schema.items() if pg_type(dt) == "JSONB"}
     with psycopg.connect(database_url()) as conn:
+        # BEFORE the TRUNCATE. The role check above stops a stale WORKER publishing over the laptop;
+        # this stops a stale LAPTOP publishing over the worker's connected leagues (P5/S4b).
+        assert_catalog_covers_postgres(conn)
         with conn.cursor() as cur:
             cur.execute(f'TRUNCATE "{_MANIFEST_TABLE}"')
             copy_sql = f'COPY "{_MANIFEST_TABLE}" ({", ".join(df.columns)}) FROM STDIN'
@@ -615,13 +699,21 @@ def reload_league(lid: str) -> None:
 
 
 def load() -> None:
-    """Apply schema.sql then COPY every present (slice, dataset) + the league_catalog."""
+    """Apply schema.sql then COPY every present (slice, dataset) + the league_catalog.
+
+    Guarded by `assert_catalog_covers_postgres` (P5/S4b): this is the DROP+CREATE path, so on a
+    machine whose store is missing connected leagues it deletes their data rows, not just their
+    catalog row. Since P5/S4a that machine is the LAPTOP.
+    """
     if not _SCHEMA_SQL.exists():
         raise SystemExit("schema.sql missing — run --emit first.")
     schema_sql = _SCHEMA_SQL.read_text()
     slices = _slices()
 
     with psycopg.connect(database_url()) as conn:
+        # BEFORE _run_sql_script — that is where the DROP TABLE ... CASCADE statements are, and this
+        # path drops the DATA rows too, not just the catalog row (P5/S4b).
+        assert_catalog_covers_postgres(conn)
         with conn.cursor() as cur:
             _run_sql_script(cur, schema_sql)
         conn.commit()

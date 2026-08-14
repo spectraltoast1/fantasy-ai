@@ -68,9 +68,39 @@ bundle can survive a deploy (see `PM_SESSION_STARTUP.md`); trust `/api/*` JSON a
   then re-run the seed below. Until you do, the worker declines leagues on that scoring key — which
   is the point: a loud stop beats silently serving numbers built from a recipe nobody approved.
 
-- **Onboarding a league the store has never seen (P5/S4a).** One command, on the worker, from its
-  own volume. It fetches, joins, computes the spine, writes the catalog row and COMMITs to
-  Postgres; `--dry-run` does everything except the last two.
+- **The worker runs a QUEUE now, not `sleep infinity` (P5/S4b).** `Dockerfile.worker`'s CMD is
+  `python -m application.data.serve.worker_loop`. It waits on Postgres `LISTEN jobs_new` with a
+  **60s safety-net poll**, leases one job at a time and runs the onboarder. **To give it work you
+  insert a row — you do not ssh anywhere:**
+  ```
+  application/venv/bin/python -c "from application.data.serve import job_queue; print(job_queue.enqueue('<ID>', <YYYY>))"
+  ```
+  Watch it from the table alone (this is the intended instrument — not the worker's stdout):
+  ```
+  application/venv/bin/python -c "from application.api import db; [print(r) for r in db.fetch_all('SELECT state,attempts,league_id,season,error,updated_at FROM public.jobs ORDER BY created_at DESC LIMIT 10')]"
+  ```
+  **"The queue is stuck" — read it in this order.** `state='queued'` and nothing moving → the worker
+  is down or wedged (`fly status -a fantasy-ai-worker`, then `fly logs`); it prints a line on every
+  connect. A running state with `lease_expires_at` in the past → the worker died mid-job. **It comes
+  back by itself: measured 2026-08-14, 130s from a SIGKILL to the retry starting** (the 120s lease
+  plus up to the 60s idle wake), with Fly restarting the process on its own. After `attempts` hits
+  **3** the job is reaped into `failed` with the reason in `error`. `rejected` means a deliberate
+  refusal — out of scope, wrong season, unknown `kind` — and **retrying will not help**; the reason
+  is in `error`. The worker's failure mode is still "leagues stop being built", never "the site is
+  off". **A half-built league is not a failure mode this can produce:** `load_league` is one
+  transaction and runs last, so Postgres holds the whole league or the previous state, never a gap.
+
+  **There is no `pkill`, `pgrep` or `ps` on the worker** — `python:3.13-slim` ships no procps, and a
+  `pkill` there **exits 0 having done nothing**, which is how the first kill drill "passed" without
+  killing anything. To stop the process from a shell, walk `/proc` and use `kill`, a shell builtin:
+  ```
+  fly ssh console -a fantasy-ai-worker -C "sh -c 'for p in /proc/[0-9]*; do grep -qa worker_loop \$p/cmdline 2>/dev/null && kill -9 \${p#/proc/}; done'"
+  ```
+
+- **Onboarding a league by hand, without the queue (P5/S4a).** Still works, and still the right tool
+  when you want the output in front of you. On the worker, from its own volume: it fetches, joins,
+  computes the spine, writes the catalog row and COMMITs to Postgres; `--dry-run` does everything
+  except the last two.
   ```
   fly ssh console -a fantasy-ai-worker -C "python -m application.data.serve.onboard_league --league <ID> --season <YYYY>"
   ```
@@ -141,34 +171,42 @@ except the last query. The fix is to make the traffic cheap: **precompute the de
 forever once S2d lands, so it can be computed once instead of once per visitor) and **put Cloudflare in
 front** so most requests never reach Fly or Supabase at all. Both are **P6/S4**.
 
-## DO NOT run `--load` or `reload_manifest` on the laptop while connected leagues exist (P5/S4a)
+## The full `--load` has moved to the WORKER — and the laptop now refuses it (P5/S4b)
 
-**Added 2026-08-14. Read before any full reload.**
+**Guard shipped 2026-08-14 (P5/S4b). This section replaces the "do not run it" warning it used to
+carry: the rule is now enforced, not remembered.**
 
 Since S4a the **worker** authors `connected_catalog.parquet`; the **laptop does not have it**, and
-`read_connected_catalog()` returns an empty frame when the file is absent — silently, by design.
-Recomputed 2026-08-14: laptop `_catalog()` = **32** rows, production `league_catalog` = **33**.
+`read_connected_catalog()` returns an empty frame when the file is absent — silently, by design. So
+the laptop is the machine with the stale catalog: measured 2026-08-14, laptop `_catalog()` = **32**
+rows, production `league_catalog` = **33**.
 
-| command | run on the laptop today | effect |
+`build_db.assert_catalog_covers_postgres` now compares the **id sets** and refuses before the
+TRUNCATE in `reload_manifest()` and before the DROPs in `load()`. (`--verify` compares *counts*,
+never sets, which is why it never caught this.) You will see a `StoreBoundaryError` naming the
+orphaned leagues — **that is the guard working.**
+
+| command | on the laptop today | on the worker |
 |---|---|---|
-| `build_db --reload-manifest` | TRUNCATE 33 → re-COPY 32 | the connected league's **catalog row is deleted**; its data rows survive as rows nothing names, and `/api/leagues` stops showing it to its owner |
-| `build_db --load` | DROP/CREATE + re-COPY `_slices()` (32) | **the data rows go too** |
+| `build_db --reload-manifest` | **refused** (would delete the connected league's catalog row) | refused for the *other* reason — its store is a seeded snapshot |
+| `build_db --load` | **refused** (would drop the data rows too) | **this is where it belongs** |
+| `build_db --emit` | **here** — it writes `serve/schema.sql`, a source file. Commit it | no (the image is ephemeral) |
+| `build_db --verify` | reports VERIFY FAILED, legitimately (S4a finding B) | **here** |
 
-**Two traps around it:**
+**So a full reload is now a two-machine dance:**
+```
+application/venv/bin/python -m application.data.serve.build_db --emit   # laptop; commit the result
+fly ssh console -a fantasy-ai-worker -C "python -m application.data.serve.build_db --load"
+fly deploy   # from application/ — the window is load → REDEPLOY, not the load
+```
 
-1. **The remedy for an un-emitted column is this failure.** If a connected league ever carries a
-   column the emitted DDL lacks, the documented fix is `--emit` + `--load` off a planned outage —
-   which, run on the laptop, wipes every connected league. Do the guard first.
-2. **The alarm is already explained away.** The laptop's `build_db --verify` now reports
-   **VERIFY FAILED** legitimately (the worker builds leagues the laptop has never seen — S4a finding
-   B). Do **not** reach for `--load` to reconcile it. That is the data-loss path, not the fix.
+**Copying `connected_catalog.parquet` down to the laptop is NOT a sufficient workaround.** The loader
+is skip-if-absent, so without each connected league's `derived/league` artifacts they would get a
+catalog row and **zero data rows** — a subtler version of the same loss.
 
-**If you need a full reload before the guard ships:** re-seed the laptop's `connected_catalog.parquet`
-from the worker's volume first, or re-onboard each connected league afterwards — the list of what to
-re-onboard is `league_catalog` ⋈ `user_leagues` in Postgres.
-
-**Guard assigned to P5/S4b:** `reload_manifest` and `load` refuse when Postgres holds `league_id`s
-absent from the local `_catalog()`, naming them.
+**The trap that made this dangerous is now defused at the source:** `_assert_columns_live`'s remedy
+string used to print `--emit && --load` on *both* machines, i.e. the codebase itself instructed the
+operator into the data loss. It is machine-aware now.
 
 ## Known gaps (deliberate, not oversights)
 

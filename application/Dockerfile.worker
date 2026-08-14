@@ -74,7 +74,12 @@ RUN mkdir -p /app/application/data/snapshots \
     && rm -rf /app/application/data/cache \
     && ln -s /app/application/data/snapshots/_cache /app/application/data/cache
 
-# No CMD that does work. This box is driven by `fly ssh console` / `fly machine run` for now — the
-# job queue and the connect endpoint are P5/S4. Idling here rather than exiting keeps a machine
-# available to exec into; S4 replaces this with the queue leaser.
-CMD ["sleep", "infinity"]
+# THE QUEUE LEASER (P5/S4b) — this replaces `sleep infinity`, exactly as the note here used to say
+# S4 would. The box stays a job box: still no HTTP, still no health check, still nothing listening.
+#
+# It waits on Postgres LISTEN with a 60s safety-net poll, leases one job at a time and runs
+# `onboard_league.onboard`. It is written never to exit on an error — including a startup
+# misconfiguration, which it logs and sleeps over rather than dying on. That is deliberate: a
+# process that exits makes the machine crash-loop, and you cannot `fly ssh` into a crash-looping
+# machine to fix the config that caused it. This box has no other door.
+CMD ["python", "-m", "application.data.serve.worker_loop"]

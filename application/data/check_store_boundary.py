@@ -8,7 +8,7 @@ pipeline reads it. A rule with nothing enforcing it is a comment, so this proves
 would pass a refusal-only test and make the worker useless. So every check here comes in a pair:
 the laptop-owned write is refused AND the worker-owned write still succeeds.
 
-Four legs:
+Five legs (the fifth added by P5/S4b):
 
   1. REFUSES   — under STORE_ROLE=worker, every writer named in `LAPTOP_OWNED_WRITERS` raises
                  StoreBoundaryError. Driven off the constant itself, so a writer added to the list
@@ -22,6 +22,12 @@ Four legs:
   4. OFF       — with STORE_ROLE unset (the laptop default), nothing raises and every writer behaves
                  exactly as it did before this session existed. This is the parity leg: the guard is
                  invisible unless a machine opts into it.
+  5. DRIFT     — `build_db.assert_catalog_covers_postgres`, which points the OTHER way (P5/S4b).
+                 Legs 1–4 stop a stale WORKER writing what the laptop owns. Since P5/S4a the worker
+                 AUTHORS `connected_catalog.parquet` and the laptop does not have it, so the laptop
+                 is the machine with the stale catalog and `--reload-manifest`/`--load` there would
+                 delete connected leagues. Refuses on drift, PERMITS on agreement, and asserts the
+                 guard is called BEFORE the TRUNCATE/DROP rather than merely existing.
 
 Usage:
     application/venv/bin/python -m application.data.check_store_boundary
@@ -29,13 +35,16 @@ Usage:
 """
 
 import argparse
+import ast
 import inspect
 import os
 import sys
+import textwrap
 
 import polars as pl
 
 from application.data import data_layer
+from application.data.serve import build_db
 
 # A season number no real artifact uses, so every write here lands beside the real store and is
 # removed again. Same idiom as check_predictions' throwaway season.
@@ -347,6 +356,108 @@ def check_band() -> None:
         path.unlink(missing_ok=True)
 
 
+# --- leg 5: the catalog-drift guard, which points the OTHER way (P5/S4b) -----------------------
+
+def _line_of(fn, call: str, *, literal: str | None = None) -> int | None:
+    """Line of the first CALL to `call` in `fn` (optionally: whose arguments contain `literal`).
+
+    Matching a CALL, not text, and it took two goes to get here — both failures are the same
+    mistake, so the rule is worth stating: **prose that describes a statement is not the statement.**
+
+      1. A raw substring search over `inspect.getsource` matched the COMMENT above the guard
+         (`# BEFORE the TRUNCATE`) and the DOCSTRING (`It TRUNCATEs league_catalog…`), and reported
+         correctly-placed code as broken. Comments are absent from the AST entirely; the docstring
+         is dropped explicitly below.
+      2. Matching any string CONSTANT then matched `reload_manifest`'s *existing* STORE_ROLE error
+         message, which also says "TRUNCATEs" — and that message sits ABOVE the guard, so the
+         assertion still fired. Hence `literal` now refines a call rather than standing alone:
+         the thing that does the damage is `cur.execute('TRUNCATE …')`, not the sentence about it.
+    """
+    fdef = ast.parse(textwrap.dedent(inspect.getsource(fn))).body[0]
+    body = fdef.body
+    if (body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)):
+        body = body[1:]
+    hits: list[int] = []
+    for stmt in body:
+        for node in ast.walk(stmt):
+            if not isinstance(node, ast.Call):
+                continue
+            if (getattr(node.func, "id", None) or getattr(node.func, "attr", None)) != call:
+                continue
+            if literal is None or any(literal in ast.unparse(a) for a in node.args):
+                hits.append(node.lineno)
+    return min(hits) if hits else None
+
+def check_catalog_drift(*, only_refusals: bool = False) -> None:
+    """`build_db.assert_catalog_covers_postgres` — both halves, without a database.
+
+    Leg 1 stops a stale WORKER publishing over the laptop. This is the mirror: after P5/S4a the
+    worker authors `connected_catalog.parquet` and the LAPTOP does not have it, so the laptop is the
+    machine with the stale catalog (measured 2026-08-14: local 32 rows, production 33).
+
+    `pg_ids` is injected, so this runs on any checkout with no accounts, no secrets and no live
+    database — the `check_onboard` standard. The live half (the real 33-vs-32) is a read-only SELECT
+    and belongs in the session report, the way `check_signup` reports its live half.
+
+    `only_refusals=True` is for --prove-bites, and both exclusions are deliberate. The PERMITS
+    assertions pass against a neutered guard *by definition* — a no-op never raises — and the wiring
+    assertions read the SOURCE, which still names the call. Re-running either in that leg would
+    report the gate as weak for a reason that has nothing to do with whether it bites.
+    """
+    print("\ncatalog drift — a store that is missing connected leagues may not rewrite the catalog")
+    local = {str(v) for v in build_db._catalog()["league_id"].to_list()}
+
+    # (a) REFUSES. One id Postgres knows and this store does not — the real 33-vs-32 in miniature.
+    try:
+        build_db.assert_catalog_covers_postgres(pg_ids=local | {TMP_LEAGUE})
+        _fail("a league_catalog holding an unknown league did NOT raise — a laptop --load would "
+              "silently delete every connected league")
+    except data_layer.StoreBoundaryError as e:
+        msg = str(e)
+        checks = {"names the orphaned league": TMP_LEAGUE in msg,
+                  "names trap 1 (--emit && --load IS the failure)": "TRAP 1" in msg,
+                  "names trap 2 (VERIFY FAILED is already explained away)": "TRAP 2" in msg,
+                  "gives a runnable remedy": "Remedy:" in msg}
+        for label, held in checks.items():
+            _ok(f"refuses, and {label}") if held else _fail(f"refuses, but never {label}: {msg[:90]}")
+
+    if only_refusals:
+        return
+
+    # (b) PERMITS — the half a refusal-only test would miss entirely. A guard that refused every
+    #     load would pass (a) and make the catalog unmaintainable on any machine.
+    try:
+        build_db.assert_catalog_covers_postgres(pg_ids=set(local))
+        _ok(f"permits when the sets agree ({len(local)} ids) — the guard is not a blanket refusal")
+    except data_layer.StoreBoundaryError as e:
+        _fail(f"refused an IDENTICAL catalog — nothing could ever be loaded again: {str(e)[:90]}")
+
+    # (c) PERMITS a Postgres that knows FEWER leagues. That direction is a load which ADDS rows, not
+    #     a clobber, and it is the normal state after onboarding a league locally.
+    try:
+        build_db.assert_catalog_covers_postgres(pg_ids=set(sorted(local)[:1]))
+        _ok("permits when Postgres knows FEWER leagues — that direction adds rows, it does not clobber")
+    except data_layer.StoreBoundaryError as e:
+        _fail(f"refused a subset — a first load into an empty database would be impossible: {str(e)[:90]}")
+
+    # (d) WIRED IN, and wired in BEFORE the destructive statement. A perfect guard nothing calls is
+    #     the failure mode this whole file exists to catch, one level up.
+    for fn, harm_call, harm_lit, what in (
+            (build_db.load, "_run_sql_script", None, "the DROP TABLE ... CASCADE"),
+            (build_db.reload_manifest, "execute", "TRUNCATE", "the TRUNCATE")):
+        call_at = _line_of(fn, "assert_catalog_covers_postgres")
+        harm_at = _line_of(fn, harm_call, literal=harm_lit)
+        if call_at is None:
+            _fail(f"{fn.__name__} never calls the guard — it is unreachable from the CLI")
+        elif harm_at is None:
+            _fail(f"{fn.__name__}: could not locate {what} — this assertion has stopped measuring")
+        elif call_at < harm_at:
+            _ok(f"{fn.__name__} calls the guard before {what} (line {call_at} < {harm_at})")
+        else:
+            _fail(f"{fn.__name__} calls the guard AFTER {what} — the damage is already done")
+
+
 # --- leg 4: off by default — the parity leg ----------------------------------------------------
 
 def check_off() -> None:
@@ -396,11 +507,17 @@ def prove_bites() -> bool:
     data_layer._require_laptop = lambda *a, **k: None
     data_layer.store_role = lambda: "laptop"          # the band's verify path goes with it
     before = len(_results)
+    saved_drift = build_db.assert_catalog_covers_postgres
+    build_db.assert_catalog_covers_postgres = lambda *a, **k: None
     try:
         check_refuses(destructive_ok=False)
         check_band()
+        # wiring=False: those assertions read the SOURCE, which still names the call, so they would
+        # pass against the neutered guard and report the gate as weak for the wrong reason.
+        check_catalog_drift(only_refusals=True)
     finally:
         data_layer._require_laptop, data_layer.store_role = saved_require, saved_role
+        build_db.assert_catalog_covers_postgres = saved_drift
     leg = _results[before:]
     del _results[before:]
     failed = leg.count(False)
@@ -422,6 +539,7 @@ def main() -> int:
         check_refuses()
         check_permits()
         check_band()
+        check_catalog_drift()
         check_off()
         bites = prove_bites() if args.prove_bites else True
     finally:

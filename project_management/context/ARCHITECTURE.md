@@ -20,7 +20,8 @@ in `sessions/` and `_deprecated/`; deep mechanism rationale lives in `context/ap
   https://surplusff.com/ (also `fantasy-ai-api.fly.dev`).
   **`fantasy-ai-worker` (P5/S3)** runs the pipeline off-laptop: 1 GB `shared-cpu-1x` + a **1 GB volume**
   mounted at `application/data/snapshots`, its own `Dockerfile.worker` (the pipeline deps, not the API's)
-  and no `http_service` — a job box, driven by `fly ssh console` until S4's queue. Separate because
+  and no `http_service` — a job box, which since **P5/S4b runs a leasing loop** (`serve/worker_loop.py`)
+  instead of `sleep infinity`. Separate because
   entangling the API's scale-to-zero with a multi-minute job is the failure the ADR forbids. A Fly volume
   attaches to exactly one machine and is host-pinned, so the worker is a **stateful singleton, not a
   pool** — intended for an invited cohort; the recorded exit is the Supabase bucket backend.
@@ -99,12 +100,26 @@ row, which is the only reason a second machine may write a catalog at all. `_ref
 reference for the whole database, reads `demo_manifest` alone, so a connected league can never define the
 schema. → *see appendix: store-boundary.*
 
-**Plus three app-side tables, outside all of that on purpose (P5/S1, S1b, S2a).** `serve/schema.sql` is
-*generated* by `--emit` and applied by `--load`, which DROPs every table it names — so `app_users`,
-`signup_attempts` and `user_leagues` live in hand-written `api/auth_schema.sql` instead, and
+**Plus four app-side tables, outside all of that on purpose (P5/S1, S1b, S2a, S4b).** `serve/schema.sql`
+is *generated* by `--emit` and applied by `--load`, which DROPs every table it names — so `app_users`,
+`signup_attempts`, `user_leagues` and **`jobs`** live in hand-written `api/auth_schema.sql` instead, and
 `init_auth_schema.py --verify` asserts they stay absent from the generated DDL, that the FKs to
-`auth.users` really carry `ON DELETE CASCADE`, and that no grant outlives its account. (A fourth,
+`auth.users` really carry `ON DELETE CASCADE`, and that no grant outlives its account. (A fifth,
 `nfl_state_cache`, was retired in S2c with the Sleeper call it cached.) → *see appendix: auth.*
+
+**How work reaches the worker (P5/S4b) — `public.jobs` + a lease.** The API **cannot** call the
+worker: `api/requirements.txt` is fastapi-only (no polars) and the worker has no `http_service`, so
+the two machines can only meet in Postgres. That, not latency, is why there is a queue — S0's
+8.4–10.3s would fit in a request. A producer inserts a row and `NOTIFY`s; the worker `LISTEN`s (with
+a 60s safety-net poll, because NOTIFY is fire-and-forget and one sent mid-reconnect is lost) and
+claims work with `SELECT … FOR UPDATE SKIP LOCKED`. **The lease expires** (120s, renewed at every
+stage transition), so a worker killed mid-job does not strand its league; `attempts` caps retries and
+a reaper turns the last one into a terminal `failed`. States run `queued → validating → fetching →
+building → loading → ready | rejected | failed`, written by the *same* `stage=` observer the chain
+already had — **`rejected` is a deterministic refusal that will never succeed, `failed` is
+retryable.** Built as if two workers existed (a Fly volume pins one machine, so they cannot be — but
+S4d adds a second producer): hence `SKIP LOCKED` and a partial unique index giving one active job per
+`(league, season)`. → *see appendix: store-boundary.*
 
 **The honest-band boundary.** `ros_player_band` is served only from `build_db.FIRST_HONEST_BAND_SEASON`
 (2026) onward. Below it the band belongs to the **frozen corpus** — built at pre-8c `CENTER_SHRINK=1.0` and
