@@ -1,12 +1,12 @@
-# PM Session Startup — V1 Go-Live (P5: S0–S3 built; **S4a is briefed and ready to run**)
+# PM Session Startup — V1 Go-Live (P5: S0–S3 + **S4a** built; **S4b is next**)
 
 **Paste this into a new session to pick up as Product Manager for the V1 build.**
 
 **Current as of: 2026-08-14.** NFL Week 1 = **Thu 10 Sept 2026 (~4 weeks)**. Will's draft ≈ **late Aug
 (~2 weeks) = Gate A**.
-**Immediate task:** **audit S4a's report when it comes back**, then draft **S4b**. The S4a brief is
-written and READY — `sessions/v1/P5-Self_Serve/SESSION_P5_S4A_COLD_ONBOARD_AND_CATALOG.md`. **Nothing
-is blocked and nothing is half-done — S0–S3 are all closed.**
+**Immediate task:** **draft S4b** (jobs table + lease + `POST /api/connect` + progress screen +
+identity acquisition). **S4a shipped, audited and ENDORSED 2026-08-14** — the worker created a league
+that had never existed anywhere. **S4b's FIRST item is a guard, not a feature — see the hazard below.**
 Per `CODING_BIBLE` §7, **re-stamp this date whenever you change this file, and keep it from growing** —
 replace stale content, don't append.
 
@@ -113,41 +113,53 @@ S4 as written was a queue **plus** a connect endpoint **plus** a progress screen
 acquisition **plus** the catalog wall **plus** the weekly cadence **plus** two carried fixes — three
 sessions against the 3-commit cap. Same shape as S2 becoming S2a–S2e. **Do not re-bundle them.**
 
-### S4a — BRIEFED, ready to hand to Code
+### S4a — SHIPPED + ENDORSED 2026-08-14
 
-**The finding that set the order, and it is bigger than the ADR recorded.** `store-boundary.md` names
-`write_leagues` as "the wall P5/S4 must see coming." There are **three** laptop-owned whole-file
-catalog writers — `write_leagues`, `write_demo_manifest`, `write_synthetic_catalog` — and it is the
-**last two** that block the loader: `build_db._catalog()` is `demo_manifest ⧺ synthetic_catalog`,
-`_slices()` comes from `_catalog()`, and `load_league` refuses anything absent from it *in as many
-words* (*"cataloging a brand-new league is onboarding/P5, not the scoped reload"*).
+`connected_catalog.parquet` — a third catalog source, **append-shaped and WORKER-owned** (ADR
+classification 11 → 12). **The worker onboarded a league that existed nowhere:** `1258181662160719872`
+"Rex Lumber 2025" — cold → catalogued → **14,999 rows / 10 tables** committed to production Postgres
+from the worker's own volume, `league_catalog` 32 → 33. All five DoD clauses proven, **release valve
+not taken**. The onboard chain now lives once, in `serve/onboard_league.py::run_chain`;
+`bench_cold_league` measures it rather than duplicating it. `_resolve_scoring_key` no longer falls back
+to **the owner's** key — catalog → the league's own Sleeper settings → **raise**.
+→ `SESSION_P5_S4A_REPORT.md` + `SESSION_P5_S4A_AUDIT.md`.
 
-**So there is no artifact a real user's league row can legally live in** — `demo_manifest.parquet` is
-the frozen 31-row corpus slate the L2 ledger counts on; `synthetic_catalog` is for generated clones.
-**And nothing in this system has ever catalogued a league:** `bench_cold_league` rolls its load back
-*specifically* to sidestep that gate, and its own docstring says *"there is no single 'onboard a cold
-league' entry point today. P5/S4 needs a real one."* **This blocks Gate A too** — STATUS files the
-first real 2026 load as "a manual admin load, not P5", and that load needs the same missing row.
+**The ADR was wrong and is corrected:** `write_leagues` was never on the connected-league path (every
+reader filters `is_mine` first; `application/api/` does not import `data_layer` at all). **The wall was
+the catalog.** `write_leagues` untouched.
 
-Scope: a third **append-shaped, worker-owned** catalog artifact + its per-league writer (ADR
-classification 11 → 12); `_resolve_scoring_key` from the league's **own** settings; a real cold-onboard
-entry point. Proven by one real **2025** league onboarded end to end **on the worker, committing to
-prod**. **A 2026 league cannot prove it — Will's 2026 leagues have not drafted, so there are no rosters
-and nothing to join.** The 2026 combination is carried to Gate A and *said out loud*, not rounded up.
-**Open question the brief hands to Code rather than answering:** whether a connected league needs a
-`leagues.parquet` row at all — if every reader is an `is_mine`-scoped default, `write_leagues` is not
-on this path and the ADR is wrong about which wall it is.
+### THE HAZARD S4a CREATED — S4b's first item, read before touching the laptop
 
-### S4b — the job queue + connect flow + identity
+**The worker is now an AUTHOR and the laptop holds the stale copy.** `connected_catalog.parquet` exists
+only on the worker's volume, and `read_connected_catalog()` returns an **empty frame** when it is
+absent — silently, by design. Recomputed 2026-08-14: laptop `_catalog()` = **32**, production
+`league_catalog` = **33**.
+
+- **`reload_manifest()` on the laptop deletes the connected league's catalog row**; `--load` drops its
+  data rows too. The guard that exists points the *other* way (it refuses on the worker).
+- **The documented remedy for an un-emitted column (`--emit` + `--load`) IS this failure.**
+- **The alarm is pre-disarmed:** the laptop's `build_db --verify` now legitimately reports **VERIFY
+  FAILED** (S4a finding B), so an operator reconciling it with `--load` walks straight into the loss.
+- **The ADR's *"reconstructible cache — lose the host and re-seed"* is now CONDITIONAL:** reconstructible
+  from **Postgres + Sleeper**, not from the laptop, and never measured.
+
+Both written into `OPERATIONS.md` and the ADR on 2026-08-14. **Guard for S4b:** `reload_manifest` and
+`load` refuse when Postgres holds `league_id`s absent from the local `_catalog()`, naming them.
+
+### S4b — the guard (above), then the job queue + connect flow + identity
 
 Postgres `jobs` table; the worker leases one job at a time; states
 `queued → validating → fetching → building → loading → ready | rejected | failed`; `POST /api/connect`
 + a progress screen. **Plus identity ACQUISITION:** S2 settled the *model* (`user_leagues.roster_id`),
 not how the row gets written — `api/routes.py:102` says ownership is *"written by an operator rather
 than inferred from a sign-in"*, so **a self-serve user signs up and reaches nothing until Will types a
-row.** Plus `scripts/users.py --delete` (account lifecycle). Also carried here: whether a null
-`viewer_roster_id` falling back to `MY_USERNAME` (`auth_schema.sql:104`) is right for a *stranger's*
-league — S4a reports what it renders, S4b owns the fix.
+row.** Plus `scripts/users.py --delete` (account lifecycle). Also carried (S4a findings): **the null-seat
+collision** — `reads.resolve_viewer` falls back to matching `MY_USERNAME` against `teams.owner_name`,
+so if the owner's handle *is* an `owner_name` in a connected league that roster is silently highlighted
+as "you", and nothing checks it belongs to the caller. Measured: 0 of 211 flagged, so today it degrades
+to no highlight. **A display-integrity defect inside a league the caller may already read — NOT a
+cross-user leak.** Do not over-scope it. Also **`panels_manager` flips True** once S4b's deferred
+dossier job runs (the append writer supports it, proven in `check_onboard`).
 
 ### S4c — the weekly cadence (**Week-1 critical**)
 
@@ -193,7 +205,7 @@ only once S4c's version is proven. **This is what stops the app being frozen in-
 
 ## The calendar gates
 
-**Gate A** = Will's 2026 league loaded (~late Aug) — **and it is blocked on S4a**: STATUS calls it "a manual admin load, not P5", but there is no artifact that load's catalog row can go in until S4a builds one. **Gate B** = Week 1, Sept 10. Velocity is not the
+**Gate A** = Will's 2026 league loaded (~late Aug) — **UNBLOCKED by S4a**: the first 2026 load is `onboard_league`, not a manual admin load. Gate A owns the two things S4a could not cover — a **cold 2026** league whose scoring key's substrate must already be on the volume, and the deployed-API arm of DoD clause 3 (prod derives 2026, so it has never served a connected league to anyone). **Gate B** = Week 1, Sept 10. Velocity is not the
 constraint — **calendar-gated proof is.** Gate A must check the **ROS-range panel against real band
 data**, **`remaining_games` + playoff odds**, and is the first exercise of **`me.posture`** and of
 `two_way_flags` beyond 2025 (its `SEASONS` stops at 2025, so a 2026 two-way player goes unflagged,

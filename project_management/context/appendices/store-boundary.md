@@ -99,8 +99,38 @@ since the last seed. Same shape, different layer, same answer:
   catalog=True)` runs it inside the load's own transaction, so a first connect is atomic:
   discoverable and readable together, or neither.
 
-**Postgres stays the served truth.** The worker's volume is a **reconstructible cache, not precious
-data** — lose the host, re-seed it.
+**Postgres stays the served truth.**
+
+### "Reconstructible cache, lose the host and re-seed" — TRUE UNTIL S4a, NOW CONDITIONAL (2026-08-14)
+
+This ADR said the worker's volume is *"a reconstructible cache, not precious data — lose the host,
+re-seed it,"* and S3 earned that claim its first evidence. **S4a made it conditional, and the
+condition is not automatic.** The worker is now the **author** of `connected_catalog.parquet` and of
+every connected league's `derived/league/` artifacts. **The laptop has neither** — verified
+2026-08-14: the file does not exist there, and `read_connected_catalog()` returns an *empty frame*
+when absent, silently, by design. So **re-seeding from the laptop reconstructs a worker with no
+connected leagues at all.**
+
+The data is regenerable — re-run `onboard_league` per league, re-fetching from Sleeper — and the
+recovery **list** exists in Postgres (`league_catalog` ⋈ `user_leagues`). **So the correct statement
+is: the volume is reconstructible *from Postgres plus Sleeper*, not from the laptop.** That procedure
+has never been run. By this ADR's own standard for S3 — *"'just re-seed it' is exactly the kind of
+unverified figure that has cost this project three documented corrections"* — it is a claim until
+somebody measures it.
+
+### The clobber hazard runs LAPTOP → Postgres, not worker → Postgres
+
+`reload_manifest()` refuses under `STORE_ROLE=worker` because it TRUNCATEs `league_catalog` and
+re-COPYs from the local store. **After S4a the exposed direction is the opposite one.** Recomputed
+2026-08-14: laptop `_catalog()` = **32** rows (31 demo + 1 synthetic + **0** connected); production
+`league_catalog` = **33**. So `reload_manifest()` **on the laptop** deletes the connected league's
+catalog row, and `build_db --load` drops its data rows as well.
+
+Two things make it sharp: the documented remedy for an un-emitted column (`--emit` + `--load`) *is*
+this failure, and the laptop's `build_db --verify` now legitimately reports **VERIFY FAILED** — so the
+one alarm that would catch it has already been explained away as expected. **Guard: `reload_manifest`
+and `load` must refuse when Postgres holds `league_id`s absent from the local `_catalog()`, naming
+them. Assigned to P5/S4b.**
 
 **Volume size — measured, not quoted.** Total `snapshots/` is **389 MB**; minus the ledger it is
 **244 MB**, which is where the project's existing "~245 MB" figure comes from. That number **still

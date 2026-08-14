@@ -175,6 +175,18 @@ Preferred source: **one of Will's own non-LoRP 2025 leagues** (it is the most re
 can supply the id). Fallback: a 2025 id from `corpus_crawl_state.json` / `corpus_filter_cache.json`
 that is not in the manifest — **the manifest is immutable and this league never enters it.**
 
+**DO NOT re-run the corpus discovery crawl to find a league.** `discover.py` writes
+`corpus_discovery` — one of the three writers that wiped the frozen corpus on 2026-08-13 — and STATUS
+is explicit that selection can no longer be re-run against the July universe: *"any future
+re-selection defines a NEW corpus, not a continuation of this one."* Finding one league is not worth
+touching that machinery.
+
+**Checked 2026-08-14, so nobody re-derives it:** Will has **seven** 2026 Sleeper leagues and **six are
+dynasty** (`settings.type = 2`) — out of V1 scope by CODING_BIBLE §4 and exactly what S5 must decline.
+The **only** in-scope one is `League of Random People 2.0` (`1389327290164314112`, redraft, 10 teams,
+full PPR, 1QB), and it is **`pre_draft`**. So there is no in-scope drafted 2026 league available to
+this session. That is not a gap to engineer around — it is Gate A's job, ~2 weeks out.
+
 **The DoD, and every clause is load-bearing:**
 
 1. The league is **cold before, catalogued after** — shown, not asserted.
@@ -184,6 +196,35 @@ that is not in the manifest — **the manifest is immutable and this league neve
 3. `GET /api/leagues` returns it **to a granted account and to nobody else.** Use the existing
    `scripts/users.py --grant` — acquisition is S4b. **Signed-out must still return exactly the demo**;
    re-run `check_ownership` and `check_isolation` and report the counts.
+   **AMENDED 2026-08-14 — Code found a wrinkle this brief missed, and it is a real one.**
+   `visible = demo OR (owned AND season == current_season)`, and prod's derived season is **2026**, so
+   a **2025** connected league is *correctly invisible to its owner on the deployed API.* Resolution,
+   and it is three parts, not one:
+   **(a) Prove the positive locally, as S2a/S2b already did** — a local API process with
+   `CURRENT_SEASON=2025` against production Postgres, with `check_ownership` / `check_isolation --live`
+   pointed at it. **No production config change.** S4a ships no API code; the predicate is S2b's,
+   already deployed and already gated — what clause 3 actually tests is whether a *connected row*
+   flows through it, which is a data question a local API answers exactly.
+   **(b) Prove the NEGATIVE on live prod, and make it an assertion rather than a gap.** With the
+   granted account's token, fetch **live** `/api/leagues` and confirm the connected 2025 league is
+   **absent — and absent for the season reason, not because the catalog is broken.** The deployed API
+   correctly withholding a prior-season league from its owner is a property worth pinning; today it is
+   merely untested. **Also confirm signed-out live prod still returns exactly the demo** — that is the
+   leak direction, and it is the one thing a new catalog row could break for everybody.
+   **(c) Pin the 2026 arm as a FIXTURE.** `check_ownership` / `check_isolation` are pure and injectable
+   for exactly this reason (S2b: *"an isolation gate that can only run against two live accounts is one
+   that stops being run"*). Drive `visible()` with a fixture at `current_season=2026` so the arm the
+   live run cannot reach is still covered.
+   **DO NOT set `CURRENT_SEASON=2025` on production.** It is two outward-facing deploys that change
+   what every visitor's season resolves to, and while it is set `/health` reads `season_source=env` —
+   which destroys the one-line proof S2c built that the derivation carries **no override**. Breaking a
+   standing proof to run a temporary one is a bad trade.
+   **The 2026 half of clause 3 is deferred to Gate A, and it has a date.** Will's
+   `League of Random People 2.0` (`1389327290164314112`) is 2026, **redraft** (`settings.type = 0`),
+   10 teams, **full PPR**, 1QB, and `previous_league_id = 1182101676608823296` — the is_mine 2025
+   league. It is `pre_draft` today and drafts ~late Aug. Connecting it at Gate A proves clause 3 on the
+   **deployed** surface with no config change at all. **Say this in the report** (rule 10) rather than
+   letting the local proof read as full coverage.
 4. **A re-onboard of the same league is a clean no-op** — the append writer's whole point.
 5. **Every other league and the demo are untouched**, by count, the way S3 showed it.
 

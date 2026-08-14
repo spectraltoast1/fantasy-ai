@@ -141,6 +141,35 @@ except the last query. The fix is to make the traffic cheap: **precompute the de
 forever once S2d lands, so it can be computed once instead of once per visitor) and **put Cloudflare in
 front** so most requests never reach Fly or Supabase at all. Both are **P6/S4**.
 
+## DO NOT run `--load` or `reload_manifest` on the laptop while connected leagues exist (P5/S4a)
+
+**Added 2026-08-14. Read before any full reload.**
+
+Since S4a the **worker** authors `connected_catalog.parquet`; the **laptop does not have it**, and
+`read_connected_catalog()` returns an empty frame when the file is absent — silently, by design.
+Recomputed 2026-08-14: laptop `_catalog()` = **32** rows, production `league_catalog` = **33**.
+
+| command | run on the laptop today | effect |
+|---|---|---|
+| `build_db --reload-manifest` | TRUNCATE 33 → re-COPY 32 | the connected league's **catalog row is deleted**; its data rows survive as rows nothing names, and `/api/leagues` stops showing it to its owner |
+| `build_db --load` | DROP/CREATE + re-COPY `_slices()` (32) | **the data rows go too** |
+
+**Two traps around it:**
+
+1. **The remedy for an un-emitted column is this failure.** If a connected league ever carries a
+   column the emitted DDL lacks, the documented fix is `--emit` + `--load` off a planned outage —
+   which, run on the laptop, wipes every connected league. Do the guard first.
+2. **The alarm is already explained away.** The laptop's `build_db --verify` now reports
+   **VERIFY FAILED** legitimately (the worker builds leagues the laptop has never seen — S4a finding
+   B). Do **not** reach for `--load` to reconcile it. That is the data-loss path, not the fix.
+
+**If you need a full reload before the guard ships:** re-seed the laptop's `connected_catalog.parquet`
+from the worker's volume first, or re-onboard each connected league afterwards — the list of what to
+re-onboard is `league_catalog` ⋈ `user_leagues` in Postgres.
+
+**Guard assigned to P5/S4b:** `reload_manifest` and `load` refuse when Postgres holds `league_id`s
+absent from the local `_catalog()`, naming them.
+
 ## Known gaps (deliberate, not oversights)
 
 - **No uptime monitoring.** You find out by looking. Worth fixing at go-live, not before — there is
