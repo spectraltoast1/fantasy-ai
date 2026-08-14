@@ -144,9 +144,14 @@ def _league_dirs(lid: str, season: int) -> dict[str, Path]:
 # --- cold-ness ----------------------------------------------------------------------------------
 
 def assert_cold(lid: str, season: int) -> None:
-    """A league is cold when the store has never seen it: absent from the registry, absent from the
-    served catalog, and absent from all three on-disk league directories. Standing rule 1 in
-    executable form — a fast total is a bug until this has passed."""
+    """A league is cold when the store has never seen it: absent from the registry, absent from
+    EVERY catalog (all three served ones plus the frozen corpus manifest), and absent from all three
+    on-disk league directories. Standing rule 1 in executable form — a fast total is a bug until
+    this has passed, and P5/S4a's onboarder uses it as a precondition rather than a benchmark aid.
+
+    It is also the "catalogued after" half of S4a's DoD: once `write_connected_league` has run, this
+    function must REFUSE the same league. A coldness check that misses a catalog is a coldness check
+    that lies, and until S4a it missed two."""
     warm = []
     # A synthetic league is generated, not harvested (P5/S2d), so "cold" is not even the right
     # question — there is nothing on Sleeper to time. Its on-disk directories would already trip the
@@ -159,10 +164,22 @@ def assert_cold(lid: str, season: int) -> None:
         known = dl.read_leagues().filter(pl.col("league_id").cast(str) == lid)
         if known.height:
             warm.append("leagues.parquet")
-    if dl.demo_manifest_exists():
-        cat = dl.read_demo_manifest().filter(pl.col("league_id").cast(str) == lid)
-        if cat.height:
-            warm.append("demo_manifest.parquet")
+    # EVERY catalog, not just the demo manifest. `_catalog()` is the union of three parquets, so a
+    # coldness check that reads one of them is a coldness check that lies — and it lied by two.
+    # `synthetic_catalog` was never checked: the `is_synthetic` short-circuit above only covers the
+    # hardcoded SYNTHETIC_LEAGUE_IDS literal, so a second clone would have slipped straight through.
+    # `connected_catalog` is new in S4a and is the one that will actually fill up.
+    for label, exists, read in (("demo_manifest.parquet", dl.demo_manifest_exists, dl.read_demo_manifest),
+                                ("synthetic_catalog.parquet", dl.synthetic_catalog_exists, dl.read_synthetic_catalog),
+                                ("connected_catalog.parquet", dl.connected_catalog_exists, dl.read_connected_catalog)):
+        if exists() and read().filter(pl.col("league_id").cast(str) == lid).height:
+            warm.append(label)
+    # The frozen corpus manifest is not a served catalog, but a corpus league is emphatically not
+    # cold — the spine ran on 269 of them — and its artifacts may have been swept while its manifest
+    # row survived. Checking it here is what stops a "cold" run from being aimed at the corpus.
+    if dl.corpus_manifest_exists():
+        if dl.read_corpus_manifest().filter(pl.col("league_id").cast(str) == lid).height:
+            warm.append("corpus_manifest.parquet (the frozen 271-league corpus)")
     warm += [f"{k} ({p})" for k, p in _league_dirs(lid, season).items() if p.exists()]
     if warm:
         raise SystemExit(

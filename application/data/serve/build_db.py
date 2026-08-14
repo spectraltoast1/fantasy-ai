@@ -176,15 +176,25 @@ INDEXES: dict[str, list[tuple[str, ...]]] = {
 
 
 def _catalog() -> pl.DataFrame:
-    """THE served catalog: the 31 frozen corpus slices PLUS any generated synthetic league (P5/S2d).
+    """THE served catalog: the 31 frozen corpus slices, PLUS any generated synthetic league (P5/S2d),
+    PLUS every league a real user has connected (P5/S4a). 31 + 1 + N.
 
     The concatenation is the layer boundary in one expression. ``demo_manifest.parquet`` is a CORPUS
     artifact and stays at 31 rows — ``compute_demo_slices``, ``check_matchup_result`` and the L2
     ledger all count on that. The demo clone is a SERVE artifact with its own parquet. Appending the
     clone to the corpus manifest instead would have been one line shorter and would have quietly made
     the engine's work-list 32.
+
+    S4a applied the same reasoning a third time rather than arguing with it: a connected league is
+    neither corpus nor generated, it arrives one at a time forever, and it is the only one of the
+    three a WORKER may write. Three sources, three owners, one served catalog.
+
+    ``how="vertical"`` is polars' STRICT concat — identical names, order and dtypes — which is why
+    ``write_connected_league`` casts rather than merely selecting. A dtype slip in one connected row
+    would raise here, i.e. take out the catalog for every visitor.
     """
-    return pl.concat([dl.read_demo_manifest(), dl.read_synthetic_catalog()], how="vertical")
+    return pl.concat([dl.read_demo_manifest(), dl.read_synthetic_catalog(),
+                      dl.read_connected_catalog()], how="vertical")
 
 
 def _slices() -> list[tuple[str, int, str]]:
@@ -196,9 +206,22 @@ def _slices() -> list[tuple[str, int, str]]:
 
 
 def _ref() -> tuple[int, str, str]:
-    """(season, league_id, scoring_key) of the is_mine live slice — the --emit schema reference."""
-    r = (dl.read_demo_manifest()
-         .filter(pl.col("is_mine") & pl.col("panels_market")).row(0, named=True))
+    """(season, league_id, scoring_key) of the is_mine live slice — the --emit schema reference.
+
+    This one row decides the DDL for the ENTIRE database, so the filter must resolve to exactly one
+    row and `.row(0)` would silently take the first of many. It reads ``read_demo_manifest()`` and
+    NOT ``_catalog()``, which is the structural reason a synthetic or connected league can never
+    become the schema reference — S4a's connected rows live in their own parquet and are not visible
+    from here at all. The assertion states that rather than leaving it to be inferred from which
+    reader happens to be called.
+    """
+    mine = dl.read_demo_manifest().filter(pl.col("is_mine") & pl.col("panels_market"))
+    if mine.height != 1:
+        raise SystemExit(
+            f"the --emit schema reference is ambiguous: {mine.height} rows in demo_manifest satisfy "
+            f"(is_mine & panels_market), expected exactly 1. Every table's DDL is derived from this "
+            f"single slice, so a second row would change the schema depending on row order.")
+    r = mine.row(0, named=True)
     return int(r["season"]), str(r["league_id"]), str(r["scoring_key"])
 
 
