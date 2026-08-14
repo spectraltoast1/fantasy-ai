@@ -274,6 +274,38 @@ def check_grant_lands_at_ready() -> None:
     else:
         _fail(f"the transaction contains {sorted(inside)} — expected both grant_ownership and finish")
 
+    # THE LEASE MUST RETURN EVERY COLUMN THE EXECUTOR READS. Found by S4c's live proof, and the
+    # failure is the quietest one in this system: the worker builds the league perfectly, lands
+    # `ready`, and grants NOBODY anything, because `job.get("requested_by")` on a row that never
+    # carried the column is None and `grant_ownership` reads None as "hand-enqueued, nothing to
+    # grant". No error in the table, none in the logs, none on the screen — the user simply watches
+    # a league build and never appear. Nothing else in the system would have reported it.
+    #
+    # Driven off what the worker ACTUALLY reads (`job.get("…")` and `job["…"]` in worker_loop), so
+    # a future column is covered without anyone remembering to add it here.
+    src = _WORKER_LOOP.read_text()
+    wtree = ast.parse(src)
+    reads_cols = set()
+    for node in ast.walk(wtree):
+        if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) \
+                and node.value.id == "job" and isinstance(node.slice, ast.Constant):
+            reads_cols.add(node.slice.value)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                and node.func.attr == "get" and isinstance(node.func.value, ast.Name) \
+                and node.func.value.id == "job" and node.args \
+                and isinstance(node.args[0], ast.Constant):
+            reads_cols.add(node.args[0].value)
+    lease_sql = " ".join((_REPO / "application" / "data" / "serve" / "job_queue.py").read_text()
+                         .split())
+    returning = lease_sql.split("RETURNING", 1)[1].split('"""')[0] if "RETURNING" in lease_sql else ""
+    missing = sorted(c for c in reads_cols if c not in returning)
+    if not missing:
+        _ok(f"the lease RETURNs every column the worker reads off a job ({len(reads_cols)}: "
+            f"{', '.join(sorted(reads_cols))})")
+    else:
+        _fail(f"the worker reads {missing} off a leased job but the lease does NOT return "
+              "them — they arrive as None and the failure is completely silent")
+
     # And nothing on the ENQUEUE path may write a grant. This is the failure with no error attached:
     # `visible` is `demo OR (owned AND season == current)` and the catalog sorts owned first, so an
     # early row lands the user on their own league with every panel empty for the whole build.
@@ -391,7 +423,17 @@ def check_prove_bites() -> None:
     else:
         _fail("the one-seam scan would not notice a second INSERT")
 
-    if caught >= 3:
+    # 5b · the lease's RETURNING. This is the exact pre-S4c list, and it must be caught: it is what
+    # the live proof ran against, and the run built a league perfectly and granted nobody anything.
+    pre_s4c = "id, kind, league_id, season, state, attempts, leased_by, lease_expires_at"
+    if any(c not in pre_s4c for c in ("requested_by", "platform_user_id")):
+        caught += 1
+        _ok("the pre-S4c lease RETURNING omits requested_by and platform_user_id, so the grant "
+            "would silently no-op — detected")
+    else:
+        _fail("the lease-columns assertion would not have caught the pre-S4c RETURNING")
+
+    if caught >= 4:
         _ok(f"the pre-S4c behaviour fails {caught} of these assertions, as it must")
     else:
         _fail(f"only {caught} assertions bit — these checks do not prove what they claim")

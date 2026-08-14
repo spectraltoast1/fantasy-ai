@@ -22,7 +22,7 @@ dependency.
 
 - A deployed, mobile-responsive React SPA on **FastAPI + Supabase Postgres** (Fly.io, same-origin). Five
   surfaces: **Players, Teams, League, Matchups, Manager Dossier**.
-- **Multi-league, and leagues now have owners.** All **31 demo league-seasons (12 lineages)** are still in
+- **Multi-league, and leagues now have owners — acquired by the people who own them (P5/S4c).** All **31 demo league-seasons (12 lineages)** are still in
   the production DB — they are engineering fixtures — but the **public catalog is one league**: the demo,
   plus whatever the signed-in caller owns. Every read is parameterized on
   `league_id`(+`season`+`viewer_roster_id`) and now defaults to `DEMO_LEAGUE_ID` explicitly. League + week
@@ -300,10 +300,55 @@ itself, and the job was reclaimed at **attempt 2, 130s** after the kill — Post
 polling — but it is a **third** always-open connection against the free tier (P6's item, now worse).
 → `sessions/v1/P5-Self_Serve/SESSION_P5_S4B_REPORT.md`.
 
-**Gate A is unblocked.** Loading the first real 2026 league at Will's draft (~late Aug) is no longer
-"a manual admin load with nowhere to put the row" — it is now a **job row**, and the worker picks it
-up. It data-proves S2's refresh, S3b's band panel and S4a's regimes at once, and **must verify the
-ROS-range panel against real band data**. (Market turn-on stays post-launch.)
+**P5/S4c — the ownership row stopped being something Will types.** `api/routes.py:102` said ownership
+was *"written by an operator rather than inferred from a sign-in"*; it is now inferred. A signed-in
+person opens **"Manage Leagues"** from the league switcher, types a Sleeper handle (or a league id —
+the input is dual-mode on the store's own 18-19-digit rule), sees their leagues with the unsupported
+ones **greyed and labelled with the reason**, picks, and watches a banner while the worker builds.
+**Proven end to end in a browser, no terminal, no `--grant`.**
+
+**The enqueue seam had to move, and that is the session's shape.** The API image contains **no
+`application/data/`** — `.dockerignore` excludes a bare `data`, the Dockerfile copies `api/` only — so
+`job_queue.enqueue`'s own docstring ("S4c's `POST /api/connect` … call this") was wrong. The producer
+now lives in **`api/jobs.py`** and `job_queue` re-exports it: **one INSERT, one NOTIFY**, asserted from
+the AST so a second one cannot appear. Four routes, all requiring a token; a job that is not yours
+returns the **byte-identical** 404 a nonexistent one does (proven live, two real accounts).
+
+**THE OWNERSHIP ROW IS WRITTEN AT `ready`, IN THE SAME TRANSACTION AS IT** — the decision most likely
+to be got wrong, and it fails silently both ways. Early, the user lands on their own league with every
+panel empty for the whole build; separately, a crash leaves a terminal job over a league nobody owns.
+**Measured live:** the grant did not exist in `queued`, `building` or `loading`, and appeared with
+`ready`. Consequence, not a detail: the progress screen is driven by the **job**, not the catalog, so
+`GET /api/connect` exists and a mid-build refresh recovers.
+
+**No ownership verification, and no roster uniqueness — both decisions, not omissions** (Will,
+2026-08-14). Anyone with a `league_id` can already read that league from `api.sleeper.app`, and Sleeper
+offers no OAuth; combined with invite-gated signup that is the accepted risk. The seat is a **per-user
+display property**, so two people in one league is the designed case — proven: two accounts own Rex
+Lumber with seats **1 and 2**, each seeing themselves. **S4a finding F is closed by construction:**
+`resolve_viewer`'s `MY_USERNAME` fallback now JOINs the catalog and requires `is_mine`, so it cannot
+reach a linked league — 0 payload changes across all 33 catalog leagues, and it bites.
+
+**The platform dimension exists; the second implementation does not** (the `kind` pattern again).
+`jobs.platform`, discovery behind one platform-taking function, a `{platform, handle, league_id}`
+contract, and a tab row where a second live platform is an addition. Deliberately deferred and stated
+as decisions: no `platform` on `user_leagues`/`league_catalog`/the 14 data tables, no namespaced league
+ids. → `projects/post-v1/other-platforms.md`.
+
+**Two bugs the live proof caught that no gate would have.** (1) The lease's `RETURNING` never included
+`requested_by`/`platform_user_id`, so the worker built the league, landed `ready` and **granted nobody
+anything** — no error in the table, the logs or the screen. (2) `check_queue --live` was reporting two
+FAILURES of a queue that was working: the live worker drains the same table the gate writes to and took
+its throwaway rows (measured, leased **0.12s** after the INSERT). Those legs are now **UNEVALUATED**,
+not failed — unknown is not pass, and it is not failure either.
+→ `sessions/v1/P5-Self_Serve/SESSION_P5_S4C_REPORT.md`.
+
+**Gate A is unblocked, and S4c narrowed what it still owns.** Loading the first real 2026 league at
+Will's draft (~late Aug) is now a **job row** a user creates themselves. It data-proves S2's refresh,
+S3b's band panel and S4a's regimes at once, and **must verify the ROS-range panel against real band
+data**. **A supported 2026 league already exists on Sleeper and discovery marks it linkable** — what is
+still untested is the combination Gate A owns: a *cold* 2026 league with **0 completed weeks**, whose
+join/spine/schedule stages have never run against an empty season. (Market turn-on stays post-launch.)
 → `ROADMAP.md` + `projects/v1/BUILD_ORDER.md` + `projects/v1/P5_ACCOUNTS_SELF_SERVE_ONBOARDING.md`.
 
 ## The demo, visibility, and what a signed-in user sees (decided 2026-08-05; **built in S2a + S2b**)

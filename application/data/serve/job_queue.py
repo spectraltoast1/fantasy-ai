@@ -129,8 +129,16 @@ WHERE id = (
      ORDER BY created_at
      LIMIT 1
      FOR UPDATE SKIP LOCKED)
-RETURNING id, kind, league_id, season, state, attempts, leased_by, lease_expires_at
+RETURNING id, kind, platform, league_id, season, state, attempts, leased_by, lease_expires_at,
+          requested_by, handle, platform_user_id
 """
+# `requested_by`, `platform` and `platform_user_id` are in that list because P5/S4c's live proof
+# caught them missing, and the failure was SILENT in the worst way: the worker builds the league
+# perfectly, lands `ready`, and grants nobody anything, because `job.get("requested_by")` on a row
+# that never carried the column is None and `grant_ownership` treats None as "a hand-enqueued job,
+# nothing to grant". A user would watch their league build and then never appear, with no error in
+# the table, in the logs, or on the screen. `check_connect` now asserts the lease returns every
+# column the executor reads.
 
 # Renews the lease as a side effect of advancing — see LEASE_SECONDS. Guarded on `leased_by` so a
 # worker whose lease was already reclaimed by somebody else cannot keep writing to the row.

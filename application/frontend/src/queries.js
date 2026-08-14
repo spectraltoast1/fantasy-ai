@@ -141,6 +141,46 @@ export async function apiPost(path, body) {
 // only carries it. Throws with the server's message on refusal, which the sign-in form shows.
 export const requestSignInLink = (email, code) => apiPost('/signup', { email, code });
 
+// --- Linking a league (P5/S4c) -------------------------------------------------------------
+// The connect flow, through the same seam as everything else: no view component knows a URL, and
+// the token attaches in `apiPost`/`apiGet` rather than here.
+//
+// `apiGet` is deliberately NOT used for these — it merges the active `_slice` into every request,
+// and a `league_id` from whatever league you happen to be looking at has no business riding on
+// "which leagues could I link". Same reason `apiPost` exists at all (see its comment).
+async function apiGetUnscoped(path) {
+  const res = await fetch(path.startsWith('/api') ? path : `${API}${path}`,
+    _token ? { headers: { Authorization: `Bearer ${_token}` } } : undefined);
+  let payload = null;
+  try { payload = await res.json(); } catch { payload = null; }
+  if (!res.ok) {
+    const err = new Error(payload?.detail || `GET ${path} → ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  return payload;
+}
+
+// Which leagues a handle plays in, each marked supported/unsupported with a reason. `handle` is
+// whatever the user typed — the server decides whether it is a username or a league id.
+export const discoverLeagues = (platform, handle) =>
+  apiGetUnscoped(`${API}/platforms/${encodeURIComponent(platform)}/leagues`
+    + `?handle=${encodeURIComponent(handle)}`);
+
+// Link one league. Returns the job; it is NOT built yet, and the league does not become yours
+// until the job reaches `ready`.
+export const connectLeague = (platform, handle, leagueId) =>
+  apiPost('/connect', { platform, handle, league_id: leagueId });
+
+// One job's state. 404 means "not yours or not there" — deliberately the same answer.
+export const loadConnectJob = (jobId) =>
+  apiGetUnscoped(`${API}/connect/${encodeURIComponent(jobId)}`);
+
+// The caller's job still in flight, or `{ job: null }`. This is what makes a mid-build refresh
+// recoverable: the ownership row lands at `ready`, so the catalog cannot tell you a build is
+// happening, and a job id held in React state does not survive a reload.
+export const loadActiveConnect = () => apiGetUnscoped(`${API}/connect`);
+
 // --- Shared chrome -----------------------------------------------------------------------
 export const loadWeeks = () => apiGet('/weeks');
 export const loadLeagueMeta = (asOfWeek) => apiGet('/league-meta', { as_of_week: asOfWeek });
