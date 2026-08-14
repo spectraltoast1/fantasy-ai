@@ -1,11 +1,12 @@
-# PM Session Startup — V1 Go-Live (P5: S0–S3 built; **S4 is next**)
+# PM Session Startup — V1 Go-Live (P5: S0–S3 built; **S4a is briefed and ready to run**)
 
 **Paste this into a new session to pick up as Product Manager for the V1 build.**
 
 **Current as of: 2026-08-14.** NFL Week 1 = **Thu 10 Sept 2026 (~4 weeks)**. Will's draft ≈ **late Aug
 (~2 weeks) = Gate A**.
-**Immediate task:** **draft S4** (job queue + connect flow + the weekly cadence). **Nothing is
-blocked and nothing is half-done — S0–S3 are all closed.**
+**Immediate task:** **audit S4a's report when it comes back**, then draft **S4b**. The S4a brief is
+written and READY — `sessions/v1/P5-Self_Serve/SESSION_P5_S4A_COLD_ONBOARD_AND_CATALOG.md`. **Nothing
+is blocked and nothing is half-done — S0–S3 are all closed.**
 Per `CODING_BIBLE` §7, **re-stamp this date whenever you change this file, and keep it from growing** —
 replace stale content, don't append.
 
@@ -88,63 +89,93 @@ build a league.**
 
 ### S3 closed 2026-08-14 — the worker writes production
 
-`build_db --reload-league` on `fantasy-ai-worker` reloaded LoRP 2025: **14,624 rows across 12
-tables**, counts matching the prior state exactly, every other league and `league_catalog` untouched.
-**The `--verify` that confirmed it is a cross-machine parity proof** — it compares the *laptop's* disk
-to Postgres, against rows the *worker* wrote from its own volume, so the 244 MB seed is now verified
-faithful rather than merely measured. Not literally demonstrated: the laptop physically off; no laptop
-was in the **data path** (ssh trigger only), so treat that as satisfied.
+`build_db --reload-league` on `fantasy-ai-worker` reloaded LoRP 2025: **14,624 rows / 12 tables**,
+counts matching prior state exactly, every other league and `league_catalog` untouched. The `--verify`
+runs from the *laptop* against rows the *worker* wrote from its own volume, so it is a **cross-machine
+parity proof** — the 244 MB seed is verified faithful, not merely measured. Detail: `SESSION_P5_S3_*`
++ the ADR. **Note S3 reloaded a league that ALREADY EXISTED; creating one is S4a and has never been
+done.**
 
-**The trap that nearly hid this, worth carrying:** `weekly_refresh.py:207` calls `_db_max_as_of()`,
-which exists *"to no-op an up-to-date load"* — so the obvious re-run would have **skipped the write
-and reported success**. `--reload-league` is unconditional. **A run that skips everything as "already
-current" is not a proof.**
+**THREE machines, one writer.** The ADR's laptop-vs-worker model was wrong: **ONE WRITER — the
+authoring laptop — everything else reads.** `STORE_ROLE=worker` is on the Fly worker **and** the GHA
+runner. On a stale band the worker raises with a remedy rather than rebuilding — that substrate is
+shared by every league on a scoring key and built under human-promoted constants.
 
-### The system now has THREE machines, one writer
-
-The ADR's original laptop-vs-worker model was wrong. The rule is **ONE WRITER — the authoring laptop —
-and everything else reads.** `STORE_ROLE=worker` is set on the Fly worker **and** the GitHub Actions
-runner. The worker refuses to write the shared substrate; on a stale band it raises with a remedy
-rather than rebuilding, because that artifact is shared by every league on a scoring key and is built
-under human-promoted engine constants.
+**The trap worth carrying:** `weekly_refresh.py:207` calls `_db_max_as_of()`, which exists *"to no-op
+an up-to-date load"* — the obvious re-run would have **skipped the write and reported success**.
+**A run that skips everything as "already current" is not a proof.** That has now fired twice.
 
 ---
 
-## S4 — what you are drafting
+## S4 was SPLIT into S4a / S4b / S4c (Will, 2026-08-14)
 
-**Scope:** a Postgres `jobs` table; the worker leases one job at a time; states
-`queued → validating → fetching → building → loading → ready | rejected | failed`; the connect
-endpoint + a progress screen. **Plus the weekly cadence** (added 2026-08-13).
+S4 as written was a queue **plus** a connect endpoint **plus** a progress screen **plus** identity
+acquisition **plus** the catalog wall **plus** the weekly cadence **plus** two carried fixes — three
+sessions against the 3-commit cap. Same shape as S2 becoming S2a–S2e. **Do not re-bundle them.**
 
-**S4 has grown. Everything below is already assigned to it — do not re-discover it:**
+### S4a — BRIEFED, ready to hand to Code
 
-1. **The weekly cadence.** `.github/workflows/weekly_refresh.yml` is **single-league by construction**
-   and has **never worked** (since the Aug 1 season rollover it dies at `league_resolver.py` because
-   its hardcoded `LEAGUE_ID` is a 2025 league). S4 must **enumerate connected leagues from the
-   ownership table** and take the queue's lease. **Then gut the workflow to a pure trigger** — keep
-   the Tue+Wed crons and catch-up idempotency (GitHub is the better scheduler: free, reliable,
-   already trusted for the collectors), lose all pipeline logic plus `MY_USERNAME`/`LEAGUE_ID`, which
-   retires the hardcoded-identity bug rather than relocating it. **Week-1 critical — this is what stops
-   the app being frozen in-season.** Retire it only once S4's version is proven.
-2. **Identity mapping — acquisition.** S2 settled the *model* (`user_leagues.roster_id`), not how the
-   row gets written: `api/routes.py:102` says ownership is *"written by an operator rather than
-   inferred from a sign-in."* **A self-serve user signs up and reaches nothing until Will types a row.**
-3. **`write_leagues` is the wrong shape for a worker** (`data_layer.py:1995`) — it **overwrites the
-   whole file** on a fixed schema including the `onboarded_at`/`pilot_cohort` connect hooks. S4 needs
-   an **append-shaped per-league writer** before the worker can catalog a league. In the ADR.
-4. **`_resolve_scoring_key`'s owner-key fallback** — a league absent from the catalog silently gets
-   *the owner's* scoring key. On P5's live path. Confirmed not hit by the replay; **S4 owns the fix.**
-5. **`scripts/users.py` has no `--delete`** — account lifecycle.
-6. **The worker has no `http_service`**, so S4 must decide what the GHA trigger actually poke*s*
-   (`flyctl` from the Action is the obvious answer).
+**The finding that set the order, and it is bigger than the ADR recorded.** `store-boundary.md` names
+`write_leagues` as "the wall P5/S4 must see coming." There are **three** laptop-owned whole-file
+catalog writers — `write_leagues`, `write_demo_manifest`, `write_synthetic_catalog` — and it is the
+**last two** that block the loader: `build_db._catalog()` is `demo_manifest ⧺ synthetic_catalog`,
+`_slices()` comes from `_catalog()`, and `load_league` refuses anything absent from it *in as many
+words* (*"cataloging a brand-new league is onboarding/P5, not the scoped reload"*).
 
----
+**So there is no artifact a real user's league row can legally live in** — `demo_manifest.parquet` is
+the frozen 31-row corpus slate the L2 ledger counts on; `synthetic_catalog` is for generated clones.
+**And nothing in this system has ever catalogued a league:** `bench_cold_league` rolls its load back
+*specifically* to sidestep that gate, and its own docstring says *"there is no single 'onboard a cold
+league' entry point today. P5/S4 needs a real one."* **This blocks Gate A too** — STATUS files the
+first real 2026 load as "a manual admin load, not P5", and that load needs the same missing row.
 
-## Open threads not owned by S4
+Scope: a third **append-shaped, worker-owned** catalog artifact + its per-league writer (ADR
+classification 11 → 12); `_resolve_scoring_key` from the league's **own** settings; a real cold-onboard
+entry point. Proven by one real **2025** league onboarded end to end **on the worker, committing to
+prod**. **A 2026 league cannot prove it — Will's 2026 leagues have not drafted, so there are no rosters
+and nothing to join.** The 2026 combination is carried to Gate A and *said out loud*, not rounded up.
+**Open question the brief hands to Code rather than answering:** whether a connected league needs a
+`leagues.parquet` row at all — if every reader is an `is_mine`-scoped default, `write_leagues` is not
+on this path and the ADR is wrong about which wall it is.
 
-- **Two corpus chips:** the ~41 excluded manifest rows (so `check_corpus`'s pass-rate stops reading a
-  tautological `100.0% over 269`), and `selected_at` on the restored manifest being the reconstruction
-  date, not the July selection date.
+### S4b — the job queue + connect flow + identity
+
+Postgres `jobs` table; the worker leases one job at a time; states
+`queued → validating → fetching → building → loading → ready | rejected | failed`; `POST /api/connect`
++ a progress screen. **Plus identity ACQUISITION:** S2 settled the *model* (`user_leagues.roster_id`),
+not how the row gets written — `api/routes.py:102` says ownership is *"written by an operator rather
+than inferred from a sign-in"*, so **a self-serve user signs up and reaches nothing until Will types a
+row.** Plus `scripts/users.py --delete` (account lifecycle). Also carried here: whether a null
+`viewer_roster_id` falling back to `MY_USERNAME` (`auth_schema.sql:104`) is right for a *stranger's*
+league — S4a reports what it renders, S4b owns the fix.
+
+### S4c — the weekly cadence (**Week-1 critical**)
+
+Enumerate connected leagues from the ownership table instead of one hardcoded `LEAGUE_ID`, and **take
+the queue's lease** so two machines never work the same league. **Then gut
+`.github/workflows/weekly_refresh.yml` to a pure trigger** — keep the Tue+Wed crons and the catch-up
+idempotency (GitHub is the better scheduler: free, reliable, already trusted for the collectors), lose
+all pipeline logic plus `MY_USERNAME`/`LEAGUE_ID`, which **retires** the hardcoded-identity bug rather
+than relocating it. **The worker has no `http_service`**, so decide what the Action pokes (`flyctl`
+from the Action is the obvious answer). The workflow has **NEVER worked** — since the Aug 1 rollover it
+dies at `shared/league_resolver.py:59` because its hardcoded `LEAGUE_ID` is a 2025 league. Retire it
+only once S4c's version is proven. **This is what stops the app being frozen in-season.**
+
+### Two hazards S4a must DETERMINE and report (neither is a claim yet)
+
+1. **`build_db.reload_manifest()` does `TRUNCATE league_catalog` + re-COPY `_catalog()` from the local
+   store.** On the worker those parquets are seeded, read-only and can be **stale** — so the worker
+   calling it could erase catalog rows the laptop knows about. The whole-file-overwrite shape
+   reappearing at the Postgres layer.
+2. **The union-superset schema may lack a column a stranger's league carries** (`division` is the known
+   case). `_copy_slice_tx` issues `COPY "table" (its own columns)`. If that fails the COPY it is a real
+   onboarding failure mode — and the remedy (`--emit` + `--load`) **DROPs every table on the production
+   database**, which is why S2c moved it out and S2d only ran it off a planned 145s outage.
+
+## Open threads not owned by S4a/b/c
+
+- **Two corpus chips:** the ~41 excluded manifest rows (`check_corpus`'s pass-rate reads a tautological
+  `100.0% over 269`) and `selected_at` being the reconstruction date. → `SESSION_CORPUS_RECOVERY_*`.
 - **`corpus_discovery.parquet` is a LIVE BREAK, not a missing file** — `read_corpus_discovery` is a
   bare read, so `build_demo_manifest:54`/`:136` and `build_substrate:54` raise today. Wants a
   **restore, not a rebuild** (re-crawling could return a different candidate set).
@@ -152,10 +183,9 @@ endpoint + a progress screen. **Plus the weekly cadence** (added 2026-08-13).
   (`api/calcs.py`); the docstring naming `posture.js` is a fossil. Will is redesigning the map, and
   the empty Teams `Posture` column is **accepted debt** — *conditional on the redesign landing before
   Sept 10.* If it slips, the invited cohort meets a column promising a read over ten em-dashes.
-- **Durability.** Time Machine now runs (first backup since Jan 2026). `snapshots/corpus/` is
-  git-tracked. **The 145 MB L2 ledger still has no versioned off-machine copy** — nothing can
-  regenerate it. A mirror is not the answer; **versioning** is. Will does not want to pay: R2 and B2
-  both give 10 GB free, and Supabase Storage's free tier is 1 GB.
+- **Durability.** Time Machine runs; `snapshots/corpus/` is git-tracked. **The 145 MB L2 ledger still
+  has no versioned off-machine copy** and nothing can regenerate it — a mirror is not the answer,
+  **versioning** is. Free tiers cover it (R2/B2 10 GB, Supabase Storage 1 GB).
 - `reads._denied_reads` is per-process and there are **two** Fly API machines, so `denied_reads()` is a
   floor · two P6 items: the frozen-demo precompute + Cloudflare, and `Cache-Control: private,
   no-store` needing a deliberate demo carve-out — the one place a caching change could serve one
@@ -163,7 +193,7 @@ endpoint + a progress screen. **Plus the weekly cadence** (added 2026-08-13).
 
 ## The calendar gates
 
-**Gate A** = Will's 2026 league loaded (~late Aug). **Gate B** = Week 1, Sept 10. Velocity is not the
+**Gate A** = Will's 2026 league loaded (~late Aug) — **and it is blocked on S4a**: STATUS calls it "a manual admin load, not P5", but there is no artifact that load's catalog row can go in until S4a builds one. **Gate B** = Week 1, Sept 10. Velocity is not the
 constraint — **calendar-gated proof is.** Gate A must check the **ROS-range panel against real band
 data**, **`remaining_games` + playoff odds**, and is the first exercise of **`me.posture`** and of
 `two_way_flags` beyond 2025 (its `SEASONS` stops at 2025, so a 2026 two-way player goes unflagged,
