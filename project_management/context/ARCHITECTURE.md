@@ -63,6 +63,13 @@ fetchers → cache/ + snapshots/ → join → derived transforms (parquet) → b
   scoped reload** (`load_league` / `--reload-league`) — delete + re-COPY one league in a single transaction,
   others + the `league_catalog` untouched, proven byte-parity-identical to the full load
   (`serve/check_scoped_reload.py`). The scoped path is the in-season incremental unit.
+- **Onboard a league the store has never seen (P5/S4a)** — `serve/onboard_league.py`. The **one** entry
+  point: fetch raw → resolve the scoring key from *this* league's settings → assert the substrate → join
+  every week → band (season-gated) → spine → schedule → write the catalog row → `load_league(catalog=True)`,
+  which upserts the `league_catalog` row **inside the load's own transaction** so a first connect is
+  atomic. `bench_cold_league` imports the same `run_chain` and only adds timing — one implementation, so
+  P5/S0's measured cost keeps describing what actually runs. Refuses rather than guessing: non-redraft,
+  first-on-its-scoring-key, or a league belonging to the corpus/demo/clone. A re-onboard is a no-op.
 - **In-season refresh (P2/S2)** — `serve/weekly_refresh.py` advances one league to the current week:
   fetch (Sleeper current state + weekly nfl_stats + projections) → `join_nfl_sleeper_weekly` → rebuild the
   scoring-keyed `ros_player_band` (P2/S3b — so it advances *with* `production_vor` instead of drifting behind
@@ -81,6 +88,16 @@ columns: `season` (player×week), `teams`, `lineup_slots`, `league_settings`, `p
 substrate shared by every league on the same profile, stamped with each slice's `league_id` at COPY. The
 engine-improvement **ledger** (predictions / outcomes / resolutions / scorecard) is deliberately **not** in
 the served store — it's the tuning/validation spine. → *see appendix: store-schema, engine-improvement-loop.*
+
+**`league_catalog` has THREE parquet sources, one per kind of league (`build_db._catalog()`, strict
+vertical concat — 31 + 1 + N):** `demo_manifest.parquet`, the **frozen corpus slate** the L2 ledger was
+derived from and which stays at 31 rows; `synthetic_catalog.parquet`, the **generated** demo clone; and
+`connected_catalog.parquet`, every league a **real user** has connected (P5/S4a). They are separate
+because their owners and lifecycles are: the first two are laptop-owned whole-file writers, the third is
+**worker-owned and append-shaped** — `write_connected_league` replaces exactly one `(league_id, season)`
+row, which is the only reason a second machine may write a catalog at all. `_ref()`, the `--emit` schema
+reference for the whole database, reads `demo_manifest` alone, so a connected league can never define the
+schema. → *see appendix: store-boundary.*
 
 **Plus three app-side tables, outside all of that on purpose (P5/S1, S1b, S2a).** `serve/schema.sql` is
 *generated* by `--emit` and applied by `--load`, which DROPs every table it names — so `app_users`,

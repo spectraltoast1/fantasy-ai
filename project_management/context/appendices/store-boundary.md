@@ -1,13 +1,18 @@
 # ADR — The store boundary: what the laptop owns, what every other machine only reads
 
-**Current as of: 2026-08-14.** **Status: ACCEPTED (Will, 2026-08-13) and BUILT (P5/S3, 2026-08-14).**
-Option (b).
+**Current as of: 2026-08-14.** **Status: ACCEPTED (Will, 2026-08-13), BUILT (P5/S3), EXTENDED
+(P5/S4a).** Option (b).
 
 > **Built, with three corrections this ADR did not anticipate** — all three are folded in below:
 > the model is **one writer**, not laptop-vs-worker (there is a third machine); the classification
 > needed **eleven** rows, not three; and the band could **not** simply raise — see "what (b) costs".
-**Scope:** P5/S3 (the Fly worker). **Supersedes:** the four-bullet rule in
-`projects/v1/P5_ACCOUNTS_SELF_SERVE_ONBOARDING.md` § Context, which this expands and **corrects**.
+>
+> **P5/S4a made it twelve, and corrected the wall.** This ADR named `write_leagues` as "the wall
+> P5/S4 must see coming". **That was wrong** — the wall is the *catalog*, not the *registry*, and
+> `write_leagues` is not on the connected-league path at all. See "The wall P5/S4 hit" below.
+**Scope:** P5/S3 (the Fly worker) + P5/S4a (the connected catalog). **Supersedes:** the four-bullet
+rule in `projects/v1/P5_ACCOUNTS_SELF_SERVE_ONBOARDING.md` § Context, which this expands and
+**corrects**.
 
 ---
 
@@ -24,6 +29,8 @@ laptop sets `STORE_ROLE=worker` and gets the shared substrate read-only.
 destinations; the rest were unclassified, which is how the guard would have been written with holes
 in it. Enforced as an **allow-list** in `data_layer` — the worker may write only what it is granted,
 so a destination nobody has thought about, and any writer added later, refuses by default.
+**P5/S4a added the twelfth** (`connected_catalog.parquet`) and the allow-list made that additive:
+nothing had to be re-classified, because the default was already deny.
 
 | destination | owner | why |
 |---|---|---|
@@ -38,17 +45,59 @@ so a destination nobody has thought about, and any writer added later, refuses b
 | the joins (3 writers) | **worker** | per-league |
 | per-league raw (Sleeper teams/matchups/transactions) | **worker** | it is the fetcher |
 | `cache/` player-id map + Sleeper registry | **worker** | a routine 24h refresh from Sleeper |
+| **`connected_catalog.parquet`** (1 writer, P5/S4a) | **worker** | one row per connected `(league_id, season)`, **replaced not rewritten** — the only catalog a machine other than the laptop may touch, and the shape is the whole reason |
 
 Measured 2026-08-13: `derived/ledger` **145 MB** · `derived/scoring` **16 MB** ·
 `derived/league` **66 MB**.
 
-### The wall P5/S4 must see coming
+### The wall P5/S4 hit — it was the CATALOG, not the registry
 
-`write_leagues` **overwrites the whole file** on a fixed 7-column schema — including `onboarded_at`
-and `pilot_cohort`, the connect-flow hooks. A worker calling it would replace the shared registry
-with only the leagues that machine knows about. The *shape* of the writer is wrong for a worker, not
-just its owner, so it stays laptop-owned and **S4 needs an append-shaped per-league writer before
-the worker can catalog a league.** Recorded here so S4 sees the wall instead of hitting it.
+**This section previously named `write_leagues` and it was wrong.** Recorded as a correction rather
+than edited away, because the ADR being confidently wrong about which artifact blocked onboarding is
+the kind of thing the next session needs to know happened.
+
+**The real wall: three whole-file catalog writers, and it is the last two that block the loader.**
+`build_db._catalog()` was `read_demo_manifest() ⧺ read_synthetic_catalog()`, `_slices()` comes from
+`_catalog()`, and `load_league` refuses anything absent from it. `demo_manifest.parquet` is the
+frozen 31-row **corpus** slate the L2 ledger was derived from; `synthetic_catalog.parquet` is for
+**generated** clones whose ids are deliberately not Sleeper-shaped. So there was nowhere a real
+user's league row could legally live, and **nothing in this system had ever catalogued a league.**
+
+**P5/S4a's answer, following S2d's precedent rather than arguing with it:** a **third** artifact,
+`connected_catalog.parquet` — 31 + 1 + N. `data_layer.write_connected_league(df, league_id, season)`
+writes or replaces exactly one row and leaves every other row untouched, sorted so a re-onboard
+cannot reorder, and casting to the demo manifest's dtypes because `_catalog()`'s concat is polars'
+**strict** `how="vertical"` (a dtype slip in one connected row would raise for the whole catalog,
+i.e. take the demo down for every visitor).
+
+**`write_leagues` was NOT touched, and here is why it is not on this path.** Every reader of
+`leagues.parquet` — `_active_league` (53 call sites), `_active_league_any` (3), `league_resolver`,
+`read_leagues` — filters `is_mine` **before anything else**, so a stranger row with `is_mine=False`
+would be read by *nothing*. Its `pilot_cohort` column has no legal value for a connected league
+(the map covers corpus strata only), and `assert_cold` treats presence in the registry as **not
+cold**, so a row would permanently disqualify the league from ever being benchmarked. Two readers
+do fire on a connected-league path and neither forces a row: `compute_bracket_sim:78` calls
+`_active_league` unconditionally but `try/except`s it and uses it only for a seed-equality test a
+stranger's league fails anyway, and `weekly_refresh._resolve_scoring_key`, which was a genuine bug
+and is fixed in S4a from the league's own Sleeper settings. **The registry is an is_mine-scoped
+default table. It is not the catalog.**
+
+### The Postgres layer has a boundary too now (P5/S4a)
+
+The whole-file-overwrite hazard this ADR is about **reappears at the database**. `reload_manifest()`
+TRUNCATEs `league_catalog` and re-COPYs it from `_catalog()` **on the local store** — so a worker
+calling it would publish its seeded snapshot over the real thing, deleting every league catalogued
+since the last seed. Same shape, different layer, same answer:
+
+- **`reload_manifest()` raises under `STORE_ROLE=worker`.** It is guarded in `build_db`, not in
+  `data_layer`'s allow-list, because it writes Postgres rather than the file store — the allow-list
+  covers destinations under `snapshots/`, and stretching it to cover a table would have hidden that
+  distinction rather than stated it.
+- The worker's scoped equivalent is **`build_db.upsert_catalog_row(conn, lid)`**: DELETE by
+  `league_id` + INSERT, in the caller's transaction. Not `ON CONFLICT` — `league_catalog` has no
+  primary key and no unique constraint, so there is no conflict target to name. `load_league(...,
+  catalog=True)` runs it inside the load's own transaction, so a first connect is atomic:
+  discoverable and readable together, or neither.
 
 **Postgres stays the served truth.** The worker's volume is a **reconstructible cache, not precious
 data** — lose the host, re-seed it.

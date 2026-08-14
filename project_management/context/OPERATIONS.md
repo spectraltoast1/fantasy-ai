@@ -68,6 +68,34 @@ bundle can survive a deploy (see `PM_SESSION_STARTUP.md`); trust `/api/*` JSON a
   then re-run the seed below. Until you do, the worker declines leagues on that scoring key — which
   is the point: a loud stop beats silently serving numbers built from a recipe nobody approved.
 
+- **Onboarding a league the store has never seen (P5/S4a).** One command, on the worker, from its
+  own volume. It fetches, joins, computes the spine, writes the catalog row and COMMITs to
+  Postgres; `--dry-run` does everything except the last two.
+  ```
+  fly ssh console -a fantasy-ai-worker -C "python -m application.data.serve.onboard_league --league <ID> --season <YYYY>"
+  ```
+  It **refuses** rather than guessing: a non-redraft league (V1 scope), a league that is the first
+  on its scoring key (no `projection_consensus` — build the substrate first), and any league that
+  belongs to the frozen corpus, the demo slate or the generated clone. A re-onboard of the same
+  league is a clean no-op, so re-running after a failure is safe.
+  **The league is not visible to its owner until `season == the season /health reports`** — that is
+  the visibility predicate working, not a fault (`appendices/auth.md`).
+
+- **`build_db --verify` now belongs on the WORKER, not the laptop.** It compares the *local* disk
+  against Postgres, and since P5/S4a the worker builds leagues the laptop has never seen — so the
+  laptop's copy is a strict subset and it reports a mismatch per table plus `league_catalog`
+  32 vs 33. That is the expected reading, not a fault. Measured 2026-08-14: laptop **VERIFY FAILED**
+  (10 tables), worker **VERIFY OK** (all 15). Run it where the artifacts are:
+  ```
+  fly ssh console -a fantasy-ai-worker -C "python -m application.data.serve.build_db --verify"
+  ```
+
+- **NEVER run `build_db --reload-manifest` on the worker.** It TRUNCATEs `league_catalog` and
+  re-COPYs it from that machine's *local* store, which on the worker is a seeded snapshot — so
+  every league catalogued since the last seed would silently vanish from the served catalog. It now
+  refuses there (`STORE_ROLE=worker`), and the worker's scoped equivalent is what the onboarder
+  already calls. Run it on the laptop.
+
 - **Seeding (or RE-seeding) the worker volume — the recovery procedure, measured.** The volume is a
   **reconstructible cache, not precious data**: lose the host and re-seed. That claim was untested
   until now, so here is the actual command and the actual clock.
