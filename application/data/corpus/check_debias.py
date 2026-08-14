@@ -123,7 +123,11 @@ def check() -> bool:
     # 4 — the re-score is a SHADOW: it mutates no frozen-corpus entity -------------------------------
     print("  4 — the re-score is a shadow (writes NOTHING to the frozen corpus):")
     from application.data.corpus import rescore_debias
-    frozen_writers = ["write_predictions", "write_outcomes", "write_resolutions", "write_engine_scorecard"]
+    # ONE source of truth for "what the laptop owns" (P5/S3). These three gates each carried
+    # their own hand-maintained copy and all three had DRIFTED — 4, 5 and 6 entries — so two of
+    # them would not have caught a `write_center_gap` call during a rescore. The store-boundary
+    # guard consumes the same constant, so the set cannot drift again.
+    frozen_writers = data_layer.LAPTOP_OWNED_WRITERS
     calls = []
     saved = {}
     for w in frozen_writers:

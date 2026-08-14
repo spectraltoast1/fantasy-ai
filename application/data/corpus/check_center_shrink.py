@@ -113,8 +113,11 @@ def check() -> bool:
     _ok("ros_player_band consumes CENTER_SHRINK (0.8 shrinks vs 1.0)", not _frame_eq(bd8, bd1), results)
 
     # --- run the re-score ONCE under a write-spy (checks 4/5 reuse it) --------------------------------
-    frozen_writers = ["write_predictions", "write_outcomes", "write_resolutions", "write_engine_scorecard",
-                      "write_tune_proposals", "write_center_gap"]
+    # ONE source of truth for "what the laptop owns" (P5/S3). These three gates each carried
+    # their own hand-maintained copy and all three had DRIFTED — 4, 5 and 6 entries — so two of
+    # them would not have caught a `write_center_gap` call during a rescore. The store-boundary
+    # guard consumes the same constant, so the set cannot drift again.
+    frozen_writers = data_layer.LAPTOP_OWNED_WRITERS
     spy: list = []
     saved = {}
     for w in frozen_writers:

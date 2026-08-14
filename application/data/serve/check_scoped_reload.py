@@ -30,6 +30,7 @@ import json
 import sys
 
 from application.api import db
+from application.data import data_layer
 from application.data.serve import build_db as B
 
 
@@ -47,15 +48,12 @@ def _snapshot(lid: str) -> dict[str, list[dict]]:
             for ds in B.DATASETS}
 
 
-def _canon(rows: list[dict]) -> list[str]:
-    """Order-insensitive canonical form of a row set — a sorted multiset of JSON-encoded rows. JSONB
-    columns arrive as Python objects; dates/Decimals fall back to str. Robust to COPY's row-order
-    nondeterminism and to empty tables (which polars sort-by-all-columns cannot handle)."""
-    return sorted(json.dumps(r, sort_keys=True, default=str) for r in rows)
-
-
-def _rows_eq(a: list[dict], b: list[dict]) -> bool:
-    return _canon(a) == _canon(b)
+# The comparator MOVED to data_layer in P5/S3 — it is not a second implementation, it is the same
+# function with one home. The store boundary's band check needs value-equality too, and
+# `check_scoped_reload` imports `build_db` which imports `data_layer`, so the dependency could only
+# run one way. These aliases keep every call site here unchanged.
+_canon = data_layer.canonical_rows
+_rows_eq = data_layer.rows_equal
 
 
 def _tables_eq(before: dict, after: dict, label: str, results: list) -> None:
