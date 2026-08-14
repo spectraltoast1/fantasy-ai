@@ -96,10 +96,16 @@ LAPTOP_OWNED_WRITERS: tuple[str, ...] = (
     "write_adp_points_curve",
     # The corpus manifests — corpus selection is a human, versioned decision.
     "write_corpus_discovery", "write_corpus_manifest", "write_corpus_two_way_flags",
-    # The registries. `write_leagues` OVERWRITES the whole file on a fixed schema, so a worker
-    # calling it would replace the shared registry with only what that machine knows. The shape
-    # of the writer is wrong for a worker — see the ADR's note; P5/S4 needs an append-shaped
-    # per-league writer before the worker can catalog a league.
+    # The registries. All three OVERWRITE the whole file on a fixed schema, so a worker calling
+    # one would replace the shared artifact with only what that machine knows. The SHAPE of the
+    # writer is what is wrong for a worker, not its owner — which is why P5/S4a could add a
+    # twelfth, WORKER-owned destination (`write_connected_league`) without moving this line: it
+    # replaces exactly one (league_id, season) row, so there is no shrink to cause.
+    #
+    # `write_leagues` is NOT on the connected-league path and was not touched in S4a. Every
+    # reader of leagues.parquet (`_active_league`, `_active_league_any`, `league_resolver`)
+    # filters `is_mine` first, so a stranger row would be read by nothing — the wall S4 hit was
+    # the CATALOG, not the registry. See context/appendices/store-boundary.md.
     "write_leagues", "write_demo_manifest", "write_synthetic_catalog",
     # The PINNED players snapshot is an immutable versioned event (it already refuses to
     # overwrite). The routine `write_sleeper_players` / `write_player_id_map` refresh is NOT
@@ -2342,3 +2348,67 @@ def read_synthetic_catalog() -> pl.DataFrame:
 
 def synthetic_catalog_exists() -> bool:
     return _synthetic_catalog_path().exists()
+
+
+# --- Connected leagues (P5/S4a): the catalog a stranger's league can legally live in ----------
+# The THIRD catalog source, and the first one a machine other than the laptop may write.
+#
+# Why a third artifact rather than a row in one of the other two. `demo_manifest.parquet` is the
+# frozen 31-row CORPUS slate that `compute_demo_slices`, `check_matchup_result` and the immutable L2
+# ledger all count on; `synthetic_catalog.parquet` is for GENERATED clones whose ids are deliberately
+# not Sleeper-shaped. A connected league is a third kind of thing — harvested from Sleeper, owned by
+# a real user, arriving one at a time forever — so it gets its own file: 31 + 1 + N.
+#
+# THE SHAPE IS WHY A WORKER MAY HOLD THIS PEN. The other three catalog writers overwrite the whole
+# file on a fixed schema, so a machine that knows about fewer leagues than the laptop would silently
+# shrink the shared registry — that is what makes them laptop-owned (see LAPTOP_OWNED_WRITERS). This
+# one writes or replaces exactly ONE (league_id, season) row and leaves every other row alone, so
+# there is no shrink to cause. The ADR's objection was never the owner; it was the shape.
+def _connected_catalog_path() -> Path:
+    return _SNAPSHOT_DIR / "connected_catalog.parquet"
+
+
+def write_connected_league(df: pl.DataFrame, league_id: str, season: int) -> None:
+    """Write or REPLACE exactly one connected league's catalog row; every other row is untouched.
+
+    Idempotent by `(league_id, season)`: re-onboarding the same league replaces its row rather than
+    duplicating it, and the file is sorted by `(season, league_id)` so a re-onboard cannot reorder
+    the others either. Both properties are load-bearing — this is the one catalog writer a worker is
+    allowed to call, and "append-shaped" is the entire justification.
+
+    **Dtypes are cast, not merely selected.** `build_db._catalog()` concatenates the three catalog
+    sources with `how="vertical"`, which is polars' STRICT variant: it requires identical names,
+    order AND dtypes. A row built in Python arrives with `viewer_roster_id: Null` when the seat is
+    absent and can arrive with `season: Int32`, either of which raises `SchemaError` for the whole
+    catalog — i.e. it would break the demo for everyone, not just this league. The other three
+    writers enforce column order only, which is safe for them because they are written from frames
+    that already came off disk. This one is written from a dict, so it enforces both.
+
+    Takes `league_id` and `season` positionally on purpose (CODING_BIBLE §5): a writer that can be
+    aimed at a throwaway id is one `check_store_boundary --prove-bites` can drive for real.
+    """
+    schema = read_demo_manifest().schema        # the canonical 12 columns AND their dtypes
+    row = df.select(_DEMO_MANIFEST_COLS).cast(schema)
+    keep = read_connected_catalog().filter(
+        ~((pl.col("league_id").cast(str) == str(league_id)) & (pl.col("season") == int(season))))
+    out = pl.concat([keep, row], how="vertical").sort(["season", "league_id"])
+    path = _connected_catalog_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    out.write_parquet(path)
+
+
+def read_connected_catalog() -> pl.DataFrame:
+    """The connected leagues' catalog rows, or an EMPTY frame with the right schema when none exist.
+
+    Empty-not-absent, exactly as `read_synthetic_catalog` is and for the same reason: every caller
+    concatenates this with the demo manifest, and a store that has never onboarded anyone — which is
+    every store until the first connect — must still load cleanly rather than special-casing it.
+    """
+    path = _connected_catalog_path()
+    if not path.exists():
+        return read_demo_manifest().clear()
+    return pl.read_parquet(path)
+
+
+def connected_catalog_exists() -> bool:
+    return _connected_catalog_path().exists()

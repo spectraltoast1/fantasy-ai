@@ -14,7 +14,9 @@ Four legs:
                  StoreBoundaryError. Driven off the constant itself, so a writer added to the list
                  without a guard (or a guard deleted from a listed writer) fails here.
   2. PERMITS   — under the same flag, a worker-owned write (derived/league) still succeeds and reads
-                 back, and the per-league raw/join layer is untouched.
+                 back, and the per-league raw/join layer is untouched. P5/S4a added the twelfth
+                 destination here: `write_connected_league`, the append-shaped catalog writer, which
+                 a worker MAY call precisely because it replaces one row instead of the whole file.
   3. THE BAND  — the one laptop-owned writer that verifies instead of refusing, in all three of its
                  outcomes: identical → returns quietly, different → raises, missing → raises.
   4. OFF       — with STORE_ROLE unset (the laptop default), nothing raises and every writer behaves
@@ -102,7 +104,33 @@ def _sweep() -> int:
     for d in (data_layer._league_dir(TMP_LEAGUE),):
         if d.exists() and not any(d.iterdir()):
             d.rmdir()
+    removed += _sweep_connected_catalog_rows()
     return removed
+
+
+def _sweep_connected_catalog_rows() -> int:
+    """The one artifact this gate can dirty that a filename sweep cannot reach (P5/S4a).
+
+    Every other throwaway write lands at a PATH containing TMP_SEASON or TMP_LEAGUE, so the rglob
+    above finds it. `connected_catalog.parquet` is a single shared file — the throwaway is a ROW
+    inside it, and its name matches nothing. A row left behind is worse than a stray file, too: it
+    joins `build_db._catalog()`, so `_slices()` grows a league that does not exist and the next
+    `--load` fails on it. Purge by value, and delete the file only if it was left with nothing in it
+    (i.e. this gate created it).
+    """
+    path = data_layer._connected_catalog_path()
+    if not path.exists():
+        return 0
+    df = pl.read_parquet(path)
+    keep = df.filter(~((pl.col("league_id").cast(str) == TMP_LEAGUE)
+                       | (pl.col("season") == TMP_SEASON)))
+    if keep.height == df.height:
+        return 0
+    if keep.height == 0:
+        path.unlink()
+    else:
+        keep.write_parquet(path)
+    return df.height - keep.height
 
 
 def _dummy_args(fn) -> list:
@@ -192,6 +220,70 @@ def check_permits() -> None:
         path.unlink(missing_ok=True)
         if path.parent.exists() and not any(path.parent.iterdir()):
             path.parent.rmdir()
+
+    _check_permits_connected_catalog()
+
+
+def _check_permits_connected_catalog() -> None:
+    """P5/S4a's twelfth destination — the ONE catalog a worker may write, and the append shape is why.
+
+    This case is structurally different from every other one in this file and the difference is the
+    hazard. Every other throwaway write lands at a path CONTAINING `TMP_SEASON`/`TMP_LEAGUE`, so
+    `_sweep()` finds it by name. `connected_catalog.parquet` is a SINGLE SHARED FILE whose name
+    contains neither — the throwaway is a *row*, not a file. Left behind, that row flows into
+    `build_db._catalog()` → `_slices()`, and the next `--load` would try to load a league that does
+    not exist. So this restores the file's exact BYTES (or its absence), and `_sweep` purges the row
+    as a second line of defence.
+
+    It also asserts what the append shape is FOR: a pre-existing row must survive the throwaway
+    write untouched. A whole-file writer would pass "the worker can write" and still be wrong.
+    """
+    path = data_layer._connected_catalog_path()
+    before = path.read_bytes() if path.exists() else None
+    row = data_layer.read_demo_manifest().head(1).with_columns(
+        league_id=pl.lit(TMP_LEAGUE), season=pl.lit(TMP_SEASON, dtype=pl.Int64),
+        lineage_id=pl.lit(TMP_LEAGUE), is_mine=pl.lit(False))
+    try:
+        with _Role("worker"):
+            data_layer.write_connected_league(row, TMP_LEAGUE, TMP_SEASON)
+        back = data_layer.read_connected_catalog()
+        mine = back.filter(pl.col("league_id") == TMP_LEAGUE)
+        if mine.height == 1:
+            _ok("write_connected_league (the connected catalog) succeeds under STORE_ROLE=worker")
+        else:
+            _fail(f"write_connected_league wrote {mine.height} rows for the throwaway league, expected 1")
+
+        # Idempotency, which is the property that earns a worker the pen at all.
+        with _Role("worker"):
+            data_layer.write_connected_league(row, TMP_LEAGUE, TMP_SEASON)
+        again = data_layer.read_connected_catalog()
+        if data_layer.rows_equal(back.to_dicts(), again.to_dicts()):
+            _ok("re-writing the same (league_id, season) is a no-op — no duplicate, no reorder")
+        else:
+            _fail("re-writing the same (league_id, season) CHANGED the catalog — the writer is not idempotent")
+
+        # The append shape: pre-existing rows must be byte-untouched.
+        if before is not None:
+            kept = again.filter(pl.col("league_id") != TMP_LEAGUE)
+            if data_layer.rows_equal(kept.to_dicts(), _rows_from_bytes(before)):
+                _ok("every OTHER connected row survived the write untouched — the append shape holds")
+            else:
+                _fail("the append writer disturbed rows it does not own")
+        else:
+            _ok("connected catalog did not exist before — created with exactly the one row")
+    except Exception as e:   # noqa: BLE001
+        _fail(f"write_connected_league raised under STORE_ROLE=worker: {type(e).__name__}: {e}")
+    finally:
+        if before is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_bytes(before)
+
+
+def _rows_from_bytes(blob: bytes) -> list[dict]:
+    """The rows a parquet blob held, without leaving a file behind."""
+    import io
+    return pl.read_parquet(io.BytesIO(blob)).to_dicts()
 
 
 # --- leg 3: the band verifies, in all three outcomes ------------------------------------------

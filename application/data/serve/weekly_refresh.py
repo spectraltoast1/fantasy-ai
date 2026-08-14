@@ -35,16 +35,45 @@ from application.data import data_layer
 from application.data.fetchers import nfl_stats, sleeper
 from application.data.serve import build_db
 from application.data.transforms import audit_join, compute_ros_player_band, join_nfl_sleeper_weekly
+from application.data.transforms._keys import scoring_key_from_settings
 from application.data.corpus import compute_spine, harvest as corpus_harvest
 from application.shared import league_resolver
 
 
 def _resolve_scoring_key(lid: str, season: int) -> str:
-    """The league's scoring_key from the demo_manifest slice (falls back to the is_mine default)."""
+    """THIS league's scoring_key: the served catalog, else the league's own Sleeper settings, else raise.
+
+    **The third branch used to be `data_layer._active_league(season)[1]` — the OWNER's key** — for
+    any league absent from the catalog, which was every connected league in existence. It was
+    harmless only because nothing but demo slices had ever refreshed; P5/S0 found it, S3 confirmed
+    the replay does not reach it, and S4a owns it because S4a is what puts strangers' leagues on
+    this path. Scoring a stranger's half-PPR league on the owner's PPR profile is silent
+    mis-scoring, which CODING_BIBLE §4 forbids outright.
+
+    **The order matters and is not the obvious one.** "Always derive from the league's settings"
+    reads better and breaks: `refresh_league` calls this BEFORE its fetch stage, so a league whose
+    raw config is not yet on disk has no settings to derive from. Catalog first therefore also
+    preserves exact parity for every league that refreshes today, and the settings branch serves the
+    connected league that has been fetched but not yet catalogued.
+
+    The last branch RAISES. There is no safe default for "which scoring rules does this league
+    use" — a wrong answer here is wrong points on every screen, with no alarm attached.
+    """
     for l, s, sk in build_db._slices():
         if l == lid and s == season:
             return sk
-    return data_layer._active_league(season)[1]
+    try:
+        settings = data_layer.read_scoring_settings(season, league_id=lid)
+    except Exception as exc:   # noqa: BLE001 — no raw config on disk yet; say so precisely
+        raise SystemExit(
+            f"cannot resolve a scoring_key for league {lid} ({season}): it is in no catalog and its "
+            f"Sleeper settings are not on disk ({type(exc).__name__}).\n"
+            "  Refusing rather than falling back to the is_mine league's key — that would score "
+            "this league on somebody else's scoring rules (CODING_BIBLE §4).\n"
+            "  Remedy: onboard it first — "
+            f"python -m application.data.serve.onboard_league --league {lid} --season {season}"
+        ) from exc
+    return scoring_key_from_settings(settings)
 
 
 def _joined_max_week(lid: str, season: int) -> int:

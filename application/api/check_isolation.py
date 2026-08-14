@@ -159,6 +159,54 @@ def check_season_term() -> None:
         _ok("an unresolved season refuses even an owned league (narrows, never widens)")
 
 
+def check_connected_league_reads() -> None:
+    """P5/S4a — the eleven reads treat a CONNECTED league exactly as they treat any owned one.
+
+    The counterpart to `check_ownership.check_connected_league_season_arm`: that one proves a
+    connected league cannot be *discovered*, this proves it cannot be *read* by someone who knows
+    its id. Pinned as a fixture because S4a's proving league is 2025 while production's season is
+    2026, so the arm that matters at Gate A — a 2026 connected league, readable by its owner and by
+    nobody else — cannot be exercised against the deployed API until a 2026 league is drafted.
+
+    A connected league is not a new authorization case; the point is that it is not a special case.
+    If it ever needed one, that would mean `authorize_slice` had grown a second path.
+    """
+    print("\na CONNECTED league (P5/S4a) is authorized exactly like any other owned league")
+    conn = "8880000000000000002"                     # a stranger's 2026 league, granted to A
+    seasons = {**_SEASONS, conn: 2026}
+    grants = {"A": {**_GRANTS["A"], conn: None}, "B": dict(_GRANTS["B"])}
+
+    def lookup(league_id, user_id):
+        lid, season = str(league_id), seasons.get(str(league_id))
+        g = grants.get(user_id, {})
+        return {"n_seasons": 1 if season is not None else 0, "season": season,
+                "owned": 1 if lid in g else 0, "grant_roster": g.get(lid) if lid in g else None}
+
+    def authorize(role, *, current_season=2026):
+        return reads.authorize_slice(conn, None, None, user_id=role, demo_league_id=DEMO,
+                                     lookup=lookup, current_season_fn=lambda: current_season,
+                                     roster_exists=_fake_rosters)
+
+    try:
+        got = authorize("A")
+        _eq("its owner reads a connected 2026 league", got["league_id"], conn)
+    except reads.SliceRefused:
+        _fail("the OWNER of a connected league is refused — onboarding would be inert")
+
+    for role in (None, "B"):
+        try:
+            authorize(role)
+            _fail(f"{_WHO[role]} can read a connected league they do not own")
+        except reads.SliceRefused:
+            _ok(f"{_WHO[role]} is refused a connected league they do not own")
+
+    try:
+        authorize("A", current_season=2027)
+        _fail("a connected league survives the season rolling past it")
+    except reads.SliceRefused:
+        _ok("a connected league loses its owner when the season rolls past it, like any other")
+
+
 def check_default_slice() -> None:
     print("\nan omitted league_id is the demo — for everyone, and it is still authorized")
     for role in _ROLES:
@@ -427,6 +475,7 @@ def main_() -> int:
     print("=== check_isolation: can a caller read a league they cannot see? ===")
     check_matrix()
     check_season_term()
+    check_connected_league_reads()
     check_default_slice()
     check_viewer_seat()
     check_refusals_are_indistinguishable()

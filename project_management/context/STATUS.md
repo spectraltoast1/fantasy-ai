@@ -232,10 +232,41 @@ verified faithful, not merely measured, which is the first real evidence for the
 *reconstructible cache* claim.
 → `sessions/v1/P5-Self_Serve/SESSION_P5_S3_REPORT.md` + `SESSION_P5_S3_AUDIT.md`.
 
-Two things still queue behind calendar gates, neither blocking P5: **loading the first real 2026 league**
-at Will's draft (~late Aug) — a manual admin load, not P5 — which data-proves S2's refresh, S3b's band
-panel and S4a's regimes at once and **must verify the ROS-range panel against real band data**; and
-**S4b** (market turn-on) post-launch.
+**P5/S4a done — the store can accept a league it has never seen, and the worker created one.**
+Nothing in this system had ever catalogued a league: `_catalog()` was the frozen 31-row corpus slate
+plus the generated clone, and `load_league` refuses anything absent from it, so a real user's league
+had nowhere to be written down. There is now a **third catalog artifact, `connected_catalog.parquet`
+— 31 + 1 + N** — and `write_connected_league(df, league_id, season)` replaces exactly one row and
+leaves the rest untouched. **That append shape is the whole reason a worker may hold this pen**; the
+ADR's objection to `write_leagues` was its shape, not its owner. The classification goes **11 → 12**.
+**`write_leagues` was NOT touched and the ADR's "S4 wall" was wrong**: every reader of
+`leagues.parquet` filters `is_mine` first, so a stranger row would be read by nothing — the wall is
+the *catalog*, not the *registry*. **`_resolve_scoring_key`'s owner-key fallback is fixed** (catalog
+→ the league's own Sleeper settings → **raise**); the naive "always derive from settings" breaks
+because `refresh_league` calls it before its fetch stage.
+**Proven end to end on `fantasy-ai-worker`, 2026-08-14**: a real cold 2025 league (Rex Lumber, 12-team
+1QB PPR, from the crawl leftovers — never in the corpus) went **cold → catalogued**, the worker
+**COMMITTED 14,999 rows across 10 tables + 1 catalog row**, `league_catalog` 32 → 33, and **every
+other league moved by exactly 0**. A re-onboard is a **clean no-op** (catalog value-identical, all 14
+tables unchanged, no duplicate row). Signed-out prod still returns **exactly the demo**, and the
+league 404s byte-for-byte identically to one that never existed.
+→ `sessions/v1/P5-Self_Serve/SESSION_P5_S4A_REPORT.md`.
+
+**Two consequences worth knowing before the next session.** (1) **`build_db --verify` has moved
+machines**: it compares *local* disk to Postgres, and the worker now builds leagues the laptop never
+sees, so the laptop reports a mismatch (measured: laptop FAILED, worker **VERIFY OK** on all 15
+tables). Run it on the worker. (2) A **2025** league takes the `season < FIRST_HONEST_BAND_SEASON`
+branch and never reaches the band, and production's derived season is **2026**, so a 2025 connected
+league is correctly invisible to its own owner on the deployed API. Both halves were proven —
+positive against a `CURRENT_SEASON=2025` process on production Postgres, negative on live prod — and
+the 2026 arm is pinned as a fixture in `check_ownership`/`check_isolation`. **What remains uncovered
+is the combination: a *cold 2026* league whose scoring key's substrate must already be on the volume.
+That is Gate A's to close.**
+
+**Gate A is unblocked.** Loading the first real 2026 league at Will's draft (~late Aug) is no longer
+"a manual admin load with nowhere to put the row" — it is `onboard_league --league <id> --season 2026`
+on the worker. It data-proves S2's refresh, S3b's band panel and S4a's regimes at once, and **must
+verify the ROS-range panel against real band data**. **S4b** (market turn-on) stays post-launch.
 → `ROADMAP.md` + `projects/v1/BUILD_ORDER.md` + `projects/v1/P5_ACCOUNTS_SELF_SERVE_ONBOARDING.md`.
 
 ## The demo, visibility, and what a signed-in user sees (decided 2026-08-05; **built in S2a + S2b**)
@@ -336,11 +367,6 @@ forward, and P5/S3 makes it worse by adding a second machine with write access.
   confidence tier, because asserting an unmeasured confidence is exactly how `ros_cv` shipped inverted.
   Note `bracket_odds.proj_wins` reaches **no client** today, so "playoff wins" has no surface to carry a
   signal until it does.
-- **`weekly_refresh._resolve_scoring_key` would silently mis-score a stranger's league** (found in P5/S0).
-  A league absent from `demo_manifest` falls back to `data_layer._active_league(season)[1]` — *the owner's*
-  scoring key. Every user's league is absent from the catalog until the connect flow catalogs it, so this
-  sits on P5's live path. Fix = derive from the league's own settings (`_keys.scoring_key_from_settings`,
-  which is what the S0 harness does). Harmless today (nothing but demo slices refresh); **P5/S4 owns it.**
 - **`matchup_win_probs` returns 50/50 whenever both σ are 0**, regardless of μ — a 30-point projected gap
   included. Pinned by `check_projections`, and it disagrees with the sim's own `_win_prob`, which returns
   1.0/0.0 there. Only reachable on a week with no projections at all.
