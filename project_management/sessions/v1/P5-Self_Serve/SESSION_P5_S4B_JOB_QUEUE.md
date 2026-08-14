@@ -124,10 +124,101 @@ queue without adding a second stranger's league to production. **If you need a c
 failure — three times now (`_db_max_as_of`, the parity run's seven skips, `check_onboard`'s first
 prove-bites). **Show the work happened.**
 
+## AMENDED 2026-08-14 — three questions from Code, answered
+
+**Two of these are gaps in this brief, not in the reading of it.**
+
+### 1 · The `jobs` primary key — **uuid**, and the repo precedent is being read one level too shallow
+
+The precedent is not *"`signup_attempts` uses `bigserial`, so use `bigserial`."* Read all four tables in
+`auth_schema.sql` and the rule is sharper:
+
+| table | key | who holds it |
+|---|---|---|
+| `app_users` | **`uuid`** | **a client** — it is the Supabase auth `sub` |
+| `signup_attempts` | `bigserial` | nobody outside the server, ever |
+| `user_leagues` | composite natural key | internal |
+| `league_catalog` | **none at all** | (which is why S4a's upsert is DELETE+INSERT) |
+
+**The precedent is: internal-only rows get `bigserial`; anything a client holds is a `uuid`.** S4c puts
+the job id in a URL (`GET /api/connect/{id}`), so a client holds it. → **`uuid`, `gen_random_uuid()`.**
+
+Two reinforcing reasons, both the project's own:
+
+- **S2b's no-enumeration design.** An unowned league returns bytes identical to a nonexistent one
+  because *"Sleeper ids are guessable, so a refusal that varies by case is an enumeration oracle."* A
+  sequential job id is maximally guessable. Even with correct authorization in S4c it leaks **volume** —
+  how many leagues have been connected and how fast. Small for an invited cohort, free to avoid.
+- **It removes a temptation.** With a `bigserial` someone will eventually order the queue by `id`. Order
+  by `created_at` (or an explicit priority) instead, or the first retry-after or priority column breaks
+  the ordering silently.
+
+**Decide it here because it is expensive later** — it becomes a URL contract in S4c.
+
+### 2 · The dossier job — build the DIMENSION, not the job, and do NOT flip the flag
+
+**My omission: the scope guard should have named this.** It does now. Three parts:
+
+- **Do NOT build the dossier executor.** 80s / 248 Sleeper calls, cross-league. S0 deliberately classed
+  it as a **deferred job class** — i.e. connect-flow UX, where dossiers arrive after the four fast
+  surfaces. **That is S4c.**
+- **DO build the job-class dimension — a `kind` column.** The queue needs a second class before this
+  brief's ink is dry: **S4d enqueues `refresh` jobs.** One column now; a migration later otherwise.
+- **Prove the dimension without a second executor:** an unknown or unimplemented `kind` must reach a
+  terminal state cleanly and **must not crash the loop.** That is not extra work — it is §4's existing
+  *"must survive a bad job"* requirement, sharpened into something testable, and it satisfies standing
+  rule 9 (do not ship a path nothing exercises).
+
+**And the part that matters most: do NOT flip `panels_manager`.** S4a finding G's own reasoning forbids
+it — the flag is False *because* the dossier data does not exist, and *"a true flag would light a panel
+with nothing behind it."* Flipping it here would light a panel over nothing, which is the dishonesty the
+north star forbids and the same class as the honestly-gated market and ROS panels. **The flag flips in
+the same session that makes it true.** S4c.
+
+### 3 · The empty queue — the answer is `LISTEN`/`NOTIFY`, and the number is idle queries/day
+
+**This is a real cost question and `OPERATIONS.md` already frames it:** *"Queries and the bytes they
+return… Supabase consumption is the only thing that can take the site down in a way that needs a
+human."* A polling worker is a **new, permanent, 24/7 source of queries that exists whether or not
+anybody uses the product** — the exact consumption class that document warns about.
+
+The naive trade is bad in both directions. The build is **8.4–10.3s** (S0), so a user waits
+`interval / 2` on average before work even *starts*:
+
+| poll interval | idle queries/day | avg added latency |
+|---|---|---|
+| 2s | **43,200** | ~1s (fine) |
+| 30s | 2,880 | **~15s — worse than the build itself** |
+| 60s | 1,440 | ~30s |
+
+**Don't pick a point on that curve — remove it.** Postgres **`LISTEN`/`NOTIFY`**: the worker `LISTEN`s,
+the producer `NOTIFY`s on insert. Near-zero latency, near-zero idle cost, one held connection.
+
+- **It is available**, and S3 already established why: the worker's `DATABASE_URL` is the Supabase
+  **session** pooler (*"the session pooler is the right choice for that; the transaction pooler is
+  not"*). `LISTEN`/`NOTIFY` does **not** survive a transaction-mode pooler — so **record that this
+  forecloses ever moving the worker to the transaction pooler**, and say so where the connection is
+  configured.
+- **`LISTEN` alone is not sufficient.** A `NOTIFY` sent while the worker is reconnecting is **lost** —
+  it is fire-and-forget, not a queue. So: **`LISTEN` as the primary wake, plus a slow safety-net poll**
+  (start at **60s**) which also does the work of expiring stale leases. Belt and braces, and the poll is
+  the thing that makes a lost notification a 60s delay instead of a stuck league.
+- **The number the report must state: idle queries per day, measured.** ~1,440/day at a 60s safety poll
+  versus ~43,200/day at 2s — **a 30× reduction with *better* latency.**
+- **The honest caveat, say it out loud:** an idle worker holding a session-pooler connection 24/7 is
+  itself a free-tier consideration. STATUS already flags *"two connection pools against a free-tier
+  Postgres"* as a P6 item; **this makes it three.** Report the connection count alongside the query
+  rate.
+
+**If `LISTEN` proves awkward, poll-only is an acceptable fallback** — but then the interval is a
+*product* decision (it is user-visible latency in S4c), so state the number and the reasoning rather
+than defaulting.
+
 ## Scope guard
 
 Does **NOT**: build `POST /api/connect`, `GET /api/connect/{id}`, identity acquisition, or any
-frontend (**S4c**); build the weekly cadence or touch `.github/workflows/weekly_refresh.yml`,
+frontend (**S4c**); **build the Manager Dossier job or flip `panels_manager`** (**S4c** — build the
+`kind` column, not the second executor; see the amendment above); build the weekly cadence or touch `.github/workflows/weekly_refresh.yml`,
 `MY_USERNAME` or `LEAGUE_ID` (**S4d**); write S5's preflight validation or its rejection copy; add
 `--delete` to `scripts/users.py` (**S4c**); fix the null-seat collision (S4a finding F — **S4c**);
 run `--emit` or `--load` against production; touch engine constants, any transform's maths, the
@@ -197,6 +288,46 @@ always on and idle. The one genuinely new shape in this session is a long-runnin
    that `failed` is distinguishable from `rejected` without reading logs. Do not copy a list from a
    brief.
 
+2b. THREE DECISIONS, SETTLED 2026-08-14 — do not re-derive them.
+   PRIMARY KEY = uuid (gen_random_uuid()), NOT bigserial. The repo precedent is not "signup_attempts
+   uses bigserial"; read all four tables: app_users is uuid because a CLIENT holds it, signup_attempts
+   is bigserial because nobody outside the server ever sees it, user_leagues is a composite natural
+   key, league_catalog has no PK at all. The rule is internal-only -> bigserial, client-held -> uuid.
+   S4c puts the job id in a URL, so a client holds it. Also: a sequential id is an enumeration oracle
+   for VOLUME even when authorization is correct, which is the same objection S2b's identical-404
+   design exists for. And do NOT order the queue by id — order by created_at or an explicit priority,
+   or the first retry-after column breaks the ordering silently.
+
+   THE `kind` COLUMN: build it. The queue needs a second class before this brief's ink is dry — S4d
+   enqueues `refresh` jobs. One column now, a migration later otherwise.
+   DO NOT BUILD THE MANAGER DOSSIER JOB (S4a finding G). It is 80s / 248 Sleeper calls, cross-league,
+   and S0 deliberately made it a DEFERRED job class — that is connect-flow UX, i.e. S4c.
+   DO NOT FLIP panels_manager. Finding G's own reasoning forbids it: the flag is False BECAUSE the
+   dossier data does not exist, and "a true flag would light a panel with nothing behind it." The flag
+   flips in the same session that makes it true.
+   PROVE THE DIMENSION ANYWAY: an unknown/unimplemented `kind` must reach a terminal state cleanly and
+   MUST NOT crash the loop. That is §4's "survive a bad job" requirement made testable, not extra work.
+
+2c. THE EMPTY QUEUE — use LISTEN/NOTIFY, and put a NUMBER in the report.
+   OPERATIONS.md: "Queries and the bytes they return... Supabase consumption is the only thing that can
+   take the site down in a way that needs a human." A polling worker is a NEW, PERMANENT, 24/7 source of
+   queries that exists whether or not anybody uses the product.
+   The naive trade is bad both ways — the build is 8.4-10.3s (S0), so a user waits interval/2 before
+   work even STARTS: 2s poll = 43,200 idle queries/day (~1s added); 30s poll = 2,880/day but ~15s added,
+   which is worse than the build itself.
+   SO REMOVE THE TRADE: the worker LISTENs, the producer NOTIFYs on insert. It IS available — S3
+   established the worker's DATABASE_URL is the Supabase SESSION pooler ("the session pooler is the
+   right choice for that; the transaction pooler is not"), and LISTEN/NOTIFY does NOT survive a
+   transaction-mode pooler. RECORD that this forecloses moving the worker to the transaction pooler,
+   where the connection is configured.
+   LISTEN ALONE IS NOT ENOUGH: a NOTIFY sent while the worker is reconnecting is LOST — it is
+   fire-and-forget, not a queue. Add a SLOW SAFETY-NET POLL (start at 60s) which also expires stale
+   leases. That is what turns a lost notification into a 60s delay instead of a stuck league.
+   THE REPORT MUST STATE, MEASURED: idle queries/day AND the connection count. STATUS already flags
+   "two connection pools against a free-tier Postgres" as a P6 item — this makes it three. Say so.
+   If LISTEN proves awkward, poll-only is acceptable — but then the interval is a PRODUCT decision (it
+   is user-visible latency in S4c), so state the number and the reasoning rather than defaulting.
+
 3. THE LEASE.
    SELECT ... FOR UPDATE SKIP LOCKED. The worker is a STATEFUL SINGLETON (a Fly volume attaches to
    exactly one machine — the ADR), so a second concurrent worker is impossible TODAY. BUILD IT AS IF
@@ -239,7 +370,8 @@ always on and idle. The one genuinely new shape in this session is a long-runnin
    check_onboard's first prove-bites). SHOW THE WORK HAPPENED.
 
 Scope guard — does NOT: build POST /api/connect, GET /api/connect/{id}, identity acquisition or any
-frontend (S4c); build the weekly cadence or touch .github/workflows/weekly_refresh.yml, MY_USERNAME or
+frontend (S4c); build the Manager Dossier job or flip panels_manager (S4c — build the `kind` column,
+not the second executor); build the weekly cadence or touch .github/workflows/weekly_refresh.yml, MY_USERNAME or
 LEAGUE_ID (S4d); write S5's preflight validation or rejection copy; add --delete to scripts/users.py
 (S4c); fix the null-seat collision, S4a finding F (S4c); run --emit or --load against production;
 touch engine constants, any transform's maths, the corpus, the frozen corpus manifest, or
