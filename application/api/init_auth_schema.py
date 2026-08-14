@@ -23,7 +23,7 @@ _SQL_PATH = Path(__file__).resolve().parent / "auth_schema.sql"
 # two and that is exactly what it cost: two list entries, with the column dump and the
 # absent-from-generated-DDL assertion inherited for free. S2c removed one of them again
 # (`nfl_state_cache`, retired with the Sleeper call it cached) — one list entry, same seam.
-_TABLES = ["app_users", "signup_attempts", "user_leagues", "jobs"]
+_TABLES = ["app_users", "signup_attempts", "user_leagues", "jobs", "connect_attempts"]
 
 _COLUMNS_SQL = """
 SELECT column_name, data_type, is_nullable
@@ -45,7 +45,11 @@ def apply() -> None:
 # rather than assumed. `CREATE TABLE IF NOT EXISTS` is a no-op on an existing table, so a column
 # declared inside it never appears in a database that already has the table — the S2a-audit F2 trap,
 # one level up. Listing them here means the assertion is inherited the same way the table list is.
-_ALTERED_COLUMNS = [("user_leagues", "roster_id")]
+_ALTERED_COLUMNS = [("user_leagues", "roster_id"),
+                    # P5/S4c. `jobs` already existed in production when these three were written,
+                    # so `CREATE TABLE IF NOT EXISTS` would have skipped them silently and the
+                    # worker would have read `platform_user_id` off a column that was never there.
+                    ("jobs", "platform"), ("jobs", "handle"), ("jobs", "platform_user_id")]
 
 # Foreign keys that must exist AND cascade on delete (S2a audit F2, closed in S2c). Deleting an
 # account has to take its grants with it; if the FK is missing or its delete action is anything
@@ -62,7 +66,13 @@ _ALTERED_COLUMNS = [("user_leagues", "roster_id")]
 # column dump and the leaked-into-schema.sql check. Adding a table to `_TABLES` alone means its FK
 # is never asserted. `jobs.requested_by` is here because attribution must not outlive an account
 # either — a job row naming a deleted user is the same defect as a grant naming one.
-_CASCADE_FKS = [("user_leagues", "user_id"), ("app_users", "id"), ("jobs", "requested_by")]
+#
+# P5/S4c adds `connect_attempts.user_id` — and adds it HERE as well as to `_TABLES`, which is the
+# whole point of the note above. It is also the table `--delete` will exercise hardest: a rate-limit
+# log is the least important thing in this database and the easiest to forget, so an account that
+# leaves rows behind here leaves them behind everywhere.
+_CASCADE_FKS = [("user_leagues", "user_id"), ("app_users", "id"), ("jobs", "requested_by"),
+                ("connect_attempts", "user_id")]
 
 # `confdeltype` is the ON DELETE action: 'c' = CASCADE, 'a' = NO ACTION, 'r' = RESTRICT,
 # 'n' = SET NULL, 'd' = SET DEFAULT. Reading pg_constraint directly because information_schema
@@ -87,9 +97,24 @@ WHERE u.id IS NULL AND t.{column} IS NOT NULL
 """
 
 
-def _verify_cascades() -> bool:
-    """Assert the constraint, not just the column — and then count what it is supposed to prevent."""
+def _verify_cascades() -> tuple[bool, list[str]]:
+    """Assert the constraint, not just the column — and then count what it is supposed to prevent.
+
+    Returns ``(ok, unknown)``. **The second element is P5/S4c's fix, and the shape of the fix is the
+    point.** Until now an orphan count that could not be read printed `??` and `continue`d WITHOUT
+    setting `ok = False` — so on a role that cannot see `auth.users`, `--verify` exited 0 over an
+    assertion that had produced nothing. A green exit code meant "checked and fine" and "never
+    checked at all" indistinguishably, which is this project's signature failure: a proof that
+    passes by doing nothing.
+
+    **The fix is a THIRD STATE, not a louder failure.** An unavailable count genuinely is not a
+    failure — the cascade itself is asserted from `pg_constraint` above and that assertion did run —
+    so failing on it would be crying wolf on every restricted role. It simply must not be counted
+    as a success. So it is carried out separately and `verify` says how many assertions could not
+    be evaluated, next to the ones that could.
+    """
     ok = True
+    unknown: list[str] = []
     for table, column in _CASCADE_FKS:
         try:
             fks = db.fetch_all(_FK_SQL, {"t": table})
@@ -118,17 +143,18 @@ def _verify_cascades() -> bool:
         except Exception as exc:  # noqa: BLE001 — the API role may not be able to read auth.users
             print(f"  ??  orphan count for public.{table} UNAVAILABLE ({exc}) — the cascade is "
                   "asserted above, but nothing counted what it prevents")
+            unknown.append(f"public.{table}.{column} orphan count")
             continue
         if n == 0:
             print(f"  ok  public.{table}: 0 rows point at a user that no longer exists")
         else:
             print(f"✗ public.{table}: {n} ORPHAN row(s) — grants outliving their account")
             ok = False
-    return ok
+    return ok, unknown
 
 
 def verify() -> bool:
-    ok = _verify_cascades()
+    ok, unknown = _verify_cascades()
     for table, column in _ALTERED_COLUMNS:
         cols = {c["column_name"] for c in db.fetch_all(_COLUMNS_SQL, {"t": table})}
         if column in cols:
@@ -160,6 +186,14 @@ def verify() -> bool:
         else:
             print(f"  ok  all {len(_TABLES)} absent from the generated schema.sql "
                   "(a full --load cannot drop them)")
+
+    # UNKNOWN IS NOT PASS (P5/S4c). Printed last and unconditionally, so a green run cannot be read
+    # as full coverage: the exit code says nothing went wrong, this line says how much was actually
+    # checked. Silence here means everything was evaluated.
+    if unknown:
+        print(f"\n⚠ {len(unknown)} assertion(s) could NOT be evaluated on this role and are "
+              f"neither a pass nor a failure: {', '.join(unknown)}.\n"
+              "  Re-run with a role that can read auth.users before treating this as proof.")
     return ok
 
 

@@ -187,6 +187,40 @@ CREATE TABLE IF NOT EXISTS public.jobs (
     updated_at        timestamptz NOT NULL DEFAULT now()
 );
 
+-- P5/S4c — THE PLATFORM DIMENSION AND THE IDENTITY THE SEAT IS RESOLVED FROM.
+--
+-- EXPLICIT ALTERs for the reason `user_leagues.roster_id` is one and the state CHECK below is one:
+-- `CREATE TABLE IF NOT EXISTS` is a NO-OP on an existing table, so a column declared inside it
+-- never appears in any database that already has the table — which is every database that matters.
+-- The S2a-audit F2 trap. `init_auth_schema._ALTERED_COLUMNS` asserts all three really landed.
+--
+-- `platform` is the `kind` pattern applied a second time: BUILD THE DIMENSION, NOT THE SECOND
+-- IMPLEMENTATION (Will, 2026-08-14 → projects/post-v1/other-platforms.md). Exactly one platform
+-- has an implementation behind it; the worker REJECTS any other cleanly, the same way it rejects an
+-- unknown `kind`. One column now beats a migration later on a file with no migration story.
+--
+-- DELIBERATELY NOT DONE, and recorded so it reads as a decision rather than an oversight: there is
+-- no `platform` on `user_leagues`, on `league_catalog` or on the 14 served data tables, and league
+-- ids are NOT namespaced (no "yahoo:nfl.l.123"). Both would be migrations across the loader, the
+-- corpus, demo_manifest and every served payload, needed by nothing today.
+--
+-- `handle` and `platform_user_id` are the identity half. The seat is resolved ON THE WORKER from
+-- `platform_user_id` (P5/S4c §3), so carrying it here is what stops the worker re-discovering it —
+-- and keeps a job re-runnable from its own columns, the rule the payload columns above follow.
+-- `platform_user_id`, never `sleeper_user_id`: naming a generic column after one vendor is the
+-- trench. Both are NULLABLE — the direct-league-id path has no handle, which resolves no seat,
+-- which renders as no "you" highlight. That is a supported outcome, not a degraded one.
+ALTER TABLE public.jobs ADD COLUMN IF NOT EXISTS platform         text NOT NULL DEFAULT 'sleeper';
+ALTER TABLE public.jobs ADD COLUMN IF NOT EXISTS handle           text;
+ALTER TABLE public.jobs ADD COLUMN IF NOT EXISTS platform_user_id text;
+
+-- The connect flow's own reads are caller-scoped, and both of them filter on `requested_by`:
+-- `GET /api/connect/{id}` (one job, scoped) and `GET /api/connect` (the caller's active job, which
+-- is what survives a mid-build refresh). The connect RATE LIMIT counts this table too, by
+-- (requested_by, created_at).
+CREATE INDEX IF NOT EXISTS jobs_requested_by_created_at_idx
+    ON public.jobs (requested_by, created_at DESC);
+
 -- THE STATE SET IS A CONSTRAINT, AND IT IS ADDED BY AN EXPLICIT ALTER. `CREATE TABLE IF NOT EXISTS`
 -- above is a no-op on an existing table, so a CHECK written inside it would never land on any
 -- database that already has the table — the same S2a-audit F2 trap `_ALTERED_COLUMNS` exists for,
@@ -211,6 +245,42 @@ CREATE UNIQUE INDEX IF NOT EXISTS jobs_active_league_idx ON public.jobs (league_
 -- Same defense-in-depth caveat as every other table here: the app connects as an owner role that
 -- BYPASSES RLS, so this denies nothing to this API.
 ALTER TABLE public.jobs ENABLE ROW LEVEL SECURITY;
+
+
+-- Discovery lookups (P5/S4c) — the OTHER rate limiter's state.
+--
+-- WHY A SECOND TABLE RATHER THAN COUNTING JOBS. The connect budget is counted from `public.jobs`
+-- itself: a job row IS the thing being limited, so the counter cannot drift from what it counts.
+-- Discovery has no such record — it starts no job, writes nothing, and leaves no trace — so it
+-- needs one, and this is the smallest thing that will do.
+--
+-- WHAT IT DEFENDS, which is NOT the same as `signup_attempts`. Discovery is authenticated, so the
+-- caller already holds an account and the access code; brute force is not the threat. Each call
+-- costs two GETs against api.sleeper.app, and the resource actually at risk is OUR EGRESS IP: get
+-- it throttled by Sleeper and onboarding stops for EVERYONE, not just the abuser. That is a
+-- shared-fate resource, which is what makes a limit worth having on an authenticated endpoint.
+--
+-- KEYED ON THE USER, not the IP or the email. S1b's limiter keyed on what an unauthenticated
+-- caller supplied and had to reason carefully about aiming it at somebody else; here the key is a
+-- verified token subject and cannot be chosen by the caller at all.
+--
+-- IN POSTGRES for the reason rate_limit.py:9-15 gives: fly.toml sets `min_machines_running = 0`
+-- with `auto_stop_machines = "stop"`, so in-process state is erased whenever a machine idles out —
+-- a limiter you reset by being patient is not a limiter.
+--
+-- ON DELETE CASCADE like every other account-keyed table here: no record outlives its account.
+CREATE TABLE IF NOT EXISTS public.connect_attempts (
+    -- bigserial, not uuid, and the rule this file already states decides it: nobody outside the
+    -- server ever sees one of these ids. `jobs.id` is a uuid precisely because a client holds it.
+    id       bigserial PRIMARY KEY,
+    user_id  uuid REFERENCES auth.users (id) ON DELETE CASCADE,
+    at       timestamptz NOT NULL DEFAULT now()
+);
+
+-- Every lookup is "attempts by this user since T".
+CREATE INDEX IF NOT EXISTS connect_attempts_user_at_idx ON public.connect_attempts (user_id, at);
+
+ALTER TABLE public.connect_attempts ENABLE ROW LEVEL SECURITY;
 
 
 -- RETIRED IN P5/S2c: `public.nfl_state_cache`.

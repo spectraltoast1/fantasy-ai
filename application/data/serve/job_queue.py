@@ -1,4 +1,9 @@
-"""The job queue — leasing work out of Postgres (P5/S4b).
+"""The job queue's CONSUMER half — leasing work out of Postgres (P5/S4b, split in S4c).
+
+**Read this first if you are looking for `enqueue`: it is in `application/api/jobs.py` now**, and
+the names imported below are aliases for it rather than copies. The API image contains no
+`application/data/` at all, so the producer had to move somewhere both images can reach; the lease,
+`advance`, `finish`, `release` and `reap` stayed here because only the worker runs them.
 
 `onboard_league.onboard()` has existed since P5/S4a and is proven. What did not exist was any way
 to invoke it except a human typing `fly ssh console`. **The API cannot invoke it either:**
@@ -25,12 +30,18 @@ import psycopg
 from psycopg.rows import dict_row
 
 from application.api import db
-
-# The states a job passes through. `validating` is a SLOT — S5 owns preflight scope validation and
-# the graceful rejection copy; today it covers the coldness/scope/season checks `onboard()` already
-# does. There are deliberately NO per-stage semantics beyond "which one is it in now".
-RUNNING_STATES = ("validating", "fetching", "building", "loading")
-TERMINAL_STATES = ("ready", "rejected", "failed")
+# P5/S4c: the PRODUCER half moved UP into `application/api/` and this is the re-export. Not tidying
+# — a necessity. The API image contains no `application/data/` at all (`.dockerignore` excludes a
+# bare `data`; the Dockerfile copies `api/` only), so `POST /api/connect` physically cannot import
+# this module, and the docstring above used to instruct it to. The shape is S4a's, where
+# `canonical_rows` moved down into `data_layer` and `check_scoped_reload` kept a one-line
+# re-export: ONE implementation, reachable from both images.
+#
+# Writing a second INSERT here instead is how a job gets inserted without its NOTIFY and sits in
+# `queued` until the safety-net poll. `check_connect` asserts from source that the statement exists
+# exactly once and that these names are ALIASES rather than copies.
+from application.api.jobs import (CHANNEL, RUNNING_STATES,  # noqa: F401
+                                  TERMINAL_STATES, enqueue)
 
 # How long a lease is good for, RENEWED AT EVERY STATE TRANSITION (see `advance`). Because it is
 # renewed, this only ever has to exceed the longest single STAGE, not the whole job — so it can be
@@ -49,10 +60,6 @@ LEASE_SECONDS = 120
 # user's league. `rejected` jobs never retry at all (retrying a deterministic refusal cannot change
 # the answer); this bounds the `failed` ones.
 MAX_ATTEMPTS = 3
-
-# Postgres LISTEN/NOTIFY channel. The worker listens; producers notify on insert. See `connect()`
-# for why this forecloses the transaction pooler.
-CHANNEL = "jobs_new"
 
 
 def connect() -> psycopg.Connection:
@@ -88,12 +95,6 @@ def connect() -> psycopg.Connection:
     conn.autocommit = True
     return conn
 
-
-_ENQUEUE = """
-INSERT INTO public.jobs (kind, league_id, season, requested_by)
-VALUES (%(kind)s, %(league_id)s, %(season)s, %(requested_by)s)
-RETURNING id, kind, league_id, season, state, created_at
-"""
 
 # The lease. Every clause is doing work:
 #
@@ -185,30 +186,6 @@ UPDATE public.jobs SET
 WHERE state = ANY(%(running)s) AND lease_expires_at < now() AND attempts >= %(max)s
 RETURNING id, league_id, season, attempts
 """
-
-
-def enqueue(league_id: str, season: int, *, kind: str = "onboard",
-            requested_by: str | None = None, conn: psycopg.Connection | None = None) -> dict:
-    """Insert a job and wake a listening worker. Returns the new row.
-
-    The NOTIFY is issued HERE, in reviewable code, rather than by a database trigger — the same
-    choice `app_users` made by writing its row from `/api/me` instead of from invisible DDL. S4c's
-    `POST /api/connect` and S4d's weekly cadence both call this; a row inserted by raw SQL without
-    the NOTIFY is not lost, it is just picked up on the next safety-net poll.
-    """
-    own = conn is None
-    conn = conn or connect()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(_ENQUEUE, {"kind": kind, "league_id": str(league_id),
-                                   "season": int(season), "requested_by": requested_by})
-            row = cur.fetchone()
-            cur.execute("SELECT pg_notify(%(chan)s, %(payload)s)",
-                        {"chan": CHANNEL, "payload": str(row["id"])})
-        return row
-    finally:
-        if own:
-            conn.close()
 
 
 def lease(conn: psycopg.Connection, *, worker: str) -> dict | None:

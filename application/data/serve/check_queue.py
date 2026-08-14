@@ -58,6 +58,63 @@ def _fail(msg: str) -> None:
     _results.append(False)
 
 
+# UNKNOWN IS NOT PASS, AND IT IS NOT FAILURE EITHER (P5/S4c).
+#
+# **The problem this exists for, found by S4c and pre-dating it:** this gate writes throwaway rows
+# into the SAME `public.jobs` table the LIVE `fantasy-ai-worker` is draining. Since S4b deployed the
+# leasing loop, that worker is permanently listening — measured 2026-08-14, it leased a throwaway
+# row **0.9s** after the INSERT (the NOTIFY, not the poll), ran `onboard_league` against a league id
+# that is not Sleeper-shaped, got a 404 and buried the row as `failed`. Legs (c) and (e) below then
+# found their row already gone and reported a FAILURE — of the queue, which was in fact working
+# perfectly. The gate was measuring the one thing it cannot control.
+#
+# The two red lines were therefore describing the instrument, not the mechanism, and reporting them
+# as failures is exactly the inversion this project keeps naming: a result that says something is
+# broken when nothing is, next door to the more usual one that says something works when it was
+# never tried.
+#
+# So a leg whose row was taken by a real worker is reported as **UNEVALUATED**. It is not a pass —
+# it must not be counted as one and the summary says how many there were — and it is not a failure,
+# because nothing failed.
+#
+# **The stronger fix, deliberately deferred and recorded so it is a decision:** run legs (c)-(g) on
+# ONE connection inside a transaction that is never committed, so the rows are never visible to any
+# other session and no worker can reach them. `now()` is fixed inside a transaction, but every
+# expiry here is set RELATIVE to `now()`, so the reclaim and reap semantics survive unchanged. That
+# is a rewrite of a working gate rather than a guard on it, and it belongs to a session that owns
+# this file.
+_unevaluated: list[str] = []
+
+
+def _unknown(msg: str) -> None:
+    print(f"  ??  {msg}")
+    _unevaluated.append(msg)
+
+
+# The worker names this gate leases under. Anything else holding one of our rows is a real machine
+# (`worker_loop._worker_id` returns a Fly machine id), which is the signal we are looking for.
+_GATE_WORKERS = {"gate", "gate-A", "gate-B", "gate-dead", "gate-live", "gate-deploying"}
+
+
+def _taken_by_a_real_worker(conn, job_id) -> str | None:
+    """Evidence that the LIVE worker got this throwaway row first, or None. Positive evidence only.
+
+    Two independent tells, because either alone can be raced past: a `leased_by` that is not one of
+    ours, and an `error` mentioning the Sleeper call only a real executor makes — this gate drives
+    `_run_job` with fake executors and never touches the network.
+    """
+    row = _state(conn, job_id)
+    if row is None:
+        return "the row is gone from the table entirely"
+    by = row.get("leased_by")
+    if by and by not in _GATE_WORKERS:
+        return f"leased_by={by!r}, which is not one of this gate's names"
+    err = (row.get("error") or "")
+    if "sleeper.app" in err.lower():
+        return f"a real executor ran it against Sleeper — error={err[:90]!r}"
+    return None
+
+
 # --- leg 1: the shape, offline ------------------------------------------------------------------
 
 def check_shape() -> None:
@@ -177,9 +234,13 @@ def check_live() -> None:
             cur.execute("UPDATE public.jobs SET lease_expires_at = now() - interval '1 second' "
                         "WHERE id = %(id)s", {"id": c_job["id"]})
         again = q.lease(main, worker="gate-live")
-        if again and again["id"] == c_job["id"] and again["attempts"] == held["attempts"] + 1:
+        if again and held and again["id"] == c_job["id"] and again["attempts"] == held["attempts"] + 1:
             _ok(f"an EXPIRED lease is reclaimed by another worker (attempts "
                 f"{held['attempts']} → {again['attempts']}), leased_by now {again['leased_by']!r}")
+        elif (stolen := _taken_by_a_real_worker(main, c_job["id"])):
+            _unknown(f"RECLAIM could not be evaluated — the LIVE worker leased this throwaway row "
+                     f"first ({stolen}). Nothing is broken; this gate simply does not own the queue "
+                     f"it is testing. See `_unknown`.")
         else:
             _fail(f"expired lease was not reclaimed cleanly: {again}")
 
@@ -206,6 +267,9 @@ def check_live() -> None:
         row = _state(main, c_job["id"])
         if any(b["id"] == c_job["id"] for b in buried) and row["state"] == "failed" and row["error"]:
             _ok(f"reap buries an abandoned job as `failed`, and it says why: {row['error'][:70]}…")
+        elif (stolen := _taken_by_a_real_worker(main, c_job["id"])):
+            _unknown(f"REAP could not be evaluated — the LIVE worker had already finished this "
+                     f"throwaway row ({stolen}), so there was no abandoned job left to bury.")
         else:
             _fail(f"reap left the job at {row['state']!r} error={row['error']!r} — a stuck job "
                   "would sit in a running-looking state for ever")
@@ -385,11 +449,22 @@ def main() -> int:
 
     failed = _results.count(False)
     print()
+    # Printed BEFORE the verdict and unconditionally, so a green line can never be read as full
+    # coverage. Silence here means every leg was actually evaluated.
+    if _unevaluated:
+        print(f"⚠ {len(_unevaluated)} leg(s) UNEVALUATED — neither a pass nor a failure. The live "
+              f"`fantasy-ai-worker` drains the same queue this gate writes to, so it can take a "
+              f"throwaway row before the gate does. To evaluate them, stop the worker "
+              f"(`fly machines stop -a fantasy-ai-worker`), re-run, and start it again.")
+        for u in _unevaluated:
+            print(f"    · {u.splitlines()[0]}")
+        print()
     if failed:
         print(f"FAILED — {failed} of {len(_results)} assertions")
         return 1
-    print(f"ALL GREEN — {len(_results)}/{len(_results)} assertions — work reaches the worker, "
-          "exactly once, and a dead worker's league comes back.")
+    print(f"ALL GREEN — {len(_results)}/{len(_results)} assertions"
+          + (f" ({len(_unevaluated)} unevaluated)" if _unevaluated else "")
+          + " — work reaches the worker, exactly once, and a dead worker's league comes back.")
     return 0
 
 
