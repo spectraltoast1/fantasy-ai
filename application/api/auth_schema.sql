@@ -112,6 +112,107 @@ ALTER TABLE public.user_leagues ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_leagues ADD COLUMN IF NOT EXISTS roster_id int;
 
 
+-- The job queue (P5/S4b) — how work reaches the worker without a human running `fly ssh console`.
+--
+-- WHY A TABLE AND NOT AN HTTP CALL, so nobody redesigns this later. `api/requirements.txt` is
+-- deliberately fastapi-only ("no polars/nflreadpy/anthropic") and `fly.worker.toml` declares NO
+-- [http_service] — so the API cannot run a build, and cannot call the machine that can. The two
+-- machines cannot talk to each other; they can both talk to Postgres. THAT, not latency, is the
+-- forcing function: S0 measured a cold onboard at 8.4-10.3s, which would fit inside a request.
+--
+-- WHY THE STATE IS HERE rather than in the worker's process: the argument rate_limit.py:9-15 already
+-- makes for `signup_attempts`, only sharper. In-process state is erased by every `fly deploy`, and
+-- what this would lose is somebody's half-finished league.
+--
+-- And it is in THIS file rather than serve/schema.sql for the reason at the top of it: `--load`
+-- DROPs every table it names, so a jobs table there would be destroyed by the next full load.
+CREATE TABLE IF NOT EXISTS public.jobs (
+    -- uuid, not bigserial, and the rule this file already follows is CLIENT-HELD -> uuid:
+    -- `app_users.id` is uuid because a client holds it (the token's `sub`); `signup_attempts.id` is
+    -- bigserial because nobody outside the server ever sees one. S4c puts this id in a URL
+    -- (`GET /api/connect/{id}`), so a client holds it. Two reinforcing reasons: a sequential id is
+    -- an enumeration oracle for VOLUME — how many leagues have connected, and how fast — even when
+    -- S4c's authorization is correct, which is the objection S2b's identical-404 design exists for;
+    -- and it removes the temptation to ORDER BY id, which breaks silently the first time a
+    -- retry-after or priority column exists. The lease orders by `created_at`.
+    id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    -- The job class. Exactly one executor exists ('onboard'). The column is here anyway because the
+    -- queue needs a second class before this brief's ink is dry — S4d enqueues the weekly refresh —
+    -- and one column now beats a migration later on a file with no migration story. An unknown kind
+    -- is REJECTED cleanly, never a crash: a crash loop on one malformed row is an outage for every
+    -- other user's league. The Manager Dossier fan-out (80s / 248 Sleeper calls) is a DEFERRED job
+    -- class and belongs to S4c, together with flipping `panels_manager` — that flag is False
+    -- *because* the data does not exist, so it flips in the session that makes it true.
+    kind              text NOT NULL DEFAULT 'onboard',
+
+    -- The payload. `onboard_league.onboard(lid, season)` takes exactly these two, so a job is
+    -- re-runnable from its own columns and nothing else.
+    league_id         text NOT NULL,
+    season            int  NOT NULL,
+
+    -- queued -> validating -> fetching -> building -> loading -> ready | rejected | failed.
+    -- The full set ships because S6's failure drills want it and a column is free. There are NO
+    -- per-stage semantics and no per-stage UI: a ~10s build on a spinner does not need six
+    -- user-visible states, and S4c decides what a person actually sees. `validating` is a SLOT —
+    -- S5 owns preflight scope validation and the graceful rejection copy.
+    --
+    -- rejected vs failed is the distinction a reader must be able to make WITHOUT reading logs:
+    --   rejected = a deliberate, deterministic refusal (out of scope, wrong season, unknown kind).
+    --              Retrying cannot change the answer, so it is terminal on the first attempt.
+    --   failed   = something went wrong (Sleeper, the network, a crash). Retryable, to the cap.
+    state             text NOT NULL DEFAULT 'queued',
+    error             text,
+
+    -- Attribution. Nullable because S4b enqueues BY HAND and identity ACQUISITION is S4c's work;
+    -- CASCADE for the same reason `app_users` and `user_leagues` have it — no record outlives its
+    -- account. `init_auth_schema._CASCADE_FKS` asserts that, and had to learn about NULLs to do it.
+    requested_by      uuid REFERENCES auth.users (id) ON DELETE CASCADE,
+
+    -- The lease. IT MUST EXPIRE: without expiry a job killed mid-run holds its league until a human
+    -- intervenes, which is the exact thing this table exists to remove. `leased_by` names the
+    -- machine, so after a kill you can tell who was holding it. `attempts` caps the retries, so one
+    -- poison row cannot loop for ever.
+    attempts          int NOT NULL DEFAULT 0,
+    leased_by         text,
+    lease_expires_at  timestamptz,
+
+    -- DoD 2: a reader can tell from the TABLE ALONE what happened and when, without the worker's
+    -- stdout. `updated_at` is the FIRST in this repo — there is no existing convention and no
+    -- trigger; every transition sets it in `job_queue.py`, i.e. in reviewable code rather than in
+    -- invisible DDL (the same choice `app_users` made by writing its row from `/api/me`).
+    created_at        timestamptz NOT NULL DEFAULT now(),
+    started_at        timestamptz,
+    finished_at       timestamptz,
+    updated_at        timestamptz NOT NULL DEFAULT now()
+);
+
+-- THE STATE SET IS A CONSTRAINT, AND IT IS ADDED BY AN EXPLICIT ALTER. `CREATE TABLE IF NOT EXISTS`
+-- above is a no-op on an existing table, so a CHECK written inside it would never land on any
+-- database that already has the table — the same S2a-audit F2 trap `_ALTERED_COLUMNS` exists for,
+-- one level down at the constraint. DROP-then-ADD keeps it idempotent AND makes adding S6's next
+-- state a one-line edit that actually reaches production instead of silently not doing so.
+ALTER TABLE public.jobs DROP CONSTRAINT IF EXISTS jobs_state_check;
+ALTER TABLE public.jobs ADD CONSTRAINT jobs_state_check CHECK (state IN (
+    'queued', 'validating', 'fetching', 'building', 'loading', 'ready', 'rejected', 'failed'));
+
+-- The lease looks for the oldest leasable row, so it filters on state and orders by created_at.
+CREATE INDEX IF NOT EXISTS jobs_state_created_at_idx ON public.jobs (state, created_at);
+
+-- ONE ACTIVE JOB PER (league, season). `FOR UPDATE SKIP LOCKED` gives row-level exclusion, not
+-- league-level: two active rows for one league would race on the same on-disk artifacts and on
+-- `load_league`'s DELETE+COPY. It cannot happen TODAY — a Fly volume attaches to exactly one
+-- machine, so the worker is a stateful singleton — but S4d adds a second producer and the GitHub
+-- Actions runner is a third machine that already exists, so this is built as if it could.
+-- Terminal rows are excluded, so re-submitting a finished league is still allowed.
+CREATE UNIQUE INDEX IF NOT EXISTS jobs_active_league_idx ON public.jobs (league_id, season)
+    WHERE state NOT IN ('ready', 'rejected', 'failed');
+
+-- Same defense-in-depth caveat as every other table here: the app connects as an owner role that
+-- BYPASSES RLS, so this denies nothing to this API.
+ALTER TABLE public.jobs ENABLE ROW LEVEL SECURITY;
+
+
 -- RETIRED IN P5/S2c: `public.nfl_state_cache`.
 --
 -- S2a resolved the current season from Sleeper's /v1/state/nfl and persisted a last-known-good

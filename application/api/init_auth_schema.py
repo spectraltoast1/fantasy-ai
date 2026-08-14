@@ -23,7 +23,7 @@ _SQL_PATH = Path(__file__).resolve().parent / "auth_schema.sql"
 # two and that is exactly what it cost: two list entries, with the column dump and the
 # absent-from-generated-DDL assertion inherited for free. S2c removed one of them again
 # (`nfl_state_cache`, retired with the Sleeper call it cached) — one list entry, same seam.
-_TABLES = ["app_users", "signup_attempts", "user_leagues"]
+_TABLES = ["app_users", "signup_attempts", "user_leagues", "jobs"]
 
 _COLUMNS_SQL = """
 SELECT column_name, data_type, is_nullable
@@ -56,7 +56,13 @@ _ALTERED_COLUMNS = [("user_leagues", "roster_id")]
 # invariant: `CREATE TABLE IF NOT EXISTS` is a no-op on an existing table, so a database that
 # already had these tables in another shape keeps that shape and nothing notices — the same F2
 # trap `_ALTERED_COLUMNS` exists for, one level down at the constraint instead of the column.
-_CASCADE_FKS = [("user_leagues", "user_id"), ("app_users", "id")]
+#
+# P5/S4b NOTE, because the brief said this was inherited from `_TABLES` and it is not: the cascade
+# assertion is driven by THIS list, `_verify_cascades` iterates it, and `_TABLES` drives only the
+# column dump and the leaked-into-schema.sql check. Adding a table to `_TABLES` alone means its FK
+# is never asserted. `jobs.requested_by` is here because attribution must not outlive an account
+# either — a job row naming a deleted user is the same defect as a grant naming one.
+_CASCADE_FKS = [("user_leagues", "user_id"), ("app_users", "id"), ("jobs", "requested_by")]
 
 # `confdeltype` is the ON DELETE action: 'c' = CASCADE, 'a' = NO ACTION, 'r' = RESTRICT,
 # 'n' = SET NULL, 'd' = SET DEFAULT. Reading pg_constraint directly because information_schema
@@ -68,10 +74,16 @@ JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
 WHERE c.contype = 'f' AND c.conrelid = ('public.' || %(t)s)::regclass
 """
 
+# `AND t.{column} IS NOT NULL` is load-bearing and was added in P5/S4b for `jobs.requested_by`, the
+# first NULLABLE cascade FK here. A LEFT JOIN that finds no user reports u.id IS NULL for an
+# unmatched row AND for a row that never named a user at all, so without this clause every job
+# enqueued by hand — which is every job in S4b — would be counted as an orphan and `--verify` would
+# fail on correct data. The two pre-existing entries were safe only because `user_leagues.user_id`
+# is NOT NULL and `app_users.id` is a primary key.
 _ORPHANS_SQL = """
 SELECT count(*)::int AS n
 FROM public.{table} t LEFT JOIN auth.users u ON u.id = t.{column}
-WHERE u.id IS NULL
+WHERE u.id IS NULL AND t.{column} IS NOT NULL
 """
 
 
