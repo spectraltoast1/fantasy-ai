@@ -69,22 +69,6 @@ When you hit 3 commits (or finish the task, whichever comes first), close down.
 The cap is a forced checkpoint — it keeps sessions bounded and guarantees the
 doc-update + merge happen regularly, which is what prevents worktree drift.
 
-### The commit FLOOR: bank before anything destructive
-The cap bounds how much a session sprawls. The **floor** bounds the opposite
-failure — how much is at risk when something goes wrong. **Before running
-anything that writes the real store** (a prove-it-bites leg, a `--load`, a
-generator, any destructive verification), **commit what you have first.**
-
-This is not hypothetical: a gate's prove-it-bites leg once overwrote the frozen
-271-league corpus manifest, and the session's work had been uncommitted for
-hours. **A bank-before-destructive commit counts toward the cap** — if that takes
-you to three, close down; that is the cap working, not something to route around.
-
-Two things make the floor cheap to honour. The store is shared — a worktree's
-`snapshots/`/`cache/` are links into main — so a destructive run in a worktree
-hits main's real data. And since the corpus recovery, `snapshots/corpus/` is
-**git-tracked**, so `git status` after a risky run is a one-command damage check.
-
 ### Commit FLOOR: bank before you run anything destructive
 The cap stops sprawl. Nothing stopped the opposite failure, so this is the floor.
 
@@ -99,6 +83,12 @@ This does not conflict with the cap. A bank-before-destructive commit is a real
 commit and counts toward the three; if that pushes you to the cap, close down —
 that is the cap working, not a reason to skip the floor. **A destructive run is
 exactly the moment the cheapest possible insurance is worth taking.**
+
+Two things make the floor cheap to honour. The store is **shared** — a worktree's
+`snapshots/`/`cache/` are links into main — so a destructive run in a worktree
+hits main's real data, not a copy. And since the corpus recovery
+`snapshots/corpus/` is **git-tracked**, so `git status` after a risky run is a
+one-command damage check.
 
 ---
 
