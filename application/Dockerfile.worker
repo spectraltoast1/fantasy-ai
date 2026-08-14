@@ -1,0 +1,80 @@
+# The PIPELINE worker (P5/S3) — a job box, not a server.
+#
+# Deliberately a SEPARATE image and a separate Fly app from the API. The API is a 256mb
+# scale-to-zero HTTP reader; this runs multi-minute pipeline jobs against a 1 GB volume. Sharing an
+# app would entangle the API's scale-to-zero with a long job, which is the one thing the ADR calls
+# non-negotiable.
+#
+# It also cannot reuse the API's Dockerfile even with a different CMD: that image installs only
+# api/requirements.txt (no polars, no numpy) and COPYs only api/, and the shared .dockerignore
+# excludes `data` outright — which drops the pipeline SOURCE, not just its runtime. Hence this file
+# plus Dockerfile.worker.dockerignore.
+#
+#   fly deploy -c fly.worker.toml --dockerfile Dockerfile.worker    (build context = application/)
+
+FROM python:3.13-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/app \
+    # The store boundary (context/appendices/store-boundary.md). This machine is NOT the authoring
+    # laptop: data_layer refuses every laptop-owned write here and VERIFIES the shared band instead
+    # of rebuilding it. Set in the image rather than fly.toml [env] so it travels with the artifact
+    # — a worker that forgets this flag is a worker that can silently author the shared substrate.
+    STORE_ROLE=worker
+
+WORKDIR /app
+
+# git is needed by nflreadpy's data fetch path; the rest is build tooling for polars/pyarrow wheels.
+# Kept to one layer and removed in the same RUN so nothing lingers in the image.
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pipeline deps first, for layer caching. This is application/requirements.txt (polars, numpy,
+# pyarrow, psycopg, nflreadpy) — NOT api/requirements.txt, which is deliberately fastapi-only.
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+# The package. COPY directories, never enumerated files — an enumerated COPY dropped a module once
+# already (Session 3's projections.py) and built green before crashing at import.
+#   api/    — the worker imports application.api.db (the single DB seam) and settings
+#   data/   — data_layer, serve/, corpus/, transforms/, fetchers/
+#   shared/ — league_resolver, league_registry, the scoring keys
+RUN mkdir -p /app/application && touch /app/application/__init__.py
+COPY api/ /app/application/api/
+COPY data/ /app/application/data/
+COPY shared/ /app/application/shared/
+
+# The volume mounts over this path at runtime (fly.worker.toml [mounts]). It must exist in the image
+# so the mount has somewhere to land, and it must be EMPTY — data_layer._SNAPSHOT_DIR is computed
+# from the source file's location and is not configurable, which is why the mount point is fixed
+# rather than chosen.
+#
+# cache/ IS A SYMLINK ONTO THE VOLUME, and it is not optional (P5/S3 finding C).
+#
+# `_CACHE_DIR` is application/data/cache — a SIBLING of snapshots/, so the mount does not cover it,
+# and it is load-bearing: it holds the pinned Sleeper players registry that
+# join_nfl_sleeper_weekly and compute_player_signal both read through read_pinned_sleeper_players(),
+# and weekly_refresh runs both. A worker without it fails on its first league.
+#
+# It is NOT baked into the image, and the reason is worth writing down because the first attempt
+# was: `COPY data/cache/` cannot work from a worktree. There, application/data/cache is a symlink
+# into main (worktree-setup.sh puts it there), and a Docker build context will not follow a symlink
+# out of its root — the build fails with "not found" on main's absolute path. Building only ever
+# from main would fix it and would also make the image un-buildable from the very place sessions are
+# supposed to run.
+#
+# Pointing it at the volume is better than a workaround anyway. The cache persists across restarts
+# instead of living on the container's ephemeral layer, seeding covers it in the same pass as
+# everything else, and the pinned snapshot being on a MUTABLE volume is safe precisely because of
+# this session's other half: write_sleeper_players_snapshot is laptop-owned, so the guard refuses it
+# here. The worker can read the anchor and can never drift it.
+RUN mkdir -p /app/application/data/snapshots \
+    && rm -rf /app/application/data/cache \
+    && ln -s /app/application/data/snapshots/_cache /app/application/data/cache
+
+# No CMD that does work. This box is driven by `fly ssh console` / `fly machine run` for now — the
+# job queue and the connect endpoint are P5/S4. Idling here rather than exiting keeps a machine
+# available to exec into; S4 replaces this with the queue leaser.
+CMD ["sleep", "infinity"]

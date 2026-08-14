@@ -320,7 +320,14 @@ def run(season: int, scoring_key: str | None = None) -> None:
     else:
         data_layer.write_ros_player_band(df, season, scoring_key=scoring_key)
         sk = scoring_key
-    print(f"  → snapshots/derived/scoring/{sk}/ros_player_band_{season}.parquet")
+    # On a worker the call above VERIFIED against the seeded copy rather than writing (P5/S3), so
+    # saying "→ <path>" there would report a write that did not happen — the same defect as a silent
+    # skip, pointing the other way. Caught by the first live 2026 exercise on the worker.
+    path = f"snapshots/derived/scoring/{sk}/ros_player_band_{season}.parquet"
+    if data_layer.store_role() == "worker":
+        print(f"  ✓ verified identical against {path} (laptop-owned; not rewritten here)")
+    else:
+        print(f"  → {path}")
 
 
 if __name__ == "__main__":

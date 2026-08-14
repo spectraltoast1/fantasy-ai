@@ -180,9 +180,18 @@ def refresh_league(lid: str | None = None, season: int | None = None, *,
     # The season guard is the important line. Below FIRST_HONEST_BAND_SEASON the band belongs to the
     # FROZEN CORPUS — the immutable baseline the L2 ledger was derived from — so a replay of an old
     # season (`--week` against 2025) must never rewrite it.
+    #
+    # P5/S3: on a worker (STORE_ROLE=worker) `write_ros_player_band` does not write — it VERIFIES the
+    # recomputed band against the seeded one and raises if they differ. So the same call means
+    # "rebuilt" on the laptop and "checked" on the worker, and the log has to say which, or a reader
+    # cannot tell an authored substrate from a borrowed one.
     if season >= build_db.FIRST_HONEST_BAND_SEASON:
         compute_ros_player_band.run(season, scoring_key=scoring_key)
-        act(f"rebuilt ros_player_band ({scoring_key} {season}) under the live constants")
+        if data_layer.store_role() == "worker":
+            act(f"band verified identical ({scoring_key} {season}) — no rebuild needed; the laptop "
+                f"owns this substrate")
+        else:
+            act(f"rebuilt ros_player_band ({scoring_key} {season}) under the live constants")
     else:
         act(f"season {season} < {build_db.FIRST_HONEST_BAND_SEASON} — frozen-corpus band left untouched")
 

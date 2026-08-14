@@ -85,6 +85,13 @@ These are *why* the product can be trusted. Violating one is a correctness bug, 
 - **Update `STATUS.md` at the end of a session.** State is reloaded from docs, not chat history.
 - **Follow the session lifecycle** (`SESSION_GUIDE.md`): fresh worktree → setup → 3-commit cap → update
   STATUS → close/merge. One brief per session.
+- **THE COMMIT FLOOR — bank before anything destructive.** Before running anything that writes the
+  real store — a prove-it-bites leg, a `--load`, a generator, any destructive verification — **commit
+  what you have first.** The 3-commit cap bounds sprawl; nothing bounded the opposite failure, and
+  hours of unbanked work meeting a destructive run is exactly what cost this project its frozen
+  corpus manifest. **A bank-before-destructive commit counts toward the cap** — if that pushes you to
+  three, close down. That is the cap working. It pairs with §5's parity rule: **§5 limits what can be
+  hit, §6 limits what is at risk when something is.**
 - **Bank before you run anything destructive — the commit FLOOR.** The 3-commit cap bounds sprawl;
   nothing bounded the opposite failure. **Before any run that writes the real store — a prove-it-bites
   leg, a `--load`, a generator, any destructive verification — commit what you have.** On 2026-08-13

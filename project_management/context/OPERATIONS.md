@@ -1,6 +1,9 @@
 # OPERATIONS — what can go down, how to tell, which button
 
-**Current as of 2026-08-11.** Not a project artifact and not a session — this is the page you read
+**Current as of 2026-08-14.** *(P5/S3 added a second Fly app — `fantasy-ai-worker`, a stateful
+singleton with a 1 GB volume. It serves no traffic, so it cannot take the site down; its failure
+mode is "leagues stop being built", not "the site is off". `fly scale count 0` on the API is still
+the meter switch, and it does not touch the worker.)* Not a project artifact and not a session — this is the page you read
 **while something is wrong**, so it lives in `context/` beside `SEASON_CALENDAR.md` rather than inside a
 project that hasn't run yet. Keep it short enough to read at 2am. Building the guardrails is **P6/S3–S4**.
 
@@ -54,6 +57,39 @@ bundle can survive a deploy (see `PM_SESSION_STARTUP.md`); trust `/api/*` JSON a
   people on the site, budget the round trip and deploy immediately after the load rather than verifying
   first. A *scoped* reload (`--reload-league <id>`) is not an outage at all: it DELETEs and re-COPYs one
   league in a transaction and drops nothing.
+- **The worker refuses to refresh: "write_ros_player_band() is refused … STORE_ROLE=worker"** →
+  this is the store boundary doing its job, not a fault. The worker read the shared rest-of-season
+  band on its volume, recomputed it, and got a **different** answer — so its substrate is stale,
+  realistically because the engine constants moved at the annual re-tune. The error names the exact
+  command; the short version is **rebuild on the laptop, then re-seed the volume**:
+  ```
+  application/venv/bin/python -m application.data.transforms.compute_ros_player_band --season <YYYY> --scoring-key <key>
+  ```
+  then re-run the seed below. Until you do, the worker declines leagues on that scoring key — which
+  is the point: a loud stop beats silently serving numbers built from a recipe nobody approved.
+
+- **Seeding (or RE-seeding) the worker volume — the recovery procedure, measured.** The volume is a
+  **reconstructible cache, not precious data**: lose the host and re-seed. That claim was untested
+  until now, so here is the actual command and the actual clock.
+
+  **Measured 2026-08-14: 37s end to end** — 6s tar · 18s upload · 13s extract — for **244 MB**
+  (159 MB compressed) landing as **248 MB on the volume, 28% of the 1 GB**. Run from the repo root:
+  ```
+  COPYFILE_DISABLE=1 tar -czf /tmp/seed.tgz -C application/data/snapshots --exclude ./derived/ledger .
+  COPYFILE_DISABLE=1 tar -czf /tmp/seed_cache.tgz -C application/data/cache .
+  fly ssh sftp put /tmp/seed.tgz /app/application/data/snapshots/seed.tgz -a fantasy-ai-worker
+  fly ssh sftp put /tmp/seed_cache.tgz /app/application/data/snapshots/seed_cache.tgz -a fantasy-ai-worker
+  fly ssh console -a fantasy-ai-worker -C "sh -c 'cd /app/application/data/snapshots && tar -xzf seed.tgz && mkdir -p _cache && tar -xzf seed_cache.tgz -C _cache && rm -f seed.tgz seed_cache.tgz'"
+  ```
+  **`COPYFILE_DISABLE=1` is not optional on macOS.** Without it `tar` ships an AppleDouble `._`
+  sidecar for every file — the first seed put **16,089** of them on the volume, inflated it from
+  248 MB to 311 MB, and made `*.parquet` globs raise `ComputeError: file must end with PAR1` on
+  files that were never parquet.
+
+  **`derived/ledger` is excluded on purpose** (145 MB) — it is laptop-owned and the worker has no
+  use for it. `_cache` is the second tarball because `data_layer._CACHE_DIR` is a *sibling* of
+  `snapshots/`, so the mount cannot reach it; the image symlinks `data/cache` onto the volume there.
+
 - **Sleeper is down** → nothing to do. **No request path calls Sleeper any more (S2c).** The season is
   derived from the calendar, so a Sleeper outage no longer costs a read anything. This entry used to be a
   button (`CURRENT_SEASON` in `[env]`, to skip the network call); it is kept only so that anyone

@@ -128,8 +128,11 @@ def check() -> bool:
     _ok("_apply_dials == _blended_band at skewed (0.0, 3.5, 0.0)", _matches(0.0, 3.5, 0.0), results)
 
     # --- the re-scores, run ONCE under a write-spy (checks 3/5/6/7 reuse them) -----------------------
-    frozen_writers = ["write_predictions", "write_outcomes", "write_resolutions", "write_engine_scorecard",
-                      "write_tune_proposals"]
+    # ONE source of truth for "what the laptop owns" (P5/S3). These three gates each carried
+    # their own hand-maintained copy and all three had DRIFTED — 4, 5 and 6 entries — so two of
+    # them would not have caught a `write_center_gap` call during a rescore. The store-boundary
+    # guard consumes the same constant, so the set cannot drift again.
+    frozen_writers = data_layer.LAPTOP_OWNED_WRITERS
     spy: list = []
     saved = {}
     for w in frozen_writers:

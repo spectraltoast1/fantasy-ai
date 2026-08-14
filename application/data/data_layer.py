@@ -48,6 +48,169 @@ def snapshot_backend() -> str:
     return (_snapshot_conf("SNAPSHOT_BACKEND") or "local").lower()
 
 
+# --- The store boundary (P5/S3: the laptop stops being infrastructure) ------------------------
+# ADR: context/appendices/store-boundary.md (ACCEPTED, option (b)). Data flows ONE DIRECTION:
+# the laptop authors the shared substrate, every other machine reads it.
+#
+# The rule is NOT "laptop vs worker". There are already three machines that run this pipeline —
+# the laptop, the Fly worker, and the GitHub Actions runner — so the boundary is stated as
+# **one writer, everything else reads**. Anything that is not the authoring laptop sets
+# STORE_ROLE=worker and gets a read-only view of the shared substrate.
+#
+# Why this is enforced HERE. The CODING_BIBLE names data_layer "the only code that knows where
+# data lives", so it is the one seam every write already passes through — the same shape as
+# S2b's authorization seam: one predicate, one place, no caller repeats it. Enforcement by
+# OMISSION was checked and is unavailable: `data/corpus/` holds both `harvest`/`compute_spine`
+# (which the worker must run) and the ledger writers, so the package straddles the boundary and
+# cannot simply be left out of the worker image.
+#
+# Why a raise and not a read-only mount. An OSError surfacing from inside a transform reads as a
+# bug and sends the next person debugging filesystem permissions. A raise names the boundary,
+# the reason and the remedy — this is what Will reads at the annual re-tune, at 2am, in February.
+#
+# ALLOW-LIST, not deny-list. The worker may write only what the ADR grants it; every other
+# destination raises, including ones nobody has classified yet and any writer added later. That
+# is the same default-deny posture S2b established for reads, applied to writes.
+
+class StoreBoundaryError(RuntimeError):
+    """A machine that does not own an artifact tried to write it. See the store-boundary ADR."""
+
+
+# The artifacts the AUTHORING LAPTOP owns — every one of these raises under STORE_ROLE=worker.
+# Grouped by why, because the reasons are different and a future reader needs the reason more
+# than the list. This constant is THE single source of truth for the set: the guard consumes it,
+# and so do the three rescore gates that each used to carry their own hand-maintained copy.
+#
+# Those three copies had already drifted, which is what turns this from tidiness into a bug fix:
+# check_debias had 4 entries, check_band_honesty 5, check_center_shrink 6 — so two of the three
+# would NOT have caught a `write_center_gap` call during a rescore.
+LAPTOP_OWNED_WRITERS: tuple[str, ...] = (
+    # derived/ledger — the certification spine. Immutable, append-only, never leaves the laptop.
+    "write_predictions", "write_outcomes", "write_resolutions", "write_engine_scorecard",
+    "write_tune_proposals", "write_center_gap",
+    # derived/scoring — SHARED by every league on a scoring key, and built under engine
+    # constants, which are propose-only and human-promoted. A machine rebuilding these
+    # unattended is promoting constants for every user at once.
+    "write_projection_consensus", "write_ros_player_band",
+    # derived/adp_points_curve — the leak-free per-holdout curve; corpus-shaped, not per-league.
+    "write_adp_points_curve",
+    # The corpus manifests — corpus selection is a human, versioned decision.
+    "write_corpus_discovery", "write_corpus_manifest", "write_corpus_two_way_flags",
+    # The registries. `write_leagues` OVERWRITES the whole file on a fixed schema, so a worker
+    # calling it would replace the shared registry with only what that machine knows. The shape
+    # of the writer is wrong for a worker — see the ADR's note; P5/S4 needs an append-shaped
+    # per-league writer before the worker can catalog a league.
+    "write_leagues", "write_demo_manifest", "write_synthetic_catalog",
+    # The PINNED players snapshot is an immutable versioned event (it already refuses to
+    # overwrite). The routine `write_sleeper_players` / `write_player_id_map` refresh is NOT
+    # here: the worker fetches from Sleeper and must be able to keep its own cache current.
+    "write_sleeper_players_snapshot",
+)
+
+
+def store_role() -> str:
+    """The active store role: 'laptop' (default, authors the shared substrate) or 'worker'.
+
+    Read PER CALL and deliberately not memoised, unlike `_store()`'s lazy singleton. That cache
+    exists to avoid reconstructing a boto3 client; there is nothing to construct here, and a
+    memoised flag would make an in-process env flip a no-op — which is exactly how a guard test
+    passes while proving nothing.
+    """
+    return (_snapshot_conf("STORE_ROLE") or "laptop").lower()
+
+
+# The three reasons, written once. Each laptop-owned writer passes the pair that applies to it.
+_WHY_LEDGER = ("derived/ledger is the immutable certification spine the engine is graded against; "
+               "it is append-only and never leaves the authoring machine.")
+_FIX_LEDGER = "run the backfill/rescore on the laptop. Nothing on the worker needs the ledger."
+
+_WHY_SCORING = ("derived/scoring is SHARED by every league on this scoring key, and it is built "
+                "under engine constants, which are propose-only and human-promoted. Rebuilding it "
+                "here would promote constants for every user at once, unattended.")
+_FIX_SCORING = ("rebuild it on the laptop and push it up to the worker's volume BEFORE onboarding "
+                "leagues on this scoring key — e.g. `python -m application.data.transforms."
+                "compute_ros_player_band --season <YYYY> --scoring-key <key>`, then re-seed.")
+
+_WHY_REGISTRY = ("this is a shared registry/manifest written as a WHOLE-FILE overwrite, so a "
+                 "machine that knows about fewer leagues than the laptop would silently shrink it.")
+_FIX_REGISTRY = "run it on the laptop and re-seed the worker's volume."
+
+
+def canonical_rows(rows: list[dict]) -> list[str]:
+    """Order-insensitive canonical form of a row set — a sorted multiset of JSON-encoded rows. JSONB
+    columns arrive as Python objects; dates/Decimals fall back to str. Robust to COPY's row-order
+    nondeterminism and to empty tables (which polars sort-by-all-columns cannot handle).
+
+    Lives here as of P5/S3 so both consumers share ONE comparator: ``check_scoped_reload`` (whose
+    parity oracle this was written for) and the store-boundary band check below. The dependency
+    could only run this way — ``check_scoped_reload`` imports ``build_db``, which imports this
+    module — so moving it down was the only way to avoid a second copy.
+
+    **Value equality, never byte equality.** Polars' parquet writer is physically non-deterministic,
+    so a byte or frame comparison false-positives on layout, column order and row order that carry
+    no information. Sorting the keys neutralises column order; sorting the list neutralises row
+    order; ``default=str`` keeps dates and Decimals comparable.
+    """
+    return sorted(json.dumps(r, sort_keys=True, default=str) for r in rows)
+
+
+def rows_equal(a: list[dict], b: list[dict]) -> bool:
+    return canonical_rows(a) == canonical_rows(b)
+
+
+def _verify_band_unchanged(df: "pl.DataFrame", path: Path, season: int, scoring_key: str) -> None:
+    """The worker's read-only check on the shared band — see ``write_ros_player_band``.
+
+    Returns quietly when the recomputed band matches the seeded one; raises ``StoreBoundaryError``
+    when it is stale or absent, with the operator step in the message.
+    """
+    rebuild = (f"on the LAPTOP run `application/venv/bin/python -m "
+               f"application.data.transforms.compute_ros_player_band --season {season} "
+               f"--scoring-key {scoring_key}`, then re-seed the worker's volume "
+               f"(see OPERATIONS.md → 'Seeding the worker volume').")
+    if not path.exists():
+        raise StoreBoundaryError(
+            f"write_ros_player_band() is refused on this machine: STORE_ROLE=worker.\n"
+            f"  The rest-of-season band for {scoring_key} {season} is MISSING from this volume, so "
+            f"there is nothing to verify against and the worker may not author it.\n"
+            f"  {_WHY_SCORING}\n"
+            f"  Remedy: {rebuild}"
+        )
+    on_disk = pl.read_parquet(path)
+    if rows_equal(df.to_dicts(), on_disk.to_dicts()):
+        return
+    raise StoreBoundaryError(
+        f"write_ros_player_band() is refused on this machine: STORE_ROLE=worker.\n"
+        f"  The rest-of-season band for {scoring_key} {season} recomputes DIFFERENTLY here than the "
+        f"copy on this volume ({on_disk.height} rows on disk vs {df.height} recomputed), so the "
+        f"seeded substrate is STALE — most likely the engine constants moved (the annual re-tune) "
+        f"and the volume has not been re-seeded since.\n"
+        f"  {_WHY_SCORING}\n"
+        f"  Remedy: {rebuild}\n"
+        f"  Until then this worker will not refresh leagues on the {scoring_key} key. That refusal "
+        f"is deliberate: a loud stop beats silently serving numbers built from a recipe nobody "
+        f"approved."
+    )
+
+
+def _require_laptop(writer: str, what: str, remedy: str) -> None:
+    """Refuse a laptop-owned write when this machine is not the laptop.
+
+    `what` names the artifact and why it is shared; `remedy` is the runnable next step. Both are
+    passed by the caller because a generic message ("permission denied") is what sends somebody
+    debugging the filesystem instead of reading the boundary.
+    """
+    if store_role() != "worker":
+        return
+    raise StoreBoundaryError(
+        f"{writer}() is refused on this machine: STORE_ROLE=worker.\n"
+        f"  {what}\n"
+        f"  The store boundary is one-directional — the laptop authors the shared substrate and "
+        f"every other machine reads it (context/appendices/store-boundary.md).\n"
+        f"  Remedy: {remedy}"
+    )
+
+
 class _LocalSnapshotStore:
     """The laptop / on-disk backend — the historical behavior, unchanged. `flush()` is a no-op."""
 
@@ -262,6 +425,7 @@ def write_sleeper_players_snapshot(df: pl.DataFrame, snapshot_id: str) -> None:
     Refuses to overwrite an existing id — a pinned snapshot is immutable by contract; a new registry state
     must get a NEW id (a deliberate versioned event), never silently replace an old one.
     """
+    _require_laptop("write_sleeper_players_snapshot", _WHY_REGISTRY, _FIX_REGISTRY)
     path = _sleeper_players_snapshot_path(snapshot_id)
     if path.exists():
         raise FileExistsError(
@@ -548,6 +712,7 @@ def write_adp_points_curve(df: pl.DataFrame, holdout: int) -> None:
     rolling rank window across the training seasons) + the bin sample count n + provenance
     (holdout_season / train_seasons). Written to derived/adp_points_curve/holdout_{holdout}.parquet.
     """
+    _require_laptop("write_adp_points_curve", _WHY_LEDGER, _FIX_LEDGER)
     path = _adp_points_curve_path(holdout)
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path)
@@ -1186,6 +1351,7 @@ def write_projection_consensus(df: pl.DataFrame, season: int, *, scoring_key=Non
     (like the projections entity it derives from), not on an as_of_week slice. Scoring-scoped: two
     leagues on the same scoring profile share one file (audit S3.1), defaulting to the is_mine profile.
     """
+    _require_laptop("write_projection_consensus", _WHY_SCORING, _FIX_SCORING)
     scoring_key = scoring_key or _active_league(season)[1]
     path = _projection_consensus_path(season, scoring_key)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1395,9 +1561,32 @@ def write_ros_player_band(df: pl.DataFrame, season: int, *, scoring_key=None) ->
     (ros_bull/ros_bear = centre ± bull_z·ros_sigma, floored at 0), the accumulated band std
     (ros_sigma = √Σ weekly band² over the remaining schedule) + relative dispersion (ros_cv), the number
     of remaining projected weeks, and the preseason-ADP anchor evidence. Roster-free → scoring-scoped.
+
+    **On a worker this is a VERIFY, not a write** (P5/S3). It is the one laptop-owned writer that
+    cannot simply raise: ``weekly_refresh`` rebuilds the band unconditionally for
+    ``season >= FIRST_HONEST_BAND_SEASON`` — deliberately, because an existence check would pass on a
+    STALE file — so a blanket refusal would break every 2026 refresh rather than only the unsafe
+    ones, and the worker could never onboard a real league at all.
+
+    So the incoming frame is compared with the one on the volume and the three outcomes are
+    distinguished, which is what makes the ADR's "if it is stale or missing, it fails loudly"
+    literally true rather than aspirational:
+
+      - **identical** — nothing upstream moved, so there was nothing to write. Return quietly; the
+        caller reports it (see ``weekly_refresh``). Not silent: a skip nobody logs is
+        indistinguishable from a step that never ran.
+      - **different** — the worker's substrate is genuinely stale (realistically the annual re-tune
+        moved the engine constants). Refuse, and say what to do about it.
+      - **missing** — the volume was never seeded, or seeded without this scoring key.
+
+    The comparison is **value**-identical via ``canonical_rows``; a byte comparison would fail on
+    polars' non-deterministic parquet layout and block the worker for no reason.
     """
     scoring_key = scoring_key or _active_league(season)[1]
     path = _ros_player_band_path(season, scoring_key)
+    if store_role() == "worker":
+        _verify_band_unchanged(df, path, season, scoring_key)
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path)
 
@@ -1651,6 +1840,7 @@ def _corpus_discovery_path() -> Path:
 
 def write_corpus_discovery(df: pl.DataFrame) -> None:
     """Write the full deduped discovery crawl (one row per (league_id, season)); overwrite."""
+    _require_laptop("write_corpus_discovery", _WHY_REGISTRY, _FIX_REGISTRY)
     path = _corpus_discovery_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path)
@@ -1670,6 +1860,7 @@ def _corpus_manifest_path() -> Path:
 
 def write_corpus_manifest(df: pl.DataFrame) -> None:
     """Write the selected league registry (one row per narrowed candidate); overwrite."""
+    _require_laptop("write_corpus_manifest", _WHY_REGISTRY, _FIX_REGISTRY)
     path = _corpus_manifest_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path)
@@ -1692,6 +1883,7 @@ def _corpus_two_way_flags_path() -> Path:
 
 def write_corpus_two_way_flags(df: pl.DataFrame) -> None:
     """One row per (season, sleeper_player_id) material two-way player; overwrite."""
+    _require_laptop("write_corpus_two_way_flags", _WHY_REGISTRY, _FIX_REGISTRY)
     path = _corpus_two_way_flags_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     df.write_parquet(path)
@@ -1730,6 +1922,7 @@ def write_predictions(df: pl.DataFrame, season: int) -> None:
     ids) appends a parallel population while keeping the old. Concat is diagonal so a later schema tweak
     doesn't break the append. Never overwrites an existing row.
     """
+    _require_laptop("write_predictions", _WHY_LEDGER, _FIX_LEDGER)
     path = _predictions_path(season)
     path.parent.mkdir(parents=True, exist_ok=True)
     df = df.unique(subset="prediction_id", keep="first")
@@ -1778,6 +1971,7 @@ def write_outcomes(df: pl.DataFrame, season: int) -> None:
     `outcome_id`). Immutable-append, mirroring `write_predictions`: de-duplicate the batch on
     `outcome_id`, drop any id already on disk, diagonal-concat so the file only GROWS — a re-derive from
     the same frozen sources appends nothing. Never overwrites an existing row."""
+    _require_laptop("write_outcomes", _WHY_LEDGER, _FIX_LEDGER)
     path = _outcomes_path(season)
     path.parent.mkdir(parents=True, exist_ok=True)
     df = df.unique(subset="outcome_id", keep="first")
@@ -1826,6 +2020,7 @@ def write_resolutions(df: pl.DataFrame, season: int) -> None:
     """Append only genuinely-new resolution rows to the season's ledger (idempotent by `resolution_id`).
     Immutable-append, mirroring `write_predictions`/`write_outcomes`: de-duplicate on `resolution_id`,
     drop any id already on disk, diagonal-concat so the file only GROWS. Never overwrites an existing row."""
+    _require_laptop("write_resolutions", _WHY_LEDGER, _FIX_LEDGER)
     path = _resolutions_path(season)
     path.parent.mkdir(parents=True, exist_ok=True)
     df = df.unique(subset="resolution_id", keep="first")
@@ -1873,6 +2068,7 @@ def write_engine_scorecard(df: pl.DataFrame, season: int) -> None:
     Immutable-append, mirroring `write_resolutions`: de-duplicate on `scorecard_id`, drop any id already on
     disk, diagonal-concat so the file only GROWS — a re-score under the same scorer `code_version` appends
     nothing; a re-score under a new one appends a parallel population. Never overwrites an existing row."""
+    _require_laptop("write_engine_scorecard", _WHY_LEDGER, _FIX_LEDGER)
     path = _engine_scorecard_path(season)
     path.parent.mkdir(parents=True, exist_ok=True)
     df = df.unique(subset="scorecard_id", keep="first")
@@ -1915,6 +2111,7 @@ def write_tune_proposals(df: pl.DataFrame) -> None:
     already on disk, diagonal-concat so the file only GROWS — a re-run at the same asof_date over the same
     frozen inputs appends nothing; a new asof or a changed baseline appends a parallel population. Never
     overwrites (immutable-append, mirroring `write_engine_scorecard`)."""
+    _require_laptop("write_tune_proposals", _WHY_LEDGER, _FIX_LEDGER)
     path = _tune_proposals_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     df = df.unique(subset="proposal_id", keep="first")
@@ -1953,6 +2150,7 @@ def write_center_gap(df: pl.DataFrame) -> None:
     """Append only genuinely-new gap rows (idempotent by `gap_id`). De-dup on gap_id, drop ids already on
     disk, diagonal-concat so the file only GROWS — never overwrites (immutable-append, mirroring
     write_tune_proposals). A re-run at the same code_version over the same frozen inputs appends nothing."""
+    _require_laptop("write_center_gap", _WHY_LEDGER, _FIX_LEDGER)
     path = _center_gap_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     df = df.unique(subset="gap_id", keep="first")
@@ -1994,6 +2192,7 @@ def _leagues_path() -> Path:
 
 def write_leagues(df: pl.DataFrame) -> None:
     """Write the league registry (one row per (league_id, season)); overwrite. Enforces the schema order."""
+    _require_laptop("write_leagues", _WHY_REGISTRY, _FIX_REGISTRY)
     path = _leagues_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     df.select(_LEAGUES_COLS).write_parquet(path)
@@ -2068,6 +2267,7 @@ def _demo_manifest_path() -> Path:
 
 def write_demo_manifest(df: pl.DataFrame) -> None:
     """Write the demo slate (one row per demo (league_id, season)); overwrite. Enforces the column order."""
+    _require_laptop("write_demo_manifest", _WHY_REGISTRY, _FIX_REGISTRY)
     path = _demo_manifest_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     df.select(_DEMO_MANIFEST_COLS).write_parquet(path)
@@ -2122,6 +2322,7 @@ def _synthetic_catalog_path() -> Path:
 def write_synthetic_catalog(df: pl.DataFrame) -> None:
     """Write the synthetic slices' catalog rows; overwrite. Same column order as the demo manifest,
     because `build_db` concatenates the two into one table."""
+    _require_laptop("write_synthetic_catalog", _WHY_REGISTRY, _FIX_REGISTRY)
     path = _synthetic_catalog_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     df.select(_DEMO_MANIFEST_COLS).write_parquet(path)

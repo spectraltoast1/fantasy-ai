@@ -15,9 +15,21 @@ in `sessions/` and `_deprecated/`; deep mechanism rationale lives in `context/ap
   Dossier.
 - **Auth** — **Supabase Auth**, magic link, invite-only (P5/S1). The API verifies the caller's access token
   (ES256) against the project's published JWKS; the SPA holds only the **publishable** key.
-- **Hosting** — one Fly.io app (`fantasy-ai-api`, region `iad`) serves the built SPA at `/` and `/api` on the
-  **same origin** (no CORS) from a multi-stage Docker image. Live at https://fantasy-ai-api.fly.dev/;
-  scale-to-zero.
+- **Hosting — two Fly.io apps, `iad`, deliberately separate.** `fantasy-ai-api` serves the built SPA at
+  `/` and `/api` on the **same origin** (no CORS) from a multi-stage image; scale-to-zero. Live at
+  https://surplusff.com/ (also `fantasy-ai-api.fly.dev`).
+  **`fantasy-ai-worker` (P5/S3)** runs the pipeline off-laptop: 1 GB `shared-cpu-1x` + a **1 GB volume**
+  mounted at `application/data/snapshots`, its own `Dockerfile.worker` (the pipeline deps, not the API's)
+  and no `http_service` — a job box, driven by `fly ssh console` until S4's queue. Separate because
+  entangling the API's scale-to-zero with a multi-minute job is the failure the ADR forbids. A Fly volume
+  attaches to exactly one machine and is host-pinned, so the worker is a **stateful singleton, not a
+  pool** — intended for an invited cohort; the recorded exit is the Supabase bucket backend.
+  → *see appendix: store-boundary.*
+- **The store boundary (P5/S3)** — **one writer: the authoring laptop; every other machine reads.**
+  `STORE_ROLE=worker` makes `data_layer` refuse the 16 laptop-owned writers (an allow-list, so anything
+  unclassified refuses by default) and makes the shared ROS band **verify** rather than rebuild. It is
+  set on the Fly worker and the GitHub Actions runner. This is why the worker's volume can be treated as
+  a disposable cache: it can never author anything the laptop owns. → *see appendix: store-boundary.*
 - **Data / compute** — **polars only** (no pandas); numpy for the Monte-Carlo simulation; nflreadpy for NFL
   stats; `math.erf` for the normal CDF.
 - **Analytics** — GA4 (`G-J1F0BE5ZW4`): the gtag tag in the SPA's single `index.html`, with
