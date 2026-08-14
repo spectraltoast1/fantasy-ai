@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import contextlib
 import inspect
 import sys
 import textwrap
@@ -63,7 +64,7 @@ def _fail(msg: str) -> None:
 # **The problem this exists for, found by S4c and pre-dating it:** this gate writes throwaway rows
 # into the SAME `public.jobs` table the LIVE `fantasy-ai-worker` is draining. Since S4b deployed the
 # leasing loop, that worker is permanently listening — measured 2026-08-14, it leased a throwaway
-# row **0.9s** after the INSERT (the NOTIFY, not the poll), ran `onboard_league` against a league id
+# row **0.12s** after the INSERT (the NOTIFY, not the poll), ran `onboard_league` against a league id
 # that is not Sleeper-shaped, got a 404 and buried the row as `failed`. Legs (c) and (e) below then
 # found their row already gone and reported a FAILURE — of the queue, which was in fact working
 # perfectly. The gate was measuring the one thing it cannot control.
@@ -339,10 +340,21 @@ def check_live() -> None:
 
 class _FakeConn:
     """Enough of a connection for the classification legs. They never reach SQL — every job_queue
-    call is recorded instead — which is the point: what a refusal MEANS is not a database question."""
+    call is recorded instead — which is the point: what a refusal MEANS is not a database question.
+
+    P5/S4c gave it a `transaction()`, because the success path now wraps the grant and the `finish`
+    in one. A no-op is faithful here: these legs assert WHICH terminal state a job lands in, and
+    that the two statements are atomic is asserted from the AST in `check_connect`, where it can be
+    proven rather than simulated.
+    """
+
+    @contextlib.contextmanager
+    def transaction(self):
+        yield self
 
 
-def _drive(kind: str, boom: BaseException | None):
+def _drive(kind: str, boom: BaseException | None, *, platform: str | None = None,
+           requested_by: str | None = None):
     """Run `_run_job` against a fake executor and return the (state, error) it landed on."""
     landed: dict = {}
 
@@ -353,13 +365,18 @@ def _drive(kind: str, boom: BaseException | None):
     def fake_executor(_conn, _job, _worker):
         if boom is not None:
             raise boom
+        return None                      # the seat; None is the no-handle path
+
+    job = {"id": "j1", "kind": kind, "league_id": "L", "season": 2025, "attempts": 1,
+           "state": "validating", "requested_by": requested_by}
+    if platform is not None:
+        job["platform"] = platform
 
     saved_finish, saved_execs = wl.q.finish, wl._EXECUTORS
     wl.q.finish = fake_finish
     wl._EXECUTORS = {"onboard": fake_executor}
     try:
-        wl._run_job(_FakeConn(), {"id": "j1", "kind": kind, "league_id": "L", "season": 2025,
-                                  "attempts": 1, "state": "validating"}, "gate")
+        wl._run_job(_FakeConn(), job, "gate")
     finally:
         wl.q.finish, wl._EXECUTORS = saved_finish, saved_execs
     return landed.get("state"), landed.get("error")
@@ -402,6 +419,22 @@ def check_classification() -> None:
 
     # The `kind` column's proof. It exists for S4d's refresh jobs, and a column whose only unusable
     # value crashes the process is worse than no column.
+    # The `platform` column's proof, and it is the SAME argument one dimension over (P5/S4c). The
+    # column exists so a second source can arrive; until one does, a worker that cannot run it must
+    # say so rather than pointing the Sleeper chain at a Yahoo league id. `POST /api/connect`
+    # already refuses at the front door, so this is the second of two — a hand-inserted row is the
+    # only way here, and it must not crash the loop either.
+    state, err = _drive("onboard", None, platform="yahoo")
+    if state == "rejected" and err and "unknown platform" in err:
+        _ok("an UNKNOWN platform lands `rejected` cleanly, naming what this worker implements")
+    else:
+        _fail(f"an unknown platform landed {state!r} err={err!r} — a Yahoo league id would have "
+              "been run through the Sleeper chain")
+
+    state, _ = _drive("onboard", None, platform="sleeper")
+    _ok("an explicit platform='sleeper' still runs") if state == "ready" else _fail(
+        f"platform='sleeper' landed {state!r} — the guard is refusing the one platform it has")
+
     state, err = _drive("weekly_refresh", None)
     if state == "rejected" and err and "unknown job kind" in err:
         _ok("an UNKNOWN kind lands `rejected` cleanly — the loop survives a job it cannot run")
