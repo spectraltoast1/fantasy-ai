@@ -154,6 +154,53 @@ def check_predicate() -> None:
             _ok(f"hides {label}")
 
 
+def check_connected_league_season_arm() -> None:
+    """P5/S4a — a CONNECTED league obeys the same season term, and this is the arm nobody can see live.
+
+    S4a's proving league is a played **2025** league, because Will's 2026 leagues have not drafted
+    and there is nothing to join. Production's season derives to **2026**. So the deployed API
+    correctly hides that league from its own owner, and the "granted account sees it" half of S4a's
+    DoD is provable only against a process running with `CURRENT_SEASON=2025`.
+
+    That leaves the 2026 arm — the one every real user will actually be in — proven by nothing but
+    reasoning. It is pinned here instead, which is what these fixtures are FOR: `visible` and
+    `build_catalog` are pure and injectable precisely so a gate does not need live accounts, a live
+    season, or a league that has been drafted.
+
+    The leak direction is the important one: a connected league must never widen what a signed-out
+    visitor sees, in either season.
+    """
+    print("\na CONNECTED league (P5/S4a) obeys the season term, in both directions")
+    v = reads.visible
+    conn_2025, conn_2026 = "8880000000000000001", "8880000000000000002"
+
+    if not v(conn_2025, 2025, demo_league_id=DEMO, owned={conn_2025}, current_season=2026):
+        _ok("a 2025 connected league is HIDDEN from its own owner when the season is 2026 — "
+            "which is why S4a's live proof needs CURRENT_SEASON=2025, not a code change")
+    else:
+        _fail("a 2025 connected league is visible in 2026 — the season term does not bite on it")
+
+    if v(conn_2026, 2026, demo_league_id=DEMO, owned={conn_2026}, current_season=2026):
+        _ok("a 2026 connected league IS visible to its owner in 2026 — the Gate A arm")
+    else:
+        _fail("a 2026 connected league is hidden from its owner in 2026 — onboarding would be inert")
+
+    for season in (2025, 2026):
+        lid = conn_2025 if season == 2025 else conn_2026
+        if v(lid, season, demo_league_id=DEMO, owned=set(), current_season=2026):
+            _fail(f"a {season} connected league is visible SIGNED OUT — the one P5 failure with no alarm")
+        else:
+            _ok(f"a {season} connected league is invisible to a signed-out visitor")
+
+    # And through the catalog builder, not just the predicate: the row must not leak via the payload.
+    rows = _fixture_rows() + [_row("conn", conn_2026, 2026, "A Stranger's League")]
+    anon = reads.build_catalog(rows, {}, {}, demo_league_id=DEMO, owned=set(), current_season=2026)
+    _eq("signed-out catalog with a connected league present", _ids(anon), [DEMO])
+    owner = reads.build_catalog(rows, {}, {}, demo_league_id=DEMO, owned={conn_2026},
+                                current_season=2026)
+    _eq("its owner's catalog", _ids(owner), [conn_2026, DEMO])
+
+
 def check_unresolvable_season_narrows() -> None:
     print("\nan unresolvable season must NARROW, never widen")
     if reads.visible(A_LEAGUE, 2025, demo_league_id=DEMO, owned={A_LEAGUE}, current_season=None):
@@ -573,6 +620,7 @@ def main() -> int:
 
     print("=== check_ownership: can a valid token for the wrong account reach a league? ===")
     check_predicate()
+    check_connected_league_season_arm()
     check_unresolvable_season_narrows()
     check_season_derivation()
     check_sleeper_agrees()

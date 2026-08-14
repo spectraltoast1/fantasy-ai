@@ -357,6 +357,43 @@ def fetch_roster_positions(league_id: str, year: int) -> None:
     print(f"  slots: {slots}")
 
 
+_LEAGUE_TYPE = {0: "redraft", 1: "keeper", 2: "dynasty"}
+
+
+def league_summary(league_id: str) -> dict:
+    """The league object's IDENTITY fields — the ones no artifact in this store persists (P5/S4a).
+
+    `fetch_league_config` writes `league_settings_{year}.parquet` as a (section, key, value) frame
+    whose value column is Float64, so `name`, `previous_league_id` and the redraft/keeper/dynasty
+    type physically cannot live there — and widening that frame would change a SERVED table's
+    schema, which costs an `--emit` + `--load` outage. The connect flow needs them for the catalog
+    row, so it reads them here and the catalog row becomes their record.
+
+    Read-only: unlike everything else in this module it persists nothing. It stays here anyway
+    because CODING_BIBLE §1 is "one fetcher per source" — Sleeper is reached from this module or it
+    is reached from nowhere.
+
+    Returns `season` as an int where Sleeper gives a string, and `league_type` decoded to
+    redraft/keeper/dynasty (`None` when Sleeper omits `settings.type` — absence is NOT redraft; 7
+    known keeper/dynasty corpus leagues lack the key, so the caller must treat None as unknown).
+    """
+    lg = _get_json(f"{_SLEEPER_BASE}/league/{league_id}") or {}
+    settings = lg.get("settings") or {}
+    raw_type = settings.get("type")
+    season = lg.get("season")
+    return {
+        "league_id": str(lg.get("league_id") or league_id),
+        "name": lg.get("name"),
+        "season": int(season) if season is not None else None,
+        "previous_league_id": (str(lg["previous_league_id"])
+                               if lg.get("previous_league_id") else None),
+        "total_rosters": lg.get("total_rosters"),
+        "status": lg.get("status"),
+        "league_type": _LEAGUE_TYPE.get(raw_type) if raw_type is not None else None,
+        "raw_type": raw_type,
+    }
+
+
 def fetch_league_config(league_id: str, year: int) -> None:
     """Fetch the league object and persist its scoring_settings + playoff/league settings.
 

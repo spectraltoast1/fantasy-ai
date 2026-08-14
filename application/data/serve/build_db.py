@@ -393,6 +393,43 @@ def _run_sql_script(cur, sql: str) -> None:
             cur.execute(stmt)
 
 
+def _assert_columns_live(conn, table: str, col_names: list[str], lid: str, season: int) -> None:
+    """Refuse a COPY whose columns the DEPLOYED table does not have (P5/S4a's onboarding preflight).
+
+    `_table_schema` builds each table's DDL as a UNION across the slices that existed at the last
+    ``--emit``, and `_copy_slice_tx` names only the slice's OWN columns — which is what makes the
+    superset tolerant: a slice missing a union column just leaves it NULL. The reverse has no such
+    grace. A slice carrying a column the union never saw makes Postgres raise `UndefinedColumn`
+    mid-COPY, inside a transaction, naming one column and nothing about why.
+
+    That is a real onboarding failure mode for a STRANGER's league, because the union was computed
+    over the corpus and the demo, not over whatever shape a new user brings. `teams.division` is the
+    known shape-dependent column and it *is* emitted; measured 2026-08-14 across all 14 datasets ×
+    272 on-disk leagues, **no** column on disk is absent from the deployed DDL. So this fires on a
+    shape the store has never seen, which is exactly when a bare `UndefinedColumn` would be least
+    informative.
+
+    It does NOT fix the problem, deliberately: the remedy is `--emit` + `--load`, which DROPs every
+    table on the production database and needs a planned outage (S2d spent 145s on one). A refusal
+    that names the column, the table and the remedy is the honest stop.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = %s", (table,))
+        live = {r[0] for r in cur.fetchall()}
+    if not live:
+        raise SystemExit(f'table "{table}" does not exist in this database — run build_db --load.')
+    missing = [c for c in col_names if c not in live]
+    if missing:
+        raise SystemExit(
+            f'{lid}/{season}: "{table}" is missing column(s) {missing} in the deployed database.\n'
+            f"  This league carries a shape the schema was never emitted for — the DDL is a UNION\n"
+            f"  across the slices present at the last --emit, and this slice is outside it.\n"
+            f"  Remedy (OPERATOR, needs a planned outage — it DROPs every table):\n"
+            f"    build_db --emit && build_db --load && fly deploy\n"
+            f"  Do NOT run that from an onboarding job.")
+
+
 def _copy_slice_tx(conn, table: str, df: pl.DataFrame, lid: str, season: int) -> int:
     """COPY one slice's dataframe into `table`, stamping league_id (+ season if absent). Returns rows.
     Does NOT commit — the caller owns the transaction (the full load commits per slice; the per-league
@@ -408,6 +445,7 @@ def _copy_slice_tx(conn, table: str, df: pl.DataFrame, lid: str, season: int) ->
         df = df.drop("league_id")
     cols, add_season, jsonb_cols = _plan(table, df.schema)
     col_names = [name for name, _ in cols]
+    _assert_columns_live(conn, table, col_names, lid, season)
     copy_sql = f'COPY "{table}" ({", ".join(col_names)}) FROM STDIN'
     with conn.cursor() as cur:
         with cur.copy(copy_sql) as cp:
@@ -444,11 +482,55 @@ def _copy_plain(conn, table: str, df: pl.DataFrame) -> int:
     return df.height
 
 
+def upsert_catalog_row(conn, lid: str) -> int:
+    """Replace this league's `league_catalog` row(s) from `_catalog()`. Does NOT commit.
+
+    THE SCOPED ALTERNATIVE TO `reload_manifest`, and the reason the worker can catalog a league at
+    all. `reload_manifest` TRUNCATEs the whole table and re-COPYs it from the LOCAL store — on the
+    worker that store is a seeded, read-only, possibly-stale copy, so calling it there could erase
+    catalog rows the laptop knows about. That is the same whole-file-overwrite shape the parquet
+    wall had, reappearing at the Postgres layer; the same answer applies, one row instead of all.
+
+    DELETE-then-INSERT rather than `ON CONFLICT`: `league_catalog` has no primary key and no unique
+    constraint (only two non-unique indexes), so there is no conflict target to name. Both
+    statements share the caller's transaction — the same single-commit shape `load_league` uses —
+    so a concurrent reader sees the pre- or post-state and never a gap.
+    """
+    rows = _catalog().filter(pl.col("league_id").cast(str) == str(lid))
+    if not rows.height:
+        raise SystemExit(f"{lid} is not in any catalog parquet — nothing to upsert. Onboarding "
+                         "writes the connected_catalog row BEFORE the load.")
+    cols = list(rows.columns)
+    with conn.cursor() as cur:
+        cur.execute(f'DELETE FROM "{_MANIFEST_TABLE}" WHERE league_id = %s', (str(lid),))
+        placeholders = ", ".join(["%s"] * len(cols))
+        for row in rows.iter_rows(named=True):
+            cur.execute(f'INSERT INTO "{_MANIFEST_TABLE}" ({", ".join(cols)}) '
+                        f"VALUES ({placeholders})", [row[c] for c in cols])
+    return rows.height
+
+
 def reload_manifest() -> None:
     """Refresh ONLY the league_catalog table (Stage-B B4 catalog-only write) — TRUNCATE +
     re-COPY in one transaction, leaving the 31 data-slice tables untouched. The table schema is
     unchanged (only panel-flag values differ), so no DROP/CREATE/--emit is needed; atomic, so a
-    concurrent reader never sees the catalog empty."""
+    concurrent reader never sees the catalog empty.
+
+    **Laptop only.** It rebuilds the table from `_catalog()` on the LOCAL store, so a machine whose
+    store is a seeded snapshot would publish that snapshot over the real thing — deleting connected
+    leagues it has never heard of. The refusal is here rather than in `data_layer`'s allow-list
+    because this writes POSTGRES, not the file store; it is the first boundary guard at that layer,
+    and the worker's scoped equivalent is `upsert_catalog_row`.
+    """
+    if dl.store_role() == "worker":
+        raise dl.StoreBoundaryError(
+            "reload_manifest() is refused on this machine: STORE_ROLE=worker.\n"
+            "  It TRUNCATEs league_catalog and re-COPYs it from this machine's local store, which on "
+            "a worker is a seeded snapshot — so any league the laptop catalogued after the last seed "
+            "would be silently deleted from the served catalog.\n"
+            "  The store boundary is one-directional (context/appendices/store-boundary.md).\n"
+            "  Remedy: a worker catalogs ONE league at a time via build_db.upsert_catalog_row, which "
+            "the onboarder calls inside the load's transaction. Run reload_manifest on the laptop.")
     df = _catalog()          # the union, or a catalog-only refresh would drop the synthetic rows
     jsonb_cols = {n for n, dt in df.schema.items() if pg_type(dt) == "JSONB"}
     with psycopg.connect(database_url()) as conn:
@@ -478,17 +560,23 @@ def _tables_present(conn) -> None:
         raise SystemExit(f"tables missing {missing} — run --load (full DROP+CREATE) first.")
 
 
-def load_league(conn, lid: str, *, verify_schema: bool = True) -> dict[str, int]:
+def load_league(conn, lid: str, *, verify_schema: bool = True,
+                catalog: bool = False) -> dict[str, int]:
     """Per-league SCOPED RELOAD — the incremental, in-season alternative to the whole-DB DROP+CREATE
     ``load()``. In ONE transaction: DELETE this league's rows from the 14 data tables, then re-COPY its
-    present (slice, dataset) parquets; a single commit at the end. Every OTHER league — and the
-    ``league_catalog`` — is left untouched. This is how a league advances to a new week (a fresh
+    present (slice, dataset) parquets; a single commit at the end. Every OTHER league — and by default
+    the ``league_catalog`` — is left untouched. This is how a league advances to a new week (a fresh
     ``as_of_week`` slice) without rebuilding the DB.
 
     Atomicity (modeled on ``reload_manifest``): all DELETEs + COPYs share one transaction / one commit, so
     a concurrent API reader never sees the league half-deleted (it sees the pre- or post-state, never a
     gap). Never DROP/CREATE — reuses the existing union-superset schema; ``_tables_present`` guards that it
     exists. Returns per-table rows copied.
+
+    ``catalog=True`` (P5/S4a onboarding) additionally upserts this league's ``league_catalog`` row in
+    the SAME transaction, so a first connect is atomic end to end: the league becomes discoverable
+    and readable together, or neither. The weekly refresh leaves it False — a league already in the
+    catalog does not need its row rewritten every week.
     """
     if verify_schema:
         _tables_present(conn)
@@ -508,6 +596,8 @@ def load_league(conn, lid: str, *, verify_schema: bool = True) -> dict[str, int]
             if not p.exists():
                 continue   # skip-if-absent, exactly like load()
             counts[ds.table] += _copy_slice_tx(conn, ds.table, pl.read_parquet(p), lid, season)
+    if catalog:
+        counts[_MANIFEST_TABLE] = upsert_catalog_row(conn, lid)
     conn.commit()   # single atomic commit for the whole league
     return dict(counts)
 
