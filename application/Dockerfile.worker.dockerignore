@@ -1,0 +1,46 @@
+# Build context = application/. Buildkit picks this up automatically for Dockerfile.worker.
+#
+# It exists because the API's .dockerignore excludes `data` outright — a bare pattern that drops the
+# pipeline SOURCE (data_layer.py, serve/, corpus/, transforms/) and not just the heavy runtime.
+# Correct for the API, which reads Postgres; fatal for the worker, whose whole job is that code.
+# So this file narrows the exclusion to the two things that are actually heavy, and keeps everything
+# else the pipeline needs.
+
+# Python bytecode.
+**/__pycache__/
+**/*.pyc
+
+# Every venv (durable in main, symlinked into worktrees — deps come from the image).
+**/.venv
+venv/
+
+# THE HEAVY RUNTIME — the whole point of the volume. 389 MB of parquet must never enter the build
+# context: it is seeded onto the mounted volume instead (see OPERATIONS.md → seeding the worker).
+# NOTE the trailing slash and the specific path: `data/snapshots` not `data`, so the pipeline source
+# beside it survives. This one character is the difference between a working worker and an image
+# with no data_layer in it.
+data/snapshots/
+
+# data/cache is NOT excluded — it is 384 KB and load-bearing (the pinned players registry the join
+# reads). See the COPY and its rationale in Dockerfile.worker.
+
+# The frontend is the API's business, not the worker's.
+frontend/
+
+# Secrets and local config never reach the builder. The worker resolves everything from env, exactly
+# like the API: config.py is absent by design, not by accident.
+config.py
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+
+# Build/deploy descriptors.
+Dockerfile
+Dockerfile.worker
+Dockerfile.worker.dockerignore
+.dockerignore
+fly.toml
+fly.worker.toml

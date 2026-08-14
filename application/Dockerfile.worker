@@ -1,0 +1,73 @@
+# The PIPELINE worker (P5/S3) — a job box, not a server.
+#
+# Deliberately a SEPARATE image and a separate Fly app from the API. The API is a 256mb
+# scale-to-zero HTTP reader; this runs multi-minute pipeline jobs against a 1 GB volume. Sharing an
+# app would entangle the API's scale-to-zero with a long job, which is the one thing the ADR calls
+# non-negotiable.
+#
+# It also cannot reuse the API's Dockerfile even with a different CMD: that image installs only
+# api/requirements.txt (no polars, no numpy) and COPYs only api/, and the shared .dockerignore
+# excludes `data` outright — which drops the pipeline SOURCE, not just its runtime. Hence this file
+# plus Dockerfile.worker.dockerignore.
+#
+#   fly deploy -c fly.worker.toml --dockerfile Dockerfile.worker    (build context = application/)
+
+FROM python:3.13-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/app \
+    # The store boundary (context/appendices/store-boundary.md). This machine is NOT the authoring
+    # laptop: data_layer refuses every laptop-owned write here and VERIFIES the shared band instead
+    # of rebuilding it. Set in the image rather than fly.toml [env] so it travels with the artifact
+    # — a worker that forgets this flag is a worker that can silently author the shared substrate.
+    STORE_ROLE=worker
+
+WORKDIR /app
+
+# git is needed by nflreadpy's data fetch path; the rest is build tooling for polars/pyarrow wheels.
+# Kept to one layer and removed in the same RUN so nothing lingers in the image.
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pipeline deps first, for layer caching. This is application/requirements.txt (polars, numpy,
+# pyarrow, psycopg, nflreadpy) — NOT api/requirements.txt, which is deliberately fastapi-only.
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+# The package. COPY directories, never enumerated files — an enumerated COPY dropped a module once
+# already (Session 3's projections.py) and built green before crashing at import.
+#   api/    — the worker imports application.api.db (the single DB seam) and settings
+#   data/   — data_layer, serve/, corpus/, transforms/, fetchers/
+#   shared/ — league_resolver, league_registry, the scoring keys
+RUN mkdir -p /app/application && touch /app/application/__init__.py
+COPY api/ /app/application/api/
+COPY data/ /app/application/data/
+COPY shared/ /app/application/shared/
+
+# cache/ is BAKED IN, and it is not optional (P5/S3 finding C).
+#
+# `_CACHE_DIR` is application/data/cache — a SIBLING of snapshots/, so the volume mounted at
+# .../data/snapshots does not cover it. It holds the pinned Sleeper players registry, and
+# join_nfl_sleeper_weekly and compute_player_signal both read it through
+# read_pinned_sleeper_players(); weekly_refresh runs both. A worker without it fails on its first
+# league.
+#
+# Baking is right rather than merely cheap (384 KB): the pinned snapshot is the join's
+# reproducibility anchor and a DELIBERATE versioned event (ACTIVE_PLAYERS_SNAPSHOT), so tying it to
+# an image build is more honest than letting it drift on a mutable volume. Consequence: the two
+# refreshable files beside it (player_id_map, players.parquet) live on the container's ephemeral
+# layer, so the worker re-fetches them from Sleeper after a restart. Correct for a 24h cache.
+COPY data/cache/ /app/application/data/cache/
+
+# The volume mounts over this path at runtime (fly.worker.toml [mounts]). It must exist in the image
+# so the mount has somewhere to land, and it must be EMPTY — data_layer._SNAPSHOT_DIR is computed
+# from the source file's location and is not configurable, which is why the mount point is fixed
+# rather than chosen.
+RUN mkdir -p /app/application/data/snapshots
+
+# No CMD that does work. This box is driven by `fly ssh console` / `fly machine run` for now — the
+# job queue and the connect endpoint are P5/S4. Idling here rather than exiting keeps a machine
+# available to exec into; S4 replaces this with the queue leaser.
+CMD ["sleep", "infinity"]

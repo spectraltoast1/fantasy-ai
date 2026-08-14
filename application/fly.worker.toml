@@ -1,0 +1,45 @@
+# The pipeline worker (P5/S3) — a SEPARATE Fly app from fantasy-ai-api.
+#
+#   fly deploy -c fly.worker.toml --dockerfile Dockerfile.worker     (from application/)
+#   fly ssh console -a fantasy-ai-worker
+#
+# Why separate, and not a second process on the API: the API is a 256mb scale-to-zero HTTP reader
+# and this runs multi-minute jobs against a 1 GB volume. The ADR calls entangling the API's
+# scale-to-zero with a long job non-negotiable, and it is the reason this file exists at all.
+
+app = "fantasy-ai-worker"
+primary_region = "iad"          # same region as the API and the Supabase project
+
+[build]
+  dockerfile = "Dockerfile.worker"
+
+[env]
+  # Belt and braces with the image's own ENV. The store boundary is the one setting that must never
+  # be missing — a worker without it can author the shared substrate silently — so it is asserted in
+  # BOTH places rather than relying on either.
+  STORE_ROLE = "worker"
+  # Non-secret identifiers the league resolver needs where config.py is absent, mirroring the
+  # GitHub Actions job that already runs this pipeline off-laptop. NOT secrets: the is_mine Sleeper
+  # handle and league id are public identifiers and appear in demo_manifest and the docs.
+  MY_USERNAME = "spectraltoast1"
+  LEAGUE_ID = "1182101676608823296"
+
+# THE MOUNT PATH IS NOT A CHOICE. data_layer.py computes _SNAPSHOT_DIR from the source file's own
+# location (`Path(__file__).resolve().parent / "snapshots"`) and it is not configurable, so the
+# volume has to land exactly where the code already looks. Making the path env-first instead would
+# touch every read in the system for no gain — the ADR weighed both and chose the mount.
+[mounts]
+  source = "worker_snapshots"
+  destination = "/app/application/data/snapshots"
+
+# NO [http_service]. This is a job box, not a server: nothing listens, so there is no health check
+# to pass and no scale-to-zero to configure. It is reached by `fly ssh console`. When P5/S4 adds the
+# job queue this grows a process that leases work; until then a run is triggered by hand.
+#
+# A Fly volume attaches to exactly ONE machine and is pinned to a physical host, so this app is a
+# STATEFUL SINGLETON, not a pool. That is intended for an invited cohort and it is a known limit,
+# not an oversight — the recorded exit, if single-host pinning ever hurts, is the Supabase bucket
+# backend (SNAPSHOT_BACKEND=supabase), which is already half-built.
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"                # S0's sizing: network-bound, not compute-bound; ~$7/mo flat

@@ -48,9 +48,49 @@ link() {
   ln -s "$src" "$dst"; echo "  link   $rel -> main"
 }
 
+# link_children <relative-dir> — link each CHILD of MAIN/<dir> instead of the directory itself,
+# skipping any child git tracks.
+#
+# Needed because `application/data/snapshots` stopped being wholly gitignored: the corpus recovery
+# (2026-08-13) put `snapshots/corpus/` under version control so the frozen manifest can never again
+# be lost to a bad write. That makes the whole-directory symlink impossible — git has to materialise
+# the tracked files at that path, which replaces the link, and the worktree silently ends up with a
+# 280 KB stub of the 389 MB store. Every pipeline read then resolves to nothing.
+#
+# So: link the ten gitignored children, leave the tracked one real. The invariant this preserves is
+# the one the whole scheme rests on — writes land in main's single store, never a duplicate.
+link_children() {
+  local rel="$1"
+  local src="$MAIN_ROOT/$rel"
+  if [ ! -d "$src" ]; then
+    echo "  skip   $rel  (not present in main — populate main's runtime first)"
+    return
+  fi
+  mkdir -p "$WT_ROOT/$rel"
+  local child name
+  for child in "$src"/*; do
+    [ -e "$child" ] || continue
+    name="$(basename "$child")"
+    if [ -n "$(git -C "$WT_ROOT" ls-files -- "$rel/$name" 2>/dev/null)" ]; then
+      echo "  keep   $rel/$name  (git-tracked — stays a real path)"
+      continue
+    fi
+    # An EMPTY directory here is a stub a previous run left behind (a check script that created
+    # derived/league/<throwaway>/ and swept the file back out, say). It holds nothing, and leaving
+    # it blocks the link — which is how a worktree ends up reading an empty store. Remove it and
+    # link. A directory with anything in it is left alone and warned about, as before.
+    if [ -d "$WT_ROOT/$rel/$name" ] && [ ! -L "$WT_ROOT/$rel/$name" ] \
+       && [ -z "$(find "$WT_ROOT/$rel/$name" -type f -print -quit 2>/dev/null)" ]; then
+      rm -rf "${WT_ROOT:?}/$rel/$name"
+      echo "  clear  $rel/$name  (empty stub from an earlier run)"
+    fi
+    link "$rel/$name"
+  done
+}
+
 # The seams where the clean room must reach into main.
 link application/config.py
-link application/data/snapshots
+link_children application/data/snapshots
 link application/data/cache
 link application/frontend/node_modules
 link application/frontend/public/data
