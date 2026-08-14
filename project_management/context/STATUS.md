@@ -222,7 +222,15 @@ gates it, **21/21 green, prove-bites failing all 10**. Worker **parity** proven 
 spine was cleared on the volume so the run could not pass by skipping, and all **10** recomputed
 league artifacts hash-match the laptop's canonical row multisets. The scoring key came from the
 catalog, **not** `_resolve_scoring_key`'s owner-key fallback (S4 owns that).
-→ `sessions/v1/P5-Self_Serve/SESSION_P5_S3_REPORT.md`.
+**The worker has written production Postgres (2026-08-14)** — `build_db --reload-league` on
+`fantasy-ai-worker` reloaded LoRP 2025, **14,624 rows across 12 tables**, per-table counts matching
+the prior state exactly, every other league and `league_catalog` untouched; egress and the Supabase
+**session** pooler both hold under a `COPY` inside a transaction. **That run also validated the
+seed:** `--verify` runs from the *laptop* (laptop disk vs Postgres) against rows the *worker* wrote
+from its own volume, so `VERIFY OK` is a **cross-machine parity proof** — the 244 MB seed is now
+verified faithful, not merely measured, which is the first real evidence for the ADR's
+*reconstructible cache* claim.
+→ `sessions/v1/P5-Self_Serve/SESSION_P5_S3_REPORT.md` + `SESSION_P5_S3_AUDIT.md`.
 
 Two things still queue behind calendar gates, neither blocking P5: **loading the first real 2026 league**
 at Will's draft (~late Aug) — a manual admin load, not P5 — which data-proves S2's refresh, S3b's band

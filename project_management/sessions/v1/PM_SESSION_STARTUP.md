@@ -4,8 +4,8 @@
 
 **Current as of: 2026-08-14.** NFL Week 1 = **Thu 10 Sept 2026 (~4 weeks)**. Will's draft ≈ **late Aug
 (~2 weeks) = Gate A**.
-**Immediate task:** **draft S4** (job queue + connect flow + the weekly cadence). One thing is
-outstanding behind you — see *S3 is not closed* below.
+**Immediate task:** **draft S4** (job queue + connect flow + the weekly cadence). **Nothing is
+blocked and nothing is half-done — S0–S3 are all closed.**
 Per `CODING_BIBLE` §7, **re-stamp this date whenever you change this file, and keep it from growing** —
 replace stale content, don't append.
 
@@ -86,17 +86,19 @@ is how a "successful" edit changes nothing. Fix the doc that **governs**, not ju
 The League screen no longer overstates the model. **The laptop is no longer the only machine that can
 build a league.**
 
-### S3 is NOT closed — one item, and it is Will's
+### S3 closed 2026-08-14 — the worker writes production
 
-The worker was proven to run the pipeline from its own volume with **no laptop in the data path**, and
-its artifacts are 10/10 value-identical to a local run. But the proving run used **`--no-load`**, so
-**`build_db.reload_league()` has never executed on that machine.** Will has since set the worker's
-`DATABASE_URL` (Supabase **session** pooler — correct for a `COPY` inside a transaction).
+`build_db --reload-league` on `fantasy-ai-worker` reloaded LoRP 2025: **14,624 rows across 12
+tables**, counts matching the prior state exactly, every other league and `league_catalog` untouched.
+**The `--verify` that confirmed it is a cross-machine parity proof** — it compares the *laptop's* disk
+to Postgres, against rows the *worker* wrote from its own volume, so the 244 MB seed is now verified
+faithful rather than merely measured. Not literally demonstrated: the laptop physically off; no laptop
+was in the **data path** (ssh trigger only), so treat that as satisfied.
 
-**The trap:** `weekly_refresh.py:207` calls `_db_max_as_of()`, which exists *"to no-op an up-to-date
-load"*. The replay league is already current, so a plain re-run **skips the write and reports
-success** — the same shape as the seven-skips the session already caught on the spine. **Force it with
-`build_db --reload-league <LID>`, which is unconditional.** Then flip the P5 row.
+**The trap that nearly hid this, worth carrying:** `weekly_refresh.py:207` calls `_db_max_as_of()`,
+which exists *"to no-op an up-to-date load"* — so the obvious re-run would have **skipped the write
+and reported success**. `--reload-league` is unconditional. **A run that skips everything as "already
+current" is not a proof.**
 
 ### The system now has THREE machines, one writer
 

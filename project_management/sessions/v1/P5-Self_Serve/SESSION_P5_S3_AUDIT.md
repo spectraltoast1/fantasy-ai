@@ -1,5 +1,20 @@
 # P5 · S3 — PM audit of the worker and the store boundary
 
+> **CLOSED 2026-08-14 — the open item below is resolved.** Will set the worker's `DATABASE_URL`
+> (Supabase **session** pooler) and ran `build_db --reload-league 1182101676608823296` on
+> `fantasy-ai-worker`: **14,624 rows across 12 tables**, per-table counts matching the prior state
+> exactly, *every other league + `league_catalog` untouched*. Egress and the pooler both hold under a
+> `COPY` inside a transaction.
+>
+> **It proved more than the DoD asked.** `--verify` runs from the **laptop** — laptop disk vs
+> Postgres — against rows the **worker** wrote from its own volume. So `VERIFY OK` is a
+> **cross-machine parity proof**: the 244 MB seed is now *verified faithful*, not merely *measured*.
+> That is the first real evidence for the ADR's **"reconstructible cache, lose the host and re-seed"**
+> claim, which had never been tested by anything.
+>
+> The `_db_max_as_of` no-op trap was real and was avoided — the obvious re-run would have skipped the
+> write and reported success. Body below left as written at audit time.
+
 **Audited:** 2026-08-14 · **Report:** `SESSION_P5_S3_REPORT.md` · **Brief:**
 `SESSION_P5_S3_WORKER_AND_STORE_BOUNDARY.md` · **ADR:** `context/appendices/store-boundary.md` ·
 **Range:** `719439c..e44e87e` (3 commits + merge + a docs tidy) ·
