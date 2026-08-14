@@ -16,15 +16,23 @@ falling through ``MY_USERNAME`` to the is_mine slice.
 visibility predicate, so all eleven per-panel reads inherit it from one place. Knowing a
 ``league_id`` is no longer enough to read it; an unowned league answers with exactly the 404 a
 nonexistent one does.
+
+**P5/S4c adds the connect flow** — the first routes here that are neither a read nor an auth call.
+``POST /api/connect`` enqueues onto S4b's job queue (through ``api/jobs.py``, which is where the
+enqueue seam lives *because this image cannot import ``application/data/``*), and three companions
+answer "which leagues could I link", "what is my job doing", and "do I have one in flight". They
+are the reason ``user_leagues`` is no longer a table only an operator writes.
 """
 
 from __future__ import annotations
 
 import logging
+import uuid
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
-from application.api import auth, db, rate_limit, reads, settings, signup
+from application.api import (auth, db, jobs, platforms, rate_limit, reads, settings,
+                             signup)
 
 _LOG = logging.getLogger(__name__)
 
@@ -99,7 +107,13 @@ def me(user: dict = Depends(auth.current_user)) -> dict:
     Recording the profile row here — rather than in a database trigger on ``auth.users`` — keeps
     the behavior in reviewable code instead of invisible DDL, and costs one no-op INSERT per
     call. Deliberately narrow: id and email only. Ownership is a separate table
-    (``public.user_leagues``, S2a), written by an operator rather than inferred from a sign-in.
+    (``public.user_leagues``, S2a).
+
+    **That table stopped being an operator's to write in P5/S4c.** This docstring used to end
+    "written by an operator rather than inferred from a sign-in", which was the line the connect
+    flow existed to delete: a row now appears because somebody linked their own league and the
+    worker's job reached ``ready``, with no ``scripts/users.py --grant`` in the loop. ``--grant``
+    survives as operator tooling, not as the mechanism.
     """
     db.execute(_UPSERT_APP_USER, {"id": user["id"], "email": user["email"]})
     return {"id": user["id"], "email": user["email"]}
@@ -156,6 +170,174 @@ def signup_request(request: Request, body: dict = Body(...)) -> dict:
         raise
     rate_limit.record(request, email, ok=True)
     return {"sent": True}
+
+
+# --- The connect flow (P5/S4c) ----------------------------------------------------------------
+# The line above `routes.me`'s docstring — ownership "written by an operator rather than inferred
+# from a sign-in" — stops being true here. These four routes are how it gets inferred.
+
+# The same shape `_UNKNOWN_LEAGUE` has and for the same reason: ONE refusal string, reached by both
+# branches, interpolating nothing. A job that is not yours and a job that never existed must be
+# byte-identical, or the pair is an oracle for how many leagues have connected and how fast — which
+# is exactly what `jobs.id` being a uuid rather than a bigserial was chosen to prevent.
+_UNKNOWN_JOB = "unknown job id"
+
+
+@router.get("/platforms/{platform}/leagues")
+def platform_leagues(platform: str, handle: str,
+                     user: dict = Depends(auth.current_user)) -> dict:
+    """Which leagues a handle plays in — the interactive half of identity acquisition.
+
+    **Authenticated**, unlike `/signup`: this spends our Sleeper call budget, so the caller has to
+    be somebody. Rate-limited per USER (see `rate_limit`), because the resource at risk is our
+    egress IP and getting throttled by Sleeper stops onboarding for everyone.
+
+    **Not under `/connect/`, deliberately.** `/api/connect/discover` would sit next to
+    `/api/connect/{job_id}` and depend on FastAPI's declaration order to not be shadowed by it —
+    correct today, and one reordered function from being wrong. There is no ordering to get wrong
+    here.
+
+    A handle the platform has never heard of is a 200 with an empty list, not a 404: it is an
+    ordinary answer to an ordinary question (people mistype), and the SPA says so in words. A
+    platform we cannot REACH is a 502 — the caller did nothing wrong and retrying may work.
+    """
+    rate_limit.enforce_discovery(user["id"])
+    rate_limit.record_discovery(user["id"])
+    try:
+        return platforms.discover(platform, handle,
+                                  current_season=settings.current_season())
+    except platforms.PlatformUnsupported:
+        raise HTTPException(status_code=404, detail="unknown platform") from None
+    except platforms.LookupFailed as exc:
+        _LOG.warning("platform lookup failed (platform=%s): %s", platform, exc)
+        raise HTTPException(
+            status_code=502,
+            detail="Couldn't reach Sleeper just now. Try again in a moment.") from exc
+
+
+@router.post("/connect")
+def connect(body: dict = Body(...), user: dict = Depends(auth.current_user)) -> dict:
+    """Link a league: enqueue a job and return its id. **It builds nothing.**
+
+    Takes `{platform, handle, league_id}` — platform-generic on purpose, so a second source is a
+    new value rather than a breaking client change. `handle` is optional: the dual-mode input
+    accepts a league id directly, and that path resolves no seat, which renders as no "you"
+    highlight. **That is a supported outcome, not a degraded one** (settled with Will,
+    2026-08-14).
+
+    **THE SEASON IS SERVER-DERIVED, NEVER TAKEN FROM THE BODY.** `settings.current_season()` is the
+    same value `reads.visible` applies to the owned term, so a job can never be enqueued for a
+    season whose league the catalog would then refuse to show. A client-supplied season would make
+    that reachable, and the symptom — a league that builds perfectly and is then invisible to the
+    person who linked it — carries no error anywhere.
+
+    **NO OWNERSHIP VERIFICATION, and this is a decision rather than an omission** (Will,
+    2026-08-14). We do not check that the caller holds a seat in the league they name. Anyone with
+    a `league_id` can already read that league's rosters, owners and matchups directly from
+    api.sleeper.app — the id is the secret and we are not the weak link — and Sleeper offers no
+    OAuth and no verification primitive, so there is nothing stronger available. Combined with
+    invite-gated signup that is the accepted risk. Do not "fix" this later without revisiting the
+    reasoning. See `jobs._GRANT` for the matching decision on roster uniqueness.
+
+    A second job for a league already building is refused by `jobs_active_league_idx`, not by a
+    check here — a unique index is the only version of that rule two machines cannot race.
+    """
+    platform = str(body.get("platform") or platforms.IMPLEMENTED[0]).strip().lower()
+    raw = str(body.get("league_id") or "").strip()
+    handle = (str(body.get("handle") or "").strip() or None)
+
+    if not platforms.is_league_id(raw):
+        # The SPA sends a league_id it got from discovery, or one the user typed that already
+        # passed the same test client-side. Reaching here means neither, so say what is wrong
+        # rather than enqueueing a job that can only ever be `rejected`.
+        raise HTTPException(status_code=400,
+                            detail="That doesn't look like a Sleeper league ID.")
+    if platform not in platforms.IMPLEMENTED:
+        raise HTTPException(status_code=400, detail=f"{platform} isn't supported yet.")
+
+    rate_limit.enforce_connect(user["id"])
+
+    # Resolve the handle HERE rather than trusting one the client echoes back from discovery. It is
+    # not an authorization field — see above — but one GET buys "every id on a job row was resolved
+    # by this server", which is one fewer thing the worker has to be suspicious of.
+    platform_user_id = None
+    if handle:
+        try:
+            platform_user_id = platforms.resolve_user_id(platform, handle)
+        except platforms.LookupFailed as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="Couldn't reach Sleeper just now. Try again in a moment.") from exc
+        if platform_user_id is None:
+            raise HTTPException(status_code=404,
+                                detail=f"Sleeper has no user called “{handle}”.")
+
+    try:
+        row = jobs.enqueue(raw, settings.current_season(), platform=platform,
+                           requested_by=user["id"], handle=handle,
+                           platform_user_id=platform_user_id)
+    except Exception as exc:      # noqa: BLE001 — the unique index is the expected failure here
+        if "jobs_active_league_idx" in str(exc):
+            raise HTTPException(
+                status_code=409,
+                detail="That league is already being linked. Give it a moment.") from exc
+        raise
+    _LOG.info("connect enqueued job=%s league=%s season=%s platform=%s seat_id=%s",
+              row["id"], row["league_id"], row["season"], platform, bool(platform_user_id))
+    return _job_payload(row)
+
+
+@router.get("/connect")
+def active_connect(user: dict = Depends(auth.current_user)) -> dict:
+    """The caller's job still in flight, or `{"job": null}`. **This is what survives a refresh.**
+
+    Required rather than convenient. The ownership row is written when the job reaches `ready`, so
+    the progress screen cannot be driven by the catalog — it is driven by the job, and a signed-in
+    user who reloads mid-build would otherwise have no way to find their own job again. An id held
+    in browser memory does not survive a reload; this does.
+    """
+    row = jobs.active_job_for_user(user["id"])
+    return {"job": _job_payload(row) if row else None}
+
+
+@router.get("/connect/{job_id}")
+def connect_job(job_id: str, user: dict = Depends(auth.current_user)) -> dict:
+    """One job's state, **for its owner** — and for nobody else.
+
+    Scoped to `requested_by`, and a job that is not yours returns the SAME 404, with the same body,
+    as one that never existed. The uuid PK makes enumeration impractical; that is not a reason to
+    skip the check. S2b established that principle for leagues and it applies to every object.
+
+    The uuid cast is guarded rather than caught downstream: `%(id)s::uuid` raises on garbage, and a
+    500 on a malformed id is both a worse answer and a different one — a caller could tell a
+    well-formed unknown id from a malformed one, which is the beginnings of the oracle this is
+    built to avoid.
+    """
+    try:
+        uuid.UUID(job_id)
+    except (ValueError, AttributeError, TypeError):
+        raise HTTPException(status_code=404, detail=_UNKNOWN_JOB) from None
+    row = jobs.job_for_owner(job_id, user["id"])
+    if row is None:
+        raise HTTPException(status_code=404, detail=_UNKNOWN_JOB)
+    return _job_payload(row)
+
+
+def _job_payload(row: dict) -> dict:
+    """One job as the client sees it. Timestamps as ISO strings; everything else verbatim.
+
+    `error` is passed through UNCHANGED, and that is the reject path reaching a human. S5 owns the
+    graceful preflight and the polished copy — this must not invent any — but a job that ended must
+    not leave somebody on a spinner that never resolves either. Whatever words the refusal already
+    carries are better than silence. Honest, not polished: the same standing rule the empty panels
+    follow.
+    """
+    out = dict(row)
+    for k in ("created_at", "started_at", "finished_at", "updated_at"):
+        if out.get(k) is not None:
+            out[k] = out[k].isoformat()
+    out["id"] = str(out["id"])
+    return out
 
 
 @router.get("/weeks")

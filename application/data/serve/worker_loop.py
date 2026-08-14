@@ -22,6 +22,12 @@ whole point of removing the human is that nobody is watching:
 
 **Observability lives in the `jobs` row, not here.** DoD 2 is that a reader can tell what happened
 from the TABLE ALONE. stdout is for a human tailing `fly logs`; it is not the record.
+
+**P5/S4c gave this loop the other half of a connect.** A job now carries who asked for it and which
+platform identity to resolve a seat from, and reaching `ready` WRITES THE OWNERSHIP ROW — in the
+same transaction as the state change, for the reasons spelled out in `_run_job`'s `else:` branch.
+Until that commit, a league being built belongs to nobody, which is exactly what stops a user
+landing on a half-built league of their own.
 """
 
 from __future__ import annotations
@@ -34,6 +40,7 @@ import sys
 import time
 import traceback
 
+from application.api import jobs, platforms
 from application.data import data_layer as dl
 from application.data.serve import job_queue as q
 from application.data.serve import onboard_league
@@ -129,13 +136,21 @@ def _stage_observer(conn, job, worker: str):
     return observe
 
 
-def _execute_onboard(conn, job, worker: str) -> None:
+def _execute_onboard(conn, job, worker: str) -> int | None:
+    """Build the league, then work out which roster is the requester's. Returns the seat, or None.
+
+    **The seat is resolved here and GRANTED by the caller**, which is not an arbitrary split: the
+    grant has to happen in the same transaction as `finish`, and only `_run_job` owns that boundary.
+    See its `else:` branch for why.
+    """
     onboard_league.onboard(job["league_id"], int(job["season"]),
                            stage=_stage_observer(conn, job, worker))
+    return onboard_league.resolve_seat(job["league_id"], int(job["season"]),
+                                       job.get("platform_user_id"))
 
 
 # One entry per job class. `kind` exists because S4d enqueues the weekly refresh; the Manager
-# Dossier fan-out is a deferred class and belongs to S4c. An unknown kind is REJECTED, not a crash —
+# Dossier fan-out is a deferred class and belongs to S4e. An unknown kind is REJECTED, not a crash —
 # which is also how the column earns its keep before a second executor exists.
 _EXECUTORS = {"onboard": _execute_onboard}
 
@@ -155,8 +170,21 @@ def _run_job(conn, job, worker: str) -> None:
         _log(f"REJECTED {label}: unknown kind")
         return
 
+    # The platform dimension, refused the same way an unknown `kind` is (P5/S4c). `POST /api/connect`
+    # already declines anything unimplemented, so reaching this needs a hand-inserted row — but the
+    # column exists precisely so a second platform can arrive, and the day it does, a worker that
+    # cannot do it must say so rather than running the Sleeper chain against a Yahoo league id.
+    # `platforms.IMPLEMENTED` is the one list, shared with the route that refuses at the front door.
+    platform = job.get("platform") or platforms.IMPLEMENTED[0]
+    if platform not in platforms.IMPLEMENTED:
+        q.finish(conn, job["id"], "rejected",
+                 error=f"unknown platform {platform!r} — this worker implements "
+                       f"{list(platforms.IMPLEMENTED)}. Nothing will change on a retry.")
+        _log(f"REJECTED {label}: unknown platform {platform!r}")
+        return
+
     try:
-        executor(conn, job, worker)
+        seat = executor(conn, job, worker)
     except SystemExit as e:
         # THE TRAP. `SystemExit` is a BaseException, so this clause must come BEFORE `except
         # Exception` and cannot be folded into it. onboard_league raises it for every deliberate
@@ -177,7 +205,30 @@ def _run_job(conn, job, worker: str) -> None:
         traceback.print_exc()
         return
     else:
-        q.finish(conn, job["id"], "ready")
+        # THE OWNERSHIP ROW IS WRITTEN HERE — AT `ready`, NOT AT ENQUEUE — AND IN ONE TRANSACTION
+        # WITH IT (P5/S4c). Two separate failures are being prevented and neither announces itself:
+        #
+        #   * WRITTEN EARLY. `reads.visible` is `demo OR (owned AND season == current)` and
+        #     `build_catalog` sorts OWNED FIRST, and the SPA lands on `leagues[0]` — so a row that
+        #     exists while the build is still running drops the user onto THEIR OWN LEAGUE WITH
+        #     EVERY PANEL EMPTY for ten seconds, with no error raised anywhere. That is the worst
+        #     first impression this product can make and nothing would report it.
+        #   * WRITTEN SEPARATELY. A crash between the grant and the `finish` leaves a job that is
+        #     `ready` — terminal, so no retry ever revisits it — over a league nobody owns. The
+        #     league would be built, catalogued, loaded, and invisible to the person who asked for
+        #     it, for ever.
+        #
+        # `conn` is autocommit (see `job_queue.connect`), so this opens an EXPLICIT block: both
+        # statements land together or neither does.
+        with conn.transaction():
+            granted = jobs.grant_ownership(conn, user_id=job.get("requested_by"),
+                                           league_id=job["league_id"], roster_id=seat)
+            q.finish(conn, job["id"], "ready")
+        if granted:
+            _log(f"granted {job['league_id']} to {granted['user_id']} "
+                 f"(seat {granted['roster_id']!r})")
+        elif job.get("requested_by"):
+            _log(f"NO GRANT for {label} — requested_by set but the insert returned nothing")
         _log(f"READY {label} in {time.monotonic() - started:.1f}s")
 
 

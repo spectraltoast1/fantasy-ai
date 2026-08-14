@@ -202,10 +202,11 @@ disagree. It is read **per request**, never carried in the token, so a revoke bi
 rather than an hour later (demonstrated: a revoke changed the catalog for an access token that had
 already been issued).
 
-**A grant is an operator act about a league, not evidence about a person.** S1b creates accounts
-`email_confirm: true` *before* the magic link is known to have sent, so an address nobody controls
-can hold a confirmed account. S4's connect flow writes the same row from the other direction — a user
-claiming their own league — and that is where identity actually gets established.
+**A grant WAS an operator act about a league. Since P5/S4c it is usually not** — see "Linking a
+league" below. `--grant` survives as an override; the mechanism is now a user linking their own
+league and the worker's job reaching `ready`. S1b still creates accounts `email_confirm: true`
+*before* the magic link is known to have sent, so an address nobody controls can hold a confirmed
+account.
 
 > **Decided, S2c: the ownership model does not care, and nothing is built for it.** An account
 > confers nothing on its own. Visibility needs a grant, a grant is an operator act, and signing up
@@ -219,6 +220,22 @@ claiming their own league — and that is where identity actually gets establish
 > the loop, "confirmed" starts to carry weight and the create-before-send ordering becomes a real
 > defect. **Revisit at S4.** The same note sits at the `email_confirm: true` call site in
 > `api/signup.py`, so the next reader of that line does not re-raise it from scratch.
+>
+> **THE TRIPWIRE FIRED IN P5/S4c, AND THE ANSWER IS: STILL NOT A DEFECT — for a reason worth
+> writing down rather than re-deriving.** An account can now claim a league entirely by itself, so
+> the condition is met. But the ordering is only exploitable if creating an account for somebody
+> else's address lets you *act* as it, and it does not: claiming requires a **token**, a token
+> requires redeeming the magic link, and the link goes to the address. An orphan confirmed account
+> still holds no grants and reads exactly what a signed-out visitor reads. The gap between "this
+> account exists" and "somebody can act as it" is the mailbox, and the connect flow sits on the far
+> side of it.
+>
+> **What DID change is the value of an account, and that is the thing to carry forward.** Before
+> S4c, a token bought you the demo plus whatever an operator had granted — in practice, nothing.
+> Now a token buys the ability to enqueue work onto a single-machine worker and to grant yourself a
+> league. The access code is what stands in front of that, so the case for rotating it if it
+> spreads got stronger, not weaker, and `--delete` (S4c) exists because banning leaves the grants
+> and the job history behind.
 
 **"Current season" is derived locally (S2c) — there is no third party on the request path.** It is
 the calendar year, or the year before it until **August 1**, from `settings.current_season`. The
@@ -299,6 +316,73 @@ and a limiter keyed on caller-supplied input is the S1b bug. It is an in-process
 because a DB write on an unauthenticated path is attacker-triggerable write amplification — and because
 a counter that fired on *unowned* but not on *nonexistent* would rebuild the timing oracle the single
 lookup exists to prevent.
+
+## Linking a league — how ownership is actually acquired (S4c)
+
+`api/routes.py` used to say ownership was *"written by an operator rather than inferred from a
+sign-in."* That is the line S4c deleted. Four routes, all requiring a verified token:
+
+| route | what it does |
+|---|---|
+| `GET /api/platforms/{platform}/leagues?handle=` | which leagues a handle plays in, each marked supported/unsupported **with a reason** |
+| `POST /api/connect` `{platform, handle, league_id}` | enqueues a job onto S4b's queue. Builds nothing |
+| `GET /api/connect` | the caller's job in flight, or null |
+| `GET /api/connect/{job_id}` | one job, **scoped to `requested_by`** |
+
+**The enqueue seam lives in `application/api/jobs.py`, and that is forced rather than chosen.** The
+API image contains no `application/data/` at all — `.dockerignore` excludes a bare `data` and the
+Dockerfile copies `api/` only — so a route physically cannot import `job_queue`. The producer moved
+up; `job_queue` re-exports it. **One INSERT, one NOTIFY**, asserted from the AST by `check_connect`,
+because two enqueue paths that drift is how a job lands without its wakeup.
+
+**THE OWNERSHIP ROW IS WRITTEN WHEN THE JOB REACHES `ready`, IN THE SAME TRANSACTION.** Both halves
+matter and both fail silently:
+
+- *Early* — `visible` is `demo OR (owned AND season == current)` and `build_catalog` sorts owned
+  first, and the SPA lands on `leagues[0]`. A row that exists mid-build drops the user onto their
+  own league with **every panel empty**, for the length of the build, with no error anywhere.
+- *Separately* — a crash between the grant and the `ready` leaves a job that is terminal over a
+  league nobody owns. Nothing retries a terminal job.
+
+**Consequence, and it is a requirement:** the progress screen cannot be driven by the catalog. It is
+driven by the job, which is why `GET /api/connect` exists — a mid-build refresh has to be able to
+find the job again, and a job id in browser memory does not survive a reload.
+
+**NO OWNERSHIP VERIFICATION, and it is a decision (Will, 2026-08-14).** We do not check that the
+caller holds a seat in the league they name. Anyone with a `league_id` can already read that
+league's rosters, owners and matchups straight from `api.sleeper.app` — the id is the secret and we
+are not the weak link — and Sleeper offers no OAuth and no verification primitive, so nothing
+stronger is available. Combined with invite-gated signup, that is the accepted risk. **Nor is
+`roster_id` unique per league**, deliberately: it is a *per-user display property* inside a league
+the caller can already read, two people in one league both linking it is the designed case, and
+first-claim-wins would create a griefing vector (claim a seat, lock the real owner out of their own
+highlight) that not enforcing it does not. Proven live: two accounts own one league with seats 1 and
+2, each seeing themselves.
+
+**The seat is resolved on the worker, from data it already has** — `teams_{season}.parquet` carries
+`owner_id` per `roster_id`, so the common case costs **zero** extra Sleeper calls; a co-owner falls
+back to one `/rosters` GET, which is the only thing the parquet cannot answer. **A miss is a null
+seat, and a null seat is supported, not degraded**: linking a league you hold no seat in is allowed,
+and the direct-league-id path carries no handle at all.
+
+**S4a finding F is closed by construction.** `reads.resolve_viewer`'s `MY_USERNAME` fallback now
+JOINs `league_catalog` and requires `is_mine`, so no input reaches a linked league. Measured: across
+all 33 catalog leagues the change moves **0** payloads, and it bites — in a non-`is_mine` league the
+old query highlights a stranger's roster as "you" for a handle that appears there, and the new one
+returns nothing.
+
+**Rate limiting is per USER and Postgres-backed**, both windows 60 minutes. Two budgets from two
+natural sources and no duplicated record: **connect** counts `public.jobs` itself (the job row *is*
+the thing being limited, so the counter cannot drift from it), **discovery** counts
+`public.connect_attempts` (a lookup starts no job and leaves no other trace). Both fail open — they
+are nuisance controls; the token decides admission. What discovery defends is **our egress IP**:
+throttling by Sleeper would stop onboarding for everyone, not just the abuser.
+
+**The platform dimension exists; the second implementation does not.** `jobs.platform` defaults to
+`'sleeper'`, discovery dispatches on it, the contract is `{platform, handle, league_id}`, and the
+worker rejects an unimplemented platform the same way it rejects an unknown `kind`. **Deliberately
+deferred, stated so it reads as a decision:** no `platform` on `user_leagues`, `league_catalog` or
+the 14 data tables, and no namespaced league ids. → `projects/post-v1/other-platforms.md`.
 
 ## The client seam
 

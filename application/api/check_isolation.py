@@ -278,7 +278,19 @@ def check_broken_config_is_not_a_refusal() -> None:
 
 # --- the router, and the store ---------------------------------------------------------------
 
-_EXEMPT = {"/api/me", "/api/leagues", "/api/signup"}
+_EXEMPT = {"/api/me", "/api/leagues", "/api/signup",
+           # P5/S4c's connect flow. These carry no `league_id` into a read, so `slice_params` is
+           # not the seam they need — but "not slice-gated" must not silently mean "not gated".
+           # `_AUTHENTICATED` below is their seam, and it is ASSERTED rather than asserted-in-prose:
+           # each of them must depend on `auth.current_user`, which 401s, rather than on
+           # `auth.optional_user`, which serves anonymous callers the demo.
+           "/api/connect", "/api/connect/{job_id}", "/api/platforms/{platform}/leagues"}
+
+# Every route whose protection is "you must be signed in" rather than "this league must be yours".
+# `/api/me` was always in this class; S4c adds three. Kept as its own list so that adding a route to
+# `_EXEMPT` without deciding which kind of exemption it is fails the complement check below.
+_AUTHENTICATED = {"/api/me", "/api/connect", "/api/connect/{job_id}",
+                  "/api/platforms/{platform}/leagues"}
 _GATED = {"/api/weeks", "/api/league-meta", "/api/players", "/api/players/{sleeper_id}",
           "/api/standings", "/api/teams/{roster_id}", "/api/managers/{roster_id}", "/api/league",
           "/api/positional-talent", "/api/matchups", "/api/matchups/{matchup_id}"}
@@ -288,6 +300,15 @@ def _depends_on_slice_params(dependant) -> bool:
     if getattr(dependant, "call", None) is routes.slice_params:
         return True
     return any(_depends_on_slice_params(d) for d in getattr(dependant, "dependencies", []))
+
+
+def _depends_on(dependant, fn) -> bool:
+    """Whether `fn` appears anywhere in this route's dependency tree. The same walk as above,
+    generalised in P5/S4c so the authenticated-exemption class can be asserted the same way the
+    slice-gated class already is."""
+    if getattr(dependant, "call", None) is fn:
+        return True
+    return any(_depends_on(d, fn) for d in getattr(dependant, "dependencies", []))
 
 
 def check_every_route_is_accounted_for() -> None:
@@ -314,6 +335,21 @@ def check_every_route_is_accounted_for() -> None:
         _fail(f"UNSCOPED /api routes nobody has classified: {sorted(unclassified)}")
     else:
         _ok(f"the {len(ungated)} ungated routes are all known exemptions: {sorted(ungated)}")
+
+    # An exemption is only worth having if it says WHAT protects the route instead. Every route in
+    # `_AUTHENTICATED` must actually require a token — `auth.current_user`, which 401s — and not
+    # `auth.optional_user`, which is how the reads serve anonymous callers the public demo. Getting
+    # that one import wrong on `POST /api/connect` would let anybody enqueue work onto the worker.
+    for path in sorted(_AUTHENTICATED):
+        dependants = [getattr(r, "dependant", None) for r in main.app.routes
+                      if getattr(r, "path", "") == path]
+        if not dependants:
+            _fail(f"{path} is listed as authenticated but is not on the router at all")
+        elif all(_depends_on(d, auth.current_user) for d in dependants):
+            _ok(f"{path} requires a verified token (auth.current_user)")
+        else:
+            _fail(f"{path} is exempt from the slice seam but does NOT require a token — an "
+                  "anonymous caller reaches it")
 
     params = {n for n, p in inspect.signature(routes.slice_params).parameters.items()
               if not repr(p.default).startswith("Depends")}

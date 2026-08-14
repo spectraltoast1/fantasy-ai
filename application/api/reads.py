@@ -95,21 +95,55 @@ def _params(n=None, lid=None, **extra):
 # is the kind of thing a later session calls by its name.
 
 
+# The `MY_USERNAME` fallback, CONFINED TO THE is_mine LEAGUE (P5/S4c — S4a finding F).
+#
+# The join is the fix, and it is a fix by CONSTRUCTION rather than by branch: there is no input to
+# this query that makes it match a row in a league the manifest does not mark `is_mine`, so the
+# fallback cannot be reached for a connected league however it is called. A Python `if` before the
+# query would have been equivalent today and one refactor away from not being.
+_VIEWER_BY_USERNAME = """
+SELECT t.roster_id FROM teams t
+  JOIN league_catalog c ON c.league_id = t.league_id
+ WHERE t.league_id = %(lid)s AND c.is_mine AND t.owner_name = %(me)s
+"""
+
+
 def resolve_viewer(lid, viewer_roster_id=None):
     """The "you" roster for a league (Stage-B B5). Given ``viewer_roster_id`` → that roster; else
-    resolve it from ``MY_USERNAME`` for this league exactly as today (the same teams lookup
-    ``load_league_meta`` already does) → the is_mine default. Returns an ``int`` roster_id, or None
-    when the viewer isn't in the league (→ no "me" highlight, same as today's owner-not-found).
+    the ``MY_USERNAME`` fallback, **which is now confined to the is_mine league** (P5/S4c). Returns
+    an ``int`` roster_id, or None when there is no seat → no "me" highlight.
 
-    Parity: when ``viewer_roster_id`` is None this returns today's ``my_roster_id`` (roster 8 for the
-    is_mine league = ``MY_USERNAME``'s roster), so the ``roster_id == viewer`` test yields the identical
-    isMe set as the old ``owner_name == MY_USERNAME`` test."""
+    Parity: for the is_mine league this still returns today's ``my_roster_id``, so the
+    ``roster_id == viewer`` test yields the identical isMe set as the old
+    ``owner_name == MY_USERNAME`` test.
+
+    **S4a finding F, and why the fix is the JOIN rather than a guard on the caller.** The fallback
+    used to match ``MY_USERNAME`` against ``teams.owner_name`` in ANY league. On a league somebody
+    else has just linked that is wrong in both directions: usually it matches nothing (measured: 0
+    of 211), and if the owner's Sleeper handle happens to BE an ``owner_name`` in that league, it
+    silently highlights **a stranger's roster as "you"** — with nothing anywhere checking that the
+    roster belongs to the caller.
+
+    It is a display-integrity defect inside a league the caller may already read, **not a
+    cross-user leak**, and it is not fixed by patching the symptom. The predicate is:
+
+        a connected league must NEVER resolve its seat by username fallback.
+
+    So the fallback is made structurally unreachable for one — see ``_VIEWER_BY_USERNAME``. What a
+    connected league gets instead is the seat the caller's own grant records, resolved upstream in
+    ``authorize_slice`` from ``user_leagues.roster_id``, which the worker writes at ``ready`` from
+    the requester's own platform identity. If that is null, the answer is None and there is no "you"
+    highlight — **a supported outcome, not a degraded one**: linking a league you hold no seat in is
+    allowed by design (settled with Will, 2026-08-14), so a null seat is a normal path now rather
+    than an edge case.
+
+    Behaviour-identical on the demo, which is worth stating because it is easy to assume otherwise:
+    ``DEMO-2025`` is a generated clone with ``is_mine`` false and invented owner names, so this
+    query matched nothing there before the join and matches nothing after it.
+    """
     if viewer_roster_id is not None:
         return int(viewer_roster_id)
-    rows = db.fetch_all(
-        "SELECT roster_id FROM teams WHERE league_id = %(lid)s AND owner_name = %(me)s",
-        {"lid": lid, "me": settings.my_username()},
-    )
+    rows = db.fetch_all(_VIEWER_BY_USERNAME, {"lid": lid, "me": settings.my_username()})
     return int(rows[0]["roster_id"]) if rows else None
 
 

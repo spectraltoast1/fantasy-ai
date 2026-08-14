@@ -4,6 +4,8 @@
     python3 scripts/users.py --ban someone@example.com
     python3 scripts/users.py --unban someone@example.com
 
+    application/api/.venv/bin/python scripts/users.py --delete someone@example.com
+
     application/api/.venv/bin/python scripts/users.py --list
     application/api/.venv/bin/python scripts/users.py --grant  someone@example.com 1207735666645946368
     application/api/.venv/bin/python scripts/users.py --revoke someone@example.com 1207735666645946368
@@ -30,6 +32,17 @@ What self-serve *does* create is the need to throw someone out, which an invite-
 has: with a gate, you simply never let them in. Hence `--ban`. The code is the front door; this is
 the lock after the fact, and it's also the response to a code that has spread further than
 intended (ban the accounts, rotate the code — one config change, no migration).
+
+**`--delete` is the other half, added in P5/S4c**, and the two are not interchangeable: a ban keeps
+the account and everything hanging off it, which is right for "this person must not get back in"
+and wrong for "this account should never have existed". One GoTrue call removes the row and every
+app-side table cascades — which is safe only because `auth_schema.sql` declares `ON DELETE CASCADE`
+on all four and `init_auth_schema --verify` asserts the constraint rather than assuming it.
+
+**What a grant means changed in P5/S4c.** `--grant` was operator tooling standing in for the connect
+flow; that flow now exists, so a row in `user_leagues` usually appears because somebody linked their
+own league and the worker's job reached `ready`. These commands remain the operator's override, not
+the mechanism.
 
 Lives in `scripts/` rather than `application/api/` on purpose: the Dockerfile copies the whole api
 package into the image, and admin tooling has no business being in the served image. (The API
@@ -218,6 +231,65 @@ def revoke(email: str, league_id: str) -> None:
         print(f"= {email} did not own {league_id} — nothing to revoke")
 
 
+_COUNT_ROWS = """
+SELECT (SELECT count(*) FROM public.user_leagues     WHERE user_id = %(uid)s::uuid)::int AS leagues,
+       (SELECT count(*) FROM public.jobs             WHERE requested_by = %(uid)s::uuid)::int AS jobs,
+       (SELECT count(*) FROM public.connect_attempts WHERE user_id = %(uid)s::uuid)::int AS lookups,
+       (SELECT count(*) FROM public.app_users        WHERE id = %(uid)s::uuid)::int AS profile
+"""
+
+
+def delete(email: str, *, yes: bool = False) -> None:
+    """Remove an account and everything hanging off it (P5/S4c).
+
+    **Why this exists now and not in S1b.** `--ban` was the answer while a code could spread further
+    than intended: with an invite gate you never let somebody in, so the only need was to throw them
+    out. Self-serve signup created the other need — an account that should not exist at all, an
+    address entered by mistake, somebody asking to be removed — and a ban leaves the row, the
+    profile, the grants and the job history in place.
+
+    **The delete itself is one GoTrue call, and everything else goes by CASCADE.** Every app-side
+    table that names a user declares `ON DELETE CASCADE` (`auth_schema.sql`), and
+    `init_auth_schema --verify` asserts that constraint rather than assuming it — which is what
+    makes one call safe. The counts below are printed BEFORE and verified AFTER, because a cascade
+    that silently did not fire looks exactly like a cascade that did.
+
+    Deliberately interactive by default: this is the one irreversible command in this file.
+    """
+    user = _find(email)
+    uid = user["id"]
+    try:
+        before = _db().fetch_all(_COUNT_ROWS, {"uid": uid})[0]
+    except Exception as exc:  # noqa: BLE001
+        raise SystemExit(
+            f"Could not read what {email} owns ({exc}).\n"
+            "Refusing to delete: this command reports what it removed, and it cannot do that "
+            "without counting first.") from exc
+
+    print(f"About to DELETE {email} ({uid}) and, by cascade:")
+    print(f"  {before['profile']} profile row · {before['leagues']} league grant(s) · "
+          f"{before['jobs']} job(s) · {before['lookups']} lookup record(s)")
+    if not yes:
+        if input("Type the address again to confirm: ").strip().lower() != email.lower():
+            raise SystemExit("Not deleted.")
+
+    _call(f"/admin/users/{uid}", method="DELETE")
+
+    after = _db().fetch_all(_COUNT_ROWS, {"uid": uid})[0]
+    left = {k: v for k, v in after.items() if v}
+    if left:
+        # The cascade is asserted by init_auth_schema, so this should be unreachable — which is
+        # exactly why it is worth saying loudly rather than trusting.
+        print(f"⚠ the account is gone but rows REMAIN: {left}")
+        print("  A foreign key is missing or is not ON DELETE CASCADE. Run "
+              "`init_auth_schema --verify`.")
+        raise SystemExit(1)
+    print(f"✓ deleted {email} — profile, grants, jobs and lookups all cascaded away (0 rows left)")
+    print("  Their current access token stays valid until it expires (about an hour), exactly as")
+    print("  with --ban; but it now names a user that no longer exists, so every scoped read")
+    print("  refuses and the catalog falls back to the public demo.")
+
+
 def set_ban(email: str, *, banned: bool) -> None:
     user = _find(email)
     _call(f"/admin/users/{user['id']}", method="PUT",
@@ -239,8 +311,14 @@ if __name__ == "__main__":
                     help="give an account a league, optionally with its viewer seat (idempotent)")
     ap.add_argument("--revoke", nargs=2, metavar=("EMAIL", "LEAGUE_ID"),
                     help="take a league away from an account")
+    ap.add_argument("--delete", metavar="EMAIL",
+                    help="remove an account entirely (profile, grants, jobs — all by cascade)")
+    ap.add_argument("--yes", action="store_true",
+                    help="skip --delete's confirmation prompt (for scripted runs)")
     a = ap.parse_args()
-    if a.ban:
+    if a.delete:
+        delete(a.delete, yes=a.yes)
+    elif a.ban:
         set_ban(a.ban, banned=True)
     elif a.unban:
         set_ban(a.unban, banned=False)
@@ -253,5 +331,5 @@ if __name__ == "__main__":
     elif a.list:
         list_users()
     else:
-        ap.error("one of --list, --ban EMAIL, --unban EMAIL, --grant EMAIL LEAGUE_ID, "
-                 "--revoke EMAIL LEAGUE_ID")
+        ap.error("one of --list, --ban EMAIL, --unban EMAIL, --delete EMAIL, "
+                 "--grant EMAIL LEAGUE_ID, --revoke EMAIL LEAGUE_ID")

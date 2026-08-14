@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { loadWeeks, loadLeagueMeta, loadLeagues, setActiveSlice, setAuthToken,
-         setOnAuthRejected } from './queries.js';
+         setOnAuthRejected, loadActiveConnect, loadConnectJob } from './queries.js';
 import { supabase } from './supabase.js';
 import SignIn from './SignIn.jsx';
+import ManageLeagues from './ManageLeagues.jsx';
 import { TAB_ICONS, IconChevronLeft } from './icons.jsx';
 import Placeholder from './Placeholder.jsx';
 import Players from './Players.jsx';
@@ -62,6 +63,25 @@ const sliceFrom = (lg) => ({
   panels: lg.panels,
 });
 
+// The connect job's vocabulary (P5/S4c). The server has eight states with NO per-stage semantics —
+// deliberately, so nothing downstream depends on how the pipeline is subdivided — and this is the
+// one place they become words a person reads.
+const JOB_DONE = ['ready', 'rejected', 'failed'];
+const JOB_COPY = {
+  queued: 'Waiting for a build slot',
+  validating: 'Checking the league',
+  fetching: 'Fetching from Sleeper',
+  building: 'Building your league',
+  loading: 'Almost there',
+};
+// A build is ~10s, and a worker that died mid-job is reclaimed in LEASE_SECONDS + the idle wake
+// (120 + ≤60, measured at 130s). Past this the job may still be running perfectly — so the copy
+// says exactly that rather than declaring a failure the server has not declared.
+const POLL_CEILING_MS = 6 * 60 * 1000;
+// The switcher option that opens the modal instead of selecting a league. A sentinel, not a
+// league_id: `is_league_id` requires 18-19 digits, so this can never collide with one.
+const MANAGE = '__manage__';
+
 export default function App() {
   const [tab, setTab] = useState('league');
   // Drill-downs form a stack so multi-level paths (team → player, team → dossier) get a
@@ -82,6 +102,10 @@ export default function App() {
   const [identityEpoch, setIdentityEpoch] = useState(0);  // bumps on a real identity CHANGE → refetch
   const [sessionLost, setSessionLost] = useState(false);  // our token was rejected → say so (S2c)
   const [catalogError, setCatalogError] = useState(null); // /api/leagues failed → say so, don't spin
+  const [manageOpen, setManageOpen] = useState(false);    // the "Manage Leagues" modal (P5/S4c)
+  const [job, setJob] = useState(null);                   // the connect job being followed
+  const [jobSince, setJobSince] = useState(null);          // when we started following it
+  const [catalogEpoch, setCatalogEpoch] = useState(0);     // bumps when a link finishes → refetch
   // The last user id we have SEEN, not the last one we rendered. A ref, because the subscription
   // below has `[]` deps and its closure would capture `session` as null forever. `undefined` means
   // "no auth event yet" and is distinct from `null` (signed out) on purpose — see the handler.
@@ -174,6 +198,11 @@ export default function App() {
       // above working: it depends on this branch clearing the poisoned slice.
       setActiveSlice({});
       setSlice(null);
+      // A job belongs to the person who asked for it. Leaving the banner up across a sign-out
+      // would show one identity's in-flight league to the next, which is the client-side version
+      // of exactly the bug S2b closed on the server.
+      setJob(null);
+      setManageOpen(false);
       setIdentityEpoch((n) => n + 1);
     });
     return () => sub.subscription.unsubscribe();
@@ -204,7 +233,47 @@ export default function App() {
       })
       .catch((e) => { console.error('Could not load leagues', e); setCatalogError(e); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authReady, identityEpoch]);
+  }, [authReady, identityEpoch, catalogEpoch]);
+
+  // Recover a build that is already running (P5/S4c). REQUIRED, not a nicety: the ownership row is
+  // written when the job reaches `ready`, so a league being built is deliberately absent from the
+  // catalog — which means the catalog cannot tell you anything is happening, and a job id in React
+  // state does not survive a reload. Without this, refreshing mid-build looks like nothing ever
+  // happened, and then a league appears out of nowhere ten seconds later.
+  useEffect(() => {
+    if (!authReady || !session) return;
+    let cancelled = false;
+    loadActiveConnect()
+      .then(({ job: active }) => {
+        if (!cancelled && active) { setJob(active); setJobSince(Date.now()); }
+      })
+      // A failure here costs the banner, not the app: the build carries on regardless, since it is
+      // the worker's business and not the browser's.
+      .catch((e) => console.error('Could not check for a league being linked', e));
+    return () => { cancelled = true; };
+  }, [authReady, session?.user?.id, identityEpoch]);
+
+  // Follow it. Polling rather than a socket: a build is ~10s, this is one indexed lookup on a
+  // 5-row table, and the alternative is a second always-open connection against a free-tier
+  // Postgres that STATUS already flags as a P6 concern.
+  useEffect(() => {
+    if (!job || JOB_DONE.includes(job.state)) return;
+    const id = setInterval(() => {
+      loadConnectJob(job.id)
+        .then((next) => {
+          setJob(next);
+          // `ready` is the only state that changes what the user can SEE, and this is the moment
+          // the league becomes theirs — the ownership row went in with that state, in the same
+          // transaction. Refetch the catalog and the effect above lands on leagues[0], which is
+          // owned-first, i.e. the league they just linked.
+          if (next.state === 'ready') setCatalogEpoch((n) => n + 1);
+        })
+        // A 404 here means the job is gone (or was never ours). Stop following it rather than
+        // hammering: the banner keeps its last known state, which is the honest thing to show.
+        .catch((e) => { console.error('Could not read the link job', e); setJob(null); });
+    }, 2500);
+    return () => clearInterval(id);
+  }, [job?.id, job?.state]);
 
   // League chrome (format label / record / myOwner) is real data and follows the active week AND
   // slice (the leagueId dep re-fires it on a switch even when the latest week is unchanged).
@@ -242,10 +311,25 @@ export default function App() {
 
   // A league IS a catalog entry now (P5/S2e), so switching is a straight lookup by league_id —
   // no lineage indirection, and no season to default to.
+  //
+  // P5/S4c: the switcher also carries the "Manage leagues…" entry, so this fields a sentinel that
+  // is not a league. The <select> is CONTROLLED by `slice.leagueId`, so not changing the slice is
+  // what makes it snap back on its own when the modal closes — no imperative reset needed.
   const switchLeague = (leagueId) => {
+    if (leagueId === MANAGE) { setManageOpen(true); return; }
     const lg = leagues.find((l) => l.league_id === leagueId);
     if (lg) applySlice(sliceFrom(lg));
   };
+
+  // A signed-in caller whose catalog is only the demo has linked nothing yet — the state every new
+  // member of the cohort lands in. The prompt is SECONDARY to the switcher entry (which is
+  // permanent, because linking is not a first-run step: people link mid-season, and a second
+  // league months later). Suppressed while a build is running, when the banner is saying more.
+  //
+  // "Only the demo" is `leagues.length === 1`, and that is exact rather than approximate: the
+  // catalog is `demo OR owned`, and the demo term is always satisfied (build_catalog logs loudly
+  // if it ever is not), so a single entry means the caller owns nothing.
+  const noLeaguesYet = Boolean(session) && Array.isArray(leagues) && leagues.length === 1 && !job;
 
   return (
     <div className="gr-frame">
@@ -264,11 +348,34 @@ export default function App() {
         onSignOut={signOut}
       />
       {signInOpen && <SignIn onClose={() => setSignInOpen(false)} />}
+      {manageOpen && (
+        <ManageLeagues
+          onClose={() => setManageOpen(false)}
+          onLinked={(first) => {
+            setManageOpen(false);
+            if (first) { setJob(first); setJobSince(Date.now()); }
+          }}
+        />
+      )}
       {sessionLost && (
         <SessionLost
           onSignIn={() => { track('sign_in_opened'); setSignInOpen(true); }}
           onDismiss={() => setSessionLost(false)}
         />
+      )}
+      {job && (
+        <ConnectProgress job={job} since={jobSince} onDismiss={() => setJob(null)}
+                         onManage={() => setManageOpen(true)} />
+      )}
+      {noLeaguesYet && !signInOpen && !manageOpen && (
+        <div className="gr-notice" role="status">
+          <span className="gr-notice-text">
+            You haven&rsquo;t linked a league yet — this is the public demo.
+          </span>
+          <button className="gr-notice-action" onClick={() => setManageOpen(true)}>
+            Link a league
+          </button>
+        </div>
       )}
       <main className="gr-main">
         {catalogError ? (
@@ -374,7 +481,8 @@ function TopBar({ tab, onTab, weeks, asOfWeek, onWeek, league, leagues, slice, o
         Gridiron
       </div>
 
-      <LeagueSwitcher league={league} leagues={leagues} slice={slice} onLeague={onLeague} />
+      <LeagueSwitcher league={league} leagues={leagues} slice={slice} onLeague={onLeague}
+                      canManage={Boolean(session)} />
 
       <nav className="gr-tabs">
         {TABS.map((t) => {
@@ -424,6 +532,65 @@ function SessionLost({ onSignIn, onDismiss }) {
   );
 }
 
+// The connect job, as one line of chrome (P5/S4c).
+//
+// A BANNER, not a modal, and SessionLost's comment above is the precedent: the app underneath is
+// working — on the demo — and a modal would claim otherwise. It also lets the user close the
+// Manage Leagues dialog and carry on while their league builds, which is the honest shape for
+// something that takes ten seconds and is not theirs to supervise.
+//
+// THE REJECT PATH HAS TO REACH A HUMAN, and S5 owns the polished version of that. Until then the
+// screen shows whatever words the refusal already carries. Honest, not polished — the same
+// standing rule the empty panels follow — because the alternative is a spinner that never
+// resolves over a job that ended ten minutes ago.
+function ConnectProgress({ job, since, onDismiss, onManage }) {
+  const stale = since && Date.now() - since > POLL_CEILING_MS;
+
+  if (job.state === 'ready') {
+    return (
+      <div className="gr-notice" role="status">
+        <span className="gr-notice-text">
+          Your league is linked and ready.
+        </span>
+        <button className="gr-notice-close" onClick={onDismiss} aria-label="Dismiss">×</button>
+      </div>
+    );
+  }
+
+  if (job.state === 'rejected' || job.state === 'failed') {
+    const retryable = job.state === 'failed';
+    return (
+      <div className="gr-notice" role="status">
+        <span className="gr-notice-text">
+          {retryable ? 'Something went wrong linking that league.'
+                     : 'We can’t link that league.'}
+          {job.error ? <> <span className="gr-notice-why">{job.error}</span></> : null}
+        </span>
+        <button className="gr-notice-action" onClick={onManage}>
+          {retryable ? 'Try again' : 'Link another'}
+        </button>
+        <button className="gr-notice-close" onClick={onDismiss} aria-label="Dismiss">×</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="gr-notice" role="status">
+      <span className="gr-notice-text">
+        {JOB_COPY[job.state] || 'Linking your league'}
+        {'… '}
+        <span className="gr-notice-why">
+          {stale
+            ? 'This is taking longer than usual — it’s still running, and the league will appear '
+              + 'when it’s done.'
+            : 'You can keep browsing; we’ll switch you over when it’s ready.'}
+        </span>
+      </span>
+      <button className="gr-notice-close" onClick={onDismiss} aria-label="Dismiss">×</button>
+    </div>
+  );
+}
+
 // The top-right identity slot (P5/S1). Signed OUT it is exactly what it has always been — the
 // avatar derived from the demo league's owner — plus a way in; the logged-out view is
 // unchanged by design. Signed IN the avatar becomes the REAL account rather than the demo
@@ -455,7 +622,12 @@ function Account({ session, league, onSignIn, onSignOut }) {
 // first, the demo last, from /api/leagues), leading the derived format label (team count ·
 // scoring · QB structure) + the user's record, all real. Keyed on `league_id` since P5/S2e: the
 // catalog is flat, so a league is an entry rather than a lineage with seasons under it.
-function LeagueSwitcher({ league, leagues, slice, onLeague }) {
+// P5/S4c hangs "Manage leagues…" off the same control, because that is where somebody looks when
+// they want a league that is not in the list. It is PERMANENT, not a first-run wizard: people link
+// mid-season and link a second league months later, and nothing should hide the option once they
+// have one. Selecting it opens the modal without touching the slice, and because the <select> is
+// controlled by `slice.leagueId`, it snaps back by itself.
+function LeagueSwitcher({ league, leagues, slice, onLeague, canManage }) {
   return (
     <div className="gr-league">
       {leagues && slice ? (
@@ -469,6 +641,8 @@ function LeagueSwitcher({ league, leagues, slice, onLeague }) {
               {l.name}
             </option>
           ))}
+          {canManage && <option disabled>──────────</option>}
+          {canManage && <option value={MANAGE}>Manage leagues…</option>}
         </select>
       ) : (
         <span className="gr-league-name">{slice?.name ?? 'My League'}</span>

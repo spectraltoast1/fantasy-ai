@@ -1,4 +1,4 @@
-"""Rate limiting for the signup endpoint (P5/S1b).
+"""Rate limiting for the signup endpoint (P5/S1b) and the connect flow (P5/S4c).
 
 **What it is actually defending.** The access code is chosen to be sayable out loud — Will texts
 it — so it is low-entropy by construction. This limiter is what makes that safe: brute-force
@@ -19,13 +19,30 @@ allowed rather than refused: this is a *nuisance* control, not an authorization 
 access code is what actually decides admission. Failing closed would turn a database hiccup into
 "nobody can sign in", which is a worse outcome than a brief unmetered window. That reasoning does
 NOT extend to the code check in `signup.py`, which fails closed.
+
+**P5/S4c adds two more budgets, and they are a DIFFERENT SHAPE — say why rather than copying.**
+The signup limits key on an address and an IP because the caller is anonymous. The connect limits
+key on the **authenticated user**, which the caller cannot choose at all, so none of S1b's careful
+reasoning about a stranger spending somebody else's allowance applies. And what they defend is not
+an email budget:
+
+- **Connect** protects **worker minutes** — one job is ~10s of a stateful singleton that every
+  other user's league is queued behind. Counted from `public.jobs` itself, because the job row IS
+  the thing being limited and a counter kept beside it could drift from it.
+- **Discovery** protects **our egress IP**. Each lookup is two GETs against api.sleeper.app, and
+  getting throttled there stops onboarding for EVERYONE, not just the abuser — a shared-fate
+  resource, which is what earns a limit on an endpoint that already requires a token. It has no
+  natural record of its own, so `connect_attempts` is that record.
+
+Both stay Postgres-backed for the scale-to-zero reason above, and both fail OPEN for the reason
+above: they are nuisance controls, and the token is what decides admission.
 """
 
 from __future__ import annotations
 
 from fastapi import HTTPException, Request
 
-from application.api import db
+from application.api import db, jobs
 
 # Per identity, per window. Deliberately generous for humans and useless for a brute-forcer:
 # a person mistypes a code two or three times, nobody legitimately submits fifteen in an hour.
@@ -125,5 +142,71 @@ def record(request: Request, email: str | None, *, ok: bool) -> None:
     """
     try:
         db.execute(_RECORD, {"email": email, "ip": client_ip(request), "ok": ok})
+    except Exception:      # noqa: BLE001
+        pass
+
+
+# --- The connect flow (P5/S4c) ----------------------------------------------------------------
+# Deliberately generous for humans and useless for a script. A person links one to four leagues,
+# and each link is preceded by one or two lookups; nobody legitimately asks for ten builds or
+# thirty lookups in an hour. Both windows match the signup window so there is one number to
+# remember when somebody reports being locked out.
+_CONNECT_WINDOW_MINUTES = 60
+_MAX_CONNECTS_PER_USER = 10        # ~100s of a stateful-singleton worker, at S0's measured 10s
+_MAX_DISCOVERIES_PER_USER = 30     # = 60 Sleeper GETs/hour/account
+
+_RECORD_DISCOVERY = "INSERT INTO public.connect_attempts (user_id) VALUES (%(uid)s::uuid)"
+
+_DISCOVERY_COUNT = """
+SELECT count(*)::int AS n FROM public.connect_attempts
+ WHERE user_id = %(uid)s::uuid AND at > now() - (%(mins)s || ' minutes')::interval
+"""
+
+
+def _too_many_connects(what: str, mins: int) -> HTTPException:
+    """Unlike `_too_many`, this one SAYS which limit was hit — and the difference is not an
+    inconsistency. The signup message is uniform because *which* limit an anonymous caller tripped
+    is itself a signal about what else has been tried from that address. Here the caller is
+    authenticated and is being told about their own budget, so there is nothing to leak and a
+    person who cannot tell "too many lookups" from "too many links" cannot act on either."""
+    return HTTPException(status_code=429, detail=f"Too many {what}. Try again in an hour.",
+                         headers={"Retry-After": str(mins * 60)})
+
+
+def enforce_connect(user_id) -> None:
+    """Raise 429 if this account has asked for too many builds. Counted from `public.jobs`.
+
+    Fails OPEN, like everything else in this module: an unreachable database means the enqueue
+    that follows is about to fail anyway, and refusing here would replace a clear error with a
+    misleading one.
+    """
+    try:
+        n = jobs.recent_job_count(user_id, minutes=_CONNECT_WINDOW_MINUTES)
+    except Exception:      # noqa: BLE001 — fail OPEN; see the module docstring
+        return
+    if n >= _MAX_CONNECTS_PER_USER:
+        raise _too_many_connects("leagues linked recently", _CONNECT_WINDOW_MINUTES)
+
+
+def enforce_discovery(user_id) -> None:
+    """Raise 429 if this account has run too many platform lookups. Counted from `connect_attempts`."""
+    try:
+        n = db.fetch_all(_DISCOVERY_COUNT,
+                         {"uid": str(user_id), "mins": _CONNECT_WINDOW_MINUTES})[0]["n"] or 0
+    except Exception:      # noqa: BLE001 — fail OPEN
+        return
+    if n >= _MAX_DISCOVERIES_PER_USER:
+        raise _too_many_connects("league lookups", _CONNECT_WINDOW_MINUTES)
+
+
+def record_discovery(user_id) -> None:
+    """Log a lookup. Never raises — a failure to record must not fail the request.
+
+    Recorded BEFORE the Sleeper calls, not after: the cost this is metering is the outbound call
+    itself, so a lookup that times out must still spend its budget. Recording on success only would
+    make the slowest, most expensive lookups the free ones.
+    """
+    try:
+        db.execute(_RECORD_DISCOVERY, {"uid": str(user_id)})
     except Exception:      # noqa: BLE001
         pass

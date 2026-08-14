@@ -133,7 +133,10 @@ re-backfill — the annual pipeline's job.
 `/health` · `/health/db` · `/api/weeks` · `/api/league-meta` · `/api/players` · `/api/players/{id}` ·
 `/api/standings` · `/api/teams/{id}` · `/api/managers/{id}` · `/api/league` · `/api/positional-talent` ·
 `/api/matchups` · `/api/matchups/{id}` · `/api/leagues` (catalog) · `/api/me` (identity) ·
-`POST /api/signup`. **Read-only apart from those two** — there is no data write/ingest surface.
+`POST /api/signup` · and, since **P5/S4c**, the connect flow:
+`GET /api/platforms/{platform}/leagues` · `POST /api/connect` · `GET /api/connect` ·
+`GET /api/connect/{job_id}`. **There is still no data write/ingest surface** — `POST /api/connect`
+writes a row to `public.jobs` and nothing else; the worker does the building.
 Every read takes an optional `?league_id=`(+`?season=`+`?viewer_roster_id=`)
 via the `slice_params` dependency, **defaulting to `DEMO_LEAGUE_ID`** as of P5/S2a — previously it fell
 through `MY_USERNAME` to whichever league the owner's Sleeper credentials named, which made an anonymous
@@ -150,8 +153,19 @@ write*: it validates the access code, creates the account and sends a magic link
 email against `public.signup_attempts`. **`/api/leagues` takes `auth.optional_user`** (P5/S2a) — no
 `Authorization` header is *anonymous*, a present-but-invalid token is *401*, an unreachable verifier is
 *503*; degrading a bad token to anonymous would make a broken verifier, a botched key rotation and a forged
-token all look like an ordinary visit. The eleven per-panel reads are deliberately still **open**; scoping
-them is P5/S2b.
+token all look like an ordinary visit. (The eleven per-panel reads were open until **P5/S2b closed them** —
+they all authorize at `slice_params` now, as the paragraph above says.)
+
+**The connect flow's four routes all require a token** (`auth.current_user`), and they are exempt from
+`slice_params` because they carry no league into a read — an exemption `check_isolation` now *asserts*
+rather than notes, by requiring each of them to depend on `current_user` and not `optional_user`.
+`POST /api/connect` enqueues onto the **S4b job queue** through `api/jobs.py`, which is where the enqueue
+seam lives **because the API image contains no `application/data/`** (`.dockerignore` excludes a bare
+`data`; the Dockerfile copies `api/` only), so a route cannot import `job_queue` — `job_queue` re-exports
+it instead, one INSERT. `GET /api/connect/{job_id}` is scoped to `requested_by` and answers a job that is
+not yours with the byte-identical 404 a nonexistent one gets. **The ownership row is written by the worker
+when the job reaches `ready`, in the same transaction** — never at enqueue, or the caller lands on their
+own league with every panel empty for the length of the build. → *appendix: auth, "Linking a league"*.
 
 **Two gates, two questions.** `readiness.jsx` answers *"is there enough data yet"* (`Gate` + the `BANDS`
 ladder, keyed to **`weeksOfData`** — weeks with real RESULTS as of the viewed week, from `/api/weeks`'s

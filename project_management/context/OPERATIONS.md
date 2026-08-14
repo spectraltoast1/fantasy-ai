@@ -68,6 +68,47 @@ bundle can survive a deploy (see `PM_SESSION_STARTUP.md`); trust `/api/*` JSON a
   then re-run the seed below. Until you do, the worker declines leagues on that scoring key — which
   is the point: a loud stop beats silently serving numbers built from a recipe nobody approved.
 
+- **Users link their own leagues now — you do not enqueue anything by hand (P5/S4c).** The normal path
+  is a signed-in person opening **"Manage leagues…"** in the league switcher, typing their Sleeper
+  handle, and picking. `scripts/users.py --grant` still works and is now an **override**, not the
+  mechanism. Three things worth knowing when somebody reports a problem:
+  - **"I linked it and nothing happened."** The league is only theirs once the job reaches `ready`
+    — read the job, not the catalog: `SELECT state, error FROM public.jobs WHERE requested_by = …`.
+    Until then it is *deliberately* absent from their catalog, so "it's not in my list" is the
+    expected mid-build state.
+  - **"It says my league isn't supported."** That grey-out is **advisory** — it mirrors
+    `assert_in_scope` and the reception tiers with a 2026 substrate, and it is deliberately
+    incomplete. The authority is the worker, which refuses with a reason in `jobs.error`.
+  - **`--delete` now exists** alongside `--ban`: a ban keeps the account and its grants, deletion
+    removes both plus the job history, by cascade. Use `--yes` to skip the confirmation.
+
+- **Removing someone entirely:**
+  ```
+  application/api/.venv/bin/python scripts/users.py --delete someone@example.com
+  ```
+
+- **Running the connect flow locally** needs two things a bare `npm run dev` does not give you.
+  (1) The SPA's Supabase config is a Vite **BUILD ARG**, inlined at build time — without it the
+  bundle ships with sign-in disabled, and the whole connect flow is authenticated. (2) A season the
+  test league is actually in: production derives 2026, and `visible` is
+  `demo OR (owned AND season == current)`, so a 2025 league builds perfectly and is then invisible to
+  whoever linked it. This is the command (`.claude/` is **gitignored**, so a launch-config copy of it
+  does not survive a worktree):
+  ```
+  application/api/.venv/bin/python -c "import os; from application.api import settings; os.environ.update(VITE_SUPABASE_URL=settings.supabase_url(), VITE_SUPABASE_PUBLISHABLE_KEY=settings.supabase_publishable_key(), CURRENT_SEASON='2025'); os.execv('/opt/homebrew/bin/npm', ['npm','--prefix','application/frontend','run','dev:full'])"
+  ```
+  It reads only the URL and the **publishable** key — both public by design and already in every
+  shipped bundle; the secret key is never touched. `/health` reports `season_source: env` with a
+  warning for as long as the override is set, which is what stops that process being mistaken for
+  production. **Do not use a shell `eval "$(…)"` for the exports:** a subshell that cannot `getcwd`
+  fails silently, leaving the vars unset and sign-in mysteriously disabled (hit in P5/S4c).
+
+- **`check_queue --live` shares its table with the live worker, and can lose the race (P5/S4c).**
+  The worker leases a throwaway row within ~0.1s of the INSERT, runs the onboarder against an id that
+  is not Sleeper-shaped, and buries it. Those legs now report **UNEVALUATED** rather than a failure —
+  nothing is broken, the gate simply does not own the queue it is testing. To evaluate them, stop the
+  worker (`fly machines stop -a fantasy-ai-worker`), re-run, and start it again.
+
 - **The worker runs a QUEUE now, not `sleep infinity` (P5/S4b).** `Dockerfile.worker`'s CMD is
   `python -m application.data.serve.worker_loop`. It waits on Postgres `LISTEN jobs_new` with a
   **60s safety-net poll**, leases one job at a time and runs the onboarder. **To give it work you

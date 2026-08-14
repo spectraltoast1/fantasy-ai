@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import contextlib
 import inspect
 import sys
 import textwrap
@@ -56,6 +57,63 @@ def _ok(msg: str) -> None:
 def _fail(msg: str) -> None:
     print(f"  ✗ {msg}")
     _results.append(False)
+
+
+# UNKNOWN IS NOT PASS, AND IT IS NOT FAILURE EITHER (P5/S4c).
+#
+# **The problem this exists for, found by S4c and pre-dating it:** this gate writes throwaway rows
+# into the SAME `public.jobs` table the LIVE `fantasy-ai-worker` is draining. Since S4b deployed the
+# leasing loop, that worker is permanently listening — measured 2026-08-14, it leased a throwaway
+# row **0.12s** after the INSERT (the NOTIFY, not the poll), ran `onboard_league` against a league id
+# that is not Sleeper-shaped, got a 404 and buried the row as `failed`. Legs (c) and (e) below then
+# found their row already gone and reported a FAILURE — of the queue, which was in fact working
+# perfectly. The gate was measuring the one thing it cannot control.
+#
+# The two red lines were therefore describing the instrument, not the mechanism, and reporting them
+# as failures is exactly the inversion this project keeps naming: a result that says something is
+# broken when nothing is, next door to the more usual one that says something works when it was
+# never tried.
+#
+# So a leg whose row was taken by a real worker is reported as **UNEVALUATED**. It is not a pass —
+# it must not be counted as one and the summary says how many there were — and it is not a failure,
+# because nothing failed.
+#
+# **The stronger fix, deliberately deferred and recorded so it is a decision:** run legs (c)-(g) on
+# ONE connection inside a transaction that is never committed, so the rows are never visible to any
+# other session and no worker can reach them. `now()` is fixed inside a transaction, but every
+# expiry here is set RELATIVE to `now()`, so the reclaim and reap semantics survive unchanged. That
+# is a rewrite of a working gate rather than a guard on it, and it belongs to a session that owns
+# this file.
+_unevaluated: list[str] = []
+
+
+def _unknown(msg: str) -> None:
+    print(f"  ??  {msg}")
+    _unevaluated.append(msg)
+
+
+# The worker names this gate leases under. Anything else holding one of our rows is a real machine
+# (`worker_loop._worker_id` returns a Fly machine id), which is the signal we are looking for.
+_GATE_WORKERS = {"gate", "gate-A", "gate-B", "gate-dead", "gate-live", "gate-deploying"}
+
+
+def _taken_by_a_real_worker(conn, job_id) -> str | None:
+    """Evidence that the LIVE worker got this throwaway row first, or None. Positive evidence only.
+
+    Two independent tells, because either alone can be raced past: a `leased_by` that is not one of
+    ours, and an `error` mentioning the Sleeper call only a real executor makes — this gate drives
+    `_run_job` with fake executors and never touches the network.
+    """
+    row = _state(conn, job_id)
+    if row is None:
+        return "the row is gone from the table entirely"
+    by = row.get("leased_by")
+    if by and by not in _GATE_WORKERS:
+        return f"leased_by={by!r}, which is not one of this gate's names"
+    err = (row.get("error") or "")
+    if "sleeper.app" in err.lower():
+        return f"a real executor ran it against Sleeper — error={err[:90]!r}"
+    return None
 
 
 # --- leg 1: the shape, offline ------------------------------------------------------------------
@@ -177,9 +235,13 @@ def check_live() -> None:
             cur.execute("UPDATE public.jobs SET lease_expires_at = now() - interval '1 second' "
                         "WHERE id = %(id)s", {"id": c_job["id"]})
         again = q.lease(main, worker="gate-live")
-        if again and again["id"] == c_job["id"] and again["attempts"] == held["attempts"] + 1:
+        if again and held and again["id"] == c_job["id"] and again["attempts"] == held["attempts"] + 1:
             _ok(f"an EXPIRED lease is reclaimed by another worker (attempts "
                 f"{held['attempts']} → {again['attempts']}), leased_by now {again['leased_by']!r}")
+        elif (stolen := _taken_by_a_real_worker(main, c_job["id"])):
+            _unknown(f"RECLAIM could not be evaluated — the LIVE worker leased this throwaway row "
+                     f"first ({stolen}). Nothing is broken; this gate simply does not own the queue "
+                     f"it is testing. See `_unknown`.")
         else:
             _fail(f"expired lease was not reclaimed cleanly: {again}")
 
@@ -206,6 +268,9 @@ def check_live() -> None:
         row = _state(main, c_job["id"])
         if any(b["id"] == c_job["id"] for b in buried) and row["state"] == "failed" and row["error"]:
             _ok(f"reap buries an abandoned job as `failed`, and it says why: {row['error'][:70]}…")
+        elif (stolen := _taken_by_a_real_worker(main, c_job["id"])):
+            _unknown(f"REAP could not be evaluated — the LIVE worker had already finished this "
+                     f"throwaway row ({stolen}), so there was no abandoned job left to bury.")
         else:
             _fail(f"reap left the job at {row['state']!r} error={row['error']!r} — a stuck job "
                   "would sit in a running-looking state for ever")
@@ -275,10 +340,21 @@ def check_live() -> None:
 
 class _FakeConn:
     """Enough of a connection for the classification legs. They never reach SQL — every job_queue
-    call is recorded instead — which is the point: what a refusal MEANS is not a database question."""
+    call is recorded instead — which is the point: what a refusal MEANS is not a database question.
+
+    P5/S4c gave it a `transaction()`, because the success path now wraps the grant and the `finish`
+    in one. A no-op is faithful here: these legs assert WHICH terminal state a job lands in, and
+    that the two statements are atomic is asserted from the AST in `check_connect`, where it can be
+    proven rather than simulated.
+    """
+
+    @contextlib.contextmanager
+    def transaction(self):
+        yield self
 
 
-def _drive(kind: str, boom: BaseException | None):
+def _drive(kind: str, boom: BaseException | None, *, platform: str | None = None,
+           requested_by: str | None = None):
     """Run `_run_job` against a fake executor and return the (state, error) it landed on."""
     landed: dict = {}
 
@@ -289,13 +365,18 @@ def _drive(kind: str, boom: BaseException | None):
     def fake_executor(_conn, _job, _worker):
         if boom is not None:
             raise boom
+        return None                      # the seat; None is the no-handle path
+
+    job = {"id": "j1", "kind": kind, "league_id": "L", "season": 2025, "attempts": 1,
+           "state": "validating", "requested_by": requested_by}
+    if platform is not None:
+        job["platform"] = platform
 
     saved_finish, saved_execs = wl.q.finish, wl._EXECUTORS
     wl.q.finish = fake_finish
     wl._EXECUTORS = {"onboard": fake_executor}
     try:
-        wl._run_job(_FakeConn(), {"id": "j1", "kind": kind, "league_id": "L", "season": 2025,
-                                  "attempts": 1, "state": "validating"}, "gate")
+        wl._run_job(_FakeConn(), job, "gate")
     finally:
         wl.q.finish, wl._EXECUTORS = saved_finish, saved_execs
     return landed.get("state"), landed.get("error")
@@ -338,6 +419,22 @@ def check_classification() -> None:
 
     # The `kind` column's proof. It exists for S4d's refresh jobs, and a column whose only unusable
     # value crashes the process is worse than no column.
+    # The `platform` column's proof, and it is the SAME argument one dimension over (P5/S4c). The
+    # column exists so a second source can arrive; until one does, a worker that cannot run it must
+    # say so rather than pointing the Sleeper chain at a Yahoo league id. `POST /api/connect`
+    # already refuses at the front door, so this is the second of two — a hand-inserted row is the
+    # only way here, and it must not crash the loop either.
+    state, err = _drive("onboard", None, platform="yahoo")
+    if state == "rejected" and err and "unknown platform" in err:
+        _ok("an UNKNOWN platform lands `rejected` cleanly, naming what this worker implements")
+    else:
+        _fail(f"an unknown platform landed {state!r} err={err!r} — a Yahoo league id would have "
+              "been run through the Sleeper chain")
+
+    state, _ = _drive("onboard", None, platform="sleeper")
+    _ok("an explicit platform='sleeper' still runs") if state == "ready" else _fail(
+        f"platform='sleeper' landed {state!r} — the guard is refusing the one platform it has")
+
     state, err = _drive("weekly_refresh", None)
     if state == "rejected" and err and "unknown job kind" in err:
         _ok("an UNKNOWN kind lands `rejected` cleanly — the loop survives a job it cannot run")
@@ -385,11 +482,22 @@ def main() -> int:
 
     failed = _results.count(False)
     print()
+    # Printed BEFORE the verdict and unconditionally, so a green line can never be read as full
+    # coverage. Silence here means every leg was actually evaluated.
+    if _unevaluated:
+        print(f"⚠ {len(_unevaluated)} leg(s) UNEVALUATED — neither a pass nor a failure. The live "
+              f"`fantasy-ai-worker` drains the same queue this gate writes to, so it can take a "
+              f"throwaway row before the gate does. To evaluate them, stop the worker "
+              f"(`fly machines stop -a fantasy-ai-worker`), re-run, and start it again.")
+        for u in _unevaluated:
+            print(f"    · {u.splitlines()[0]}")
+        print()
     if failed:
         print(f"FAILED — {failed} of {len(_results)} assertions")
         return 1
-    print(f"ALL GREEN — {len(_results)}/{len(_results)} assertions — work reaches the worker, "
-          "exactly once, and a dead worker's league comes back.")
+    print(f"ALL GREEN — {len(_results)}/{len(_results)} assertions"
+          + (f" ({len(_unevaluated)} unevaluated)" if _unevaluated else "")
+          + " — work reaches the worker, exactly once, and a dead worker's league comes back.")
     return 0
 
 

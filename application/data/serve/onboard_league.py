@@ -407,6 +407,55 @@ def build_catalog_row(lid: str, season: int, scoring_key: str, summary: dict,
     }], schema=dl.read_demo_manifest().schema)
 
 
+# --- the caller's seat ----------------------------------------------------------------------------
+
+def resolve_seat(lid: str, season: int, owner_id: str | None) -> int | None:
+    """Which roster in this league belongs to `owner_id` — the "you" highlight (P5/S4c).
+
+    **The brief for this session said `_roster_for_owner(rosters, owner_id)` costs no extra Sleeper
+    call because "the worker fetches rosters anyway". It does not RETAIN them.** `fetch_teams` reads
+    `/league/{id}/rosters` transiently for a name lookup and persists only `teams_{year}.parquet`;
+    and on a `resume` or `reonboard` run the fetch stage is skipped entirely, so there is no rosters
+    payload in memory at all. Calling it directly would mean a fresh GET on every job.
+
+    **The genuinely zero-call path is that parquet**, which already carries `owner_id` per
+    `roster_id` — persisted since Session 3a precisely because it is the identity join key. So:
+
+    1. the teams parquet — no network, and it answers for every league's primary owners;
+    2. failing that, ONE `/rosters` GET through `sleeper._roster_for_owner`, which is the only
+       thing that covers **co-owners** (the parquet records `owner_id` alone, so a co-owner's seat
+       is simply not in it).
+
+    **A miss is not an error.** Nobody has to hold a seat in a league they linked — the direct
+    league-id path carries no handle at all, and that is a supported way to use this (settled with
+    Will, 2026-08-14: there is no ownership verification, so "I can see this league" and "I play in
+    it" are deliberately different questions). A null seat renders as no "you" highlight, which is
+    exactly what `reads.resolve_viewer` now produces for a connected league.
+    """
+    if not owner_id:
+        return None
+    owner = str(owner_id)
+
+    try:
+        teams = dl.read_sleeper_teams(season, league_id=lid)
+        if "owner_id" in teams.columns:
+            hit = teams.filter(pl.col("owner_id").cast(pl.Utf8) == owner)
+            if hit.height:
+                return int(hit["roster_id"][0])
+    except Exception as exc:      # noqa: BLE001 — an unreadable parquet falls through to the GET
+        print(f"  seat: teams parquet unusable ({type(exc).__name__}: {exc}) — asking Sleeper")
+
+    try:
+        rosters = sleeper._get_json(f"{sleeper._SLEEPER_BASE}/league/{lid}/rosters") or []
+    except Exception as exc:      # noqa: BLE001 — a seat is not worth failing a built league over
+        print(f"  seat: could not read rosters ({type(exc).__name__}: {exc}) — no seat recorded")
+        return None
+    rid = sleeper._roster_for_owner(rosters, owner)
+    if rid is not None:
+        print(f"  seat: resolved roster {rid} as a CO-OWNER (one extra Sleeper call)")
+    return int(rid) if rid is not None else None
+
+
 # --- the entry point ------------------------------------------------------------------------------
 
 def assert_in_scope(lid: str, summary: dict) -> None:
