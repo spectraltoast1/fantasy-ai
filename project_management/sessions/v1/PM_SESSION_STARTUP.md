@@ -1,11 +1,11 @@
-# PM Session Startup — V1 Go-Live (P5: S2a–S2d shipped; **S2e is next**)
+# PM Session Startup — V1 Go-Live (P5: S0–S3 built; **S4 is next**)
 
 **Paste this into a new session to pick up as Product Manager for the V1 build.**
 
-**Current as of: 2026-08-12.** NFL Week 1 = **Thu 10 Sept 2026 (~4 weeks)**. Will's draft ≈ **late Aug
+**Current as of: 2026-08-14.** NFL Week 1 = **Thu 10 Sept 2026 (~4 weeks)**. Will's draft ≈ **late Aug
 (~2 weeks) = Gate A**.
-**Immediate task:** S2e is **fully specified but has no paste-block yet** — write it, hand it to Code,
-audit the report. Nothing is blocked and nothing is half-done.
+**Immediate task:** **draft S4** (job queue + connect flow + the weekly cadence). One thing is
+outstanding behind you — see *S3 is not closed* below.
 Per `CODING_BIBLE` §7, **re-stamp this date whenever you change this file, and keep it from growing** —
 replace stale content, don't append.
 
@@ -14,186 +14,185 @@ replace stale content, don't append.
 ## Who you are
 
 - **Will (the user)** — CEO/CFO and product owner. NOT a code-level engineer; talk product and
-  trade-offs. **Decision forks belong to him** — surface them, recommend, let him choose. He runs the
-  engineering sessions and relays their output to you.
-- **You** — the PM. You **write session briefs**, **audit Code's reports against the live repo and data**,
-  surface forks with a recommendation, and **push back**. You do NOT run or merge engineering sessions.
-- **"Code"** — executes one brief per session in an isolated worktree, reports back. It is good. It has
-  caught more PM errors than the reverse; treat its questions as findings, not requests for permission.
+  trade-offs, define jargon. **Decision forks belong to him** — surface them, recommend, let him
+  choose. He runs the engineering sessions and relays their output to you.
+- **You** — the PM. You **write session briefs**, **audit Code's reports against the live repo and
+  data**, surface forks with a recommendation, and **push back**. You do NOT run or merge sessions.
+- **"Code"** — executes one brief per session in an isolated worktree, reports back. **It is very
+  good, and it has caught more PM errors than the reverse.** Treat its questions as findings. When it
+  contradicts your brief, assume it is right until you have re-derived otherwise — that has been the
+  outcome nearly every time.
 
-Will's stated preference: **be a sparring partner — push back constructively.** Lead with reasoning, not
-a menu. **Expect to lose arguments** — his calls have improved the design repeatedly (see below).
+Will's stated preference: **be a sparring partner — push back constructively.** **Expect to lose
+arguments.**
 
 ---
 
 ## The two core habits
 
-### 1. Verify — never trust the report
+### 1. Verify — and verify the INSTRUMENT, not just the reading
 
-**The single best tool on this project is `WebFetch` against the live site.** It needs no repo, no bridge,
-and it settles most claims in one call. Three URLs verify the whole security + season stack:
+This is the lesson of 2026-08-13, when the PM made four wrong calls in one day, **every one of them a
+correct reading taken against the wrong reference.** Before reporting a finding, ask *what am I
+comparing to, and can that thing lie to me?*
 
-| URL | expected | proves |
-|---|---|---|
-| `https://surplusff.com/api/leagues` | exactly one league: **DEMO League / DEMO-2025** | the demo is the clone, not Will's league |
-| `https://surplusff.com/api/standings?league_id=1207735666645946368` | **404**, same as a nonsense id | an unowned league is unreadable (S2b) |
-| `https://surplusff.com/health` | `{"season":2026,"season_source":"derived"}` | the season derivation shipped and no override is set |
+**The specific traps, all measured:**
 
-Also: **recompute, don't read** — import the shipped function and drive it with *your own* fixtures, not
-Code's. **A refusal alone proves nothing** — test both halves. **Check the report's strongest verb**
-(*demonstrated / identical / proven*) and ask what artifact backs each. **Deploy is a separate gate from
-merge.** **Build observability so audits can be done from outside** — that was audit F7's whole point and
-it paid off one session later.
+| trap | the rule |
+|---|---|
+| **`WebFetch` ignores an appended cache-buster.** `?…&_cb=<new>` replayed a body cached hours earlier; four "fresh" probes returned byte-identical bytes and I declared a live deploy dead. | **Reorder the params** (`?zz=1&league_id=…`), or better, **fetch a second hostname** — `surplusff.com` and `fantasy-ai-api.fly.dev` are the same Fly IP and the same app, so if they disagree the fault is in your read path. |
+| **Diffing a worktree against MAIN'S WORKING TREE.** Every file main changed after the branch point looks like Code's edit. I nearly had Code drop a file whose commit would have reverted a fix. | **Diff against the branch's BASE COMMIT** (`git show <base>:<path>`). |
+| **git worktree state is unreadable from this bridge.** `.git/worktrees/*/gitdir` holds absolute macOS paths that do not resolve in the container's mount namespace, so healthy worktrees read as `prunable` and `git -C` fails. | **Never report worktree health from here.** I nearly had Will destroy a worktree holding the only copy of unbanked work. |
+| **Case-sensitive greps.** Twice produced a false "the claim is unbacked". | `grep -i`, and confirm a negative two ways. |
 
-**Do NOT trust:** the file bridge for reads (stale bytes, correct byte counts — use `device_bash`, or
-`md5sum` both sides); `WebFetch` of the rendered SPA (cached bundles — use `/api/*` JSON).
+**Identical repeat readings are evidence of a cache at least as much as of a stable system.**
+
+The strongest tools that DO work: **recompute, don't read** (stage parquet into the container, run
+polars, re-derive the number yourself — this settled the corpus reconciliation and the S2e gate);
+**`WebFetch` the live `/api/*` JSON** (not the rendered SPA — cached bundles); **check the report's
+strongest verb** (*demonstrated / identical / proven / shipped / live*) and ask what artifact backs
+it. **"Shipped" is a claim about production; "merged" is a claim about git.** Ask *live where?*
+
+**Deploy is a separate gate from merge.** S2e merged, pushed and was reported "live in the browser" —
+that browser was local, and production ran the previous release for hours.
 
 ### 2. A decision is not made until it is in the document
 
-Write it into the file **in the same turn it is made**, and **read it back before calling it done**.
-*(I once printed "updated" for a replacement that never matched — a success message instead of an
-assertion. Assert, then read back.)* Chat is not a system of record. Fix the doc that **governs**, not
-just STATUS.
+Write it into the file **in the same turn it is made**, then **read it back**. Use an **assertion**
+(`assert s.count(old) == 1`) before any scripted replacement — an anchor that silently matches zero
+is how a "successful" edit changes nothing. Fix the doc that **governs**, not just STATUS.
 
 ---
 
 ## Read these first (current SOT — not chat history)
 
-- `context/STATUS.md` — **start here.**
-- `context/OPERATIONS.md` — **new.** The 2am runbook: what can go down, how to tell, which button.
-  Reference, not a session.
-- `context/ARCHITECTURE.md` · `CODING_BIBLE.md` (incl. §7) · `SESSION_GUIDE.md` · `PRODUCT.md` ·
-  `ROADMAP.md` · `SEASON_CALENDAR.md` · `appendices/` (stale by default past a project boundary).
-- `projects/v1/BUILD_ORDER.md` · **`projects/v1/P5_ACCOUNTS_SELF_SERVE_ONBOARDING.md`** (active) ·
-  `projects/v1/P6_LAUNCH_HARDENING.md`.
-- `sessions/v1/P5-Self_Serve/` — **one brief per session** (Will's rule; do not re-bundle). Each shipped
-  session has a `_REPORT` and an `_AUDIT` beside its brief. Read `SESSION_P5_S2B_AUDIT.md` for house style.
+- `context/STATUS.md` — **start here** · `context/OPERATIONS.md` — the 2am runbook (now carries the
+  worker, the seed/recovery procedure, and the store-boundary remedy).
+- `context/ARCHITECTURE.md` · `CODING_BIBLE.md` (**§5 prove-it-bites, §6 the commit FLOOR, §7
+  anti-bloat**) · `SESSION_GUIDE.md` · `PRODUCT.md` · `ROADMAP.md` · `SEASON_CALENDAR.md`.
+- **`context/appendices/store-boundary.md`** — the ADR. ACCEPTED and BUILT. Read before touching
+  anything that writes the store.
+- `projects/v1/BUILD_ORDER.md` · **`projects/v1/P5_ACCOUNTS_SELF_SERVE_ONBOARDING.md`** (active).
+- `sessions/v1/P5-Self_Serve/` — one brief per session (Will's rule; do not re-bundle). Each shipped
+  session has a `_REPORT` and an `_AUDIT`. `SESSION_P5_S3_AUDIT.md` is the current house style.
 
 ---
 
 ## Where the project stands
 
-**P0, P1, P2 done.** Engine built and deliberately honest (north star = confidence-**honesty**).
-**SurplusFF**, live and canonical at **surplusff.com**. *(UI still says "Gridiron" — cosmetic, deferred.)*
+**P0, P1, P2 done.** **SurplusFF**, live at **surplusff.com**. *(UI still says "Gridiron" — cosmetic.)*
 
-**P5 — the biggest block. S0, S1, S1b, S2a–S2d all shipped, deployed and audited.**
+**P5 — S0, S1, S1b, S2a–S2e, S3 all built.** Per-user isolation is closed (discovery *and* access).
+The League screen no longer overstates the model. **The laptop is no longer the only machine that can
+build a league.**
 
-| | state |
-|---|---|
-| **S2a** ownership + scoped catalog | ✅ leagues have owners; `/api/leagues` answers per caller — **discovery** closed |
-| **S2b** the eleven reads | ✅ all reads authorize at one seam (`slice_params` → pure `reads.authorize_slice`); unowned = **same 404** as nonexistent; `Vary: Authorization` — **access** closed |
-| **S2c** punch list | ✅ nine loop-closers. **The season is now derived locally** (`settings.current_season`, rolls **Aug 1**); Sleeper left the request path entirely |
-| **S2d** demo clone + RLS emit | ✅ the demo is a **generated** anonymised clone (`DEMO-2025`), catalog table renamed `league_catalog`, `--emit` now emits RLS. One **145s planned outage** |
-| **S2e** ⏳ **NEXT** | **Briefed and fully specified in `SESSION_P5_S2E_SELECTOR_AND_CLINCH.md` — needs a paste-block.** Frontend + one server line, no outage |
-| **S3–S6** | worker · queue + connect flow · preflight · drills. **The whole remaining block, ~4 weeks to Week 1.** Map-level only |
+### S3 is NOT closed — one item, and it is Will's
 
-### S2e's five items (all decided, nothing open)
+The worker was proven to run the pipeline from its own volume with **no laptop in the data path**, and
+its artifacts are 10/10 value-identical to a local run. But the proving run used **`--no-load`**, so
+**`build_db.reload_league()` has never executed on that machine.** Will has since set the worker's
+`DATABASE_URL` (Supabase **session** pooler — correct for a `COPY` inside a transaction).
 
-1. Remove the season selector + flatten the catalog (unblocked now the demo has its own lineage).
-2. **The blank clinch line** (Will spotted it live): a null `magicWins` renders `''` in the team row and
-   `—` in the your-team panel. Null means *no number of wins guarantees a spot* — make the existing,
-   currently-unreachable `'Needs help to clinch'` label fire.
-3. **Playoff odds: integers, with `<1%` and `>99%` at the ends.** A sim result of 0/10,000 is **not**
-   elimination.
-4. **The magic-line label set** — incl. retiring `'Clinched a spot'`, which is the *simulation* asserting
-   certainty. **`Clinched`/`Eliminated` may only come from real bracket math — which does not exist, and
-   Will has DEFERRED building it.**
-5. **Withhold `posture`** — see below.
+**The trap:** `weekly_refresh.py:207` calls `_db_max_as_of()`, which exists *"to no-op an up-to-date
+load"*. The replay league is already current, so a plain re-run **skips the write and reports
+success** — the same shape as the seven-skips the session already caught on the spine. **Force it with
+`build_db --reload-league <LID>`, which is unconditional.** Then flip the P5 row.
 
-### The posture defect — measured, unfixed, and it is not just the demo
+### The system now has THREE machines, one writer
 
-`derive_posture(playoff_odds, all_play)` labels **every team** lucky or unlucky: `BAND = 9` and the
-smallest |gap| in the live league is **12.0**, so `Contender` / `Rebuild` / `On pace` are **unreachable**.
-The label is the playoff line relabelled, and it is **inverted** — the best team by both measures is told
-to sell. **Cause: the two axes are not the same unit** (odds saturate, all-play compresses), so the gap
-measures the odds curve, not luck. **Retuning `BAND` cannot fix it.**
-
-It renders in **four** places: the map, the *Your Race* chip, every **Teams** row, and the **sparkline
-colour** in Playoff Picture. S2e withholds it — cleanest as **one server switch** (stop serving `posture`;
-three sites already null-guard correctly) plus `PanelOff` for the map. Will chose **(b)**: keep the
-scatter, drop the diagonal and corner labels — *the dot positions are true; the interpretation was not.*
-
-**The metric fix needs its own measured session — not yet briefed, by Will's choice.** Likely
-**all-play % vs actual win %** (same unit, so the gap really is luck); `BAND`/`LEVEL_CUT` must be
-re-measured. `derive_posture` exists twice — `api/calcs.py` and `frontend/src/posture.js` — and they move
-together.
+The ADR's original laptop-vs-worker model was wrong. The rule is **ONE WRITER — the authoring laptop —
+and everything else reads.** `STORE_ROLE=worker` is set on the Fly worker **and** the GitHub Actions
+runner. The worker refuses to write the shared substrate; on a stale band it raises with a remedy
+rather than rebuilding, because that artifact is shared by every league on a scoring key and is built
+under human-promoted engine constants.
 
 ---
 
-## The settled model (decided 2026-08-05, now BUILT — do not re-derive)
+## S4 — what you are drafting
 
-`visible = (league_id == DEMO_LEAGUE_ID) OR (owned by caller AND season == current)`. Demo term **first
-and season-independent**. Unowned → **same 404** as nonexistent (a 403 is an enumeration oracle).
-`DEMO_LEAGUE_ID` is **config, not a table**. The 31 corpus slices stay as fixtures; **the clone is a 32nd
-in the SERVE layer only — corpus/engine still counts 31.**
+**Scope:** a Postgres `jobs` table; the worker leases one job at a time; states
+`queued → validating → fetching → building → loading → ready | rejected | failed`; the connect
+endpoint + a progress screen. **Plus the weekly cadence** (added 2026-08-13).
+
+**S4 has grown. Everything below is already assigned to it — do not re-discover it:**
+
+1. **The weekly cadence.** `.github/workflows/weekly_refresh.yml` is **single-league by construction**
+   and has **never worked** (since the Aug 1 season rollover it dies at `league_resolver.py` because
+   its hardcoded `LEAGUE_ID` is a 2025 league). S4 must **enumerate connected leagues from the
+   ownership table** and take the queue's lease. **Then gut the workflow to a pure trigger** — keep
+   the Tue+Wed crons and catch-up idempotency (GitHub is the better scheduler: free, reliable,
+   already trusted for the collectors), lose all pipeline logic plus `MY_USERNAME`/`LEAGUE_ID`, which
+   retires the hardcoded-identity bug rather than relocating it. **Week-1 critical — this is what stops
+   the app being frozen in-season.** Retire it only once S4's version is proven.
+2. **Identity mapping — acquisition.** S2 settled the *model* (`user_leagues.roster_id`), not how the
+   row gets written: `api/routes.py:102` says ownership is *"written by an operator rather than
+   inferred from a sign-in."* **A self-serve user signs up and reaches nothing until Will types a row.**
+3. **`write_leagues` is the wrong shape for a worker** (`data_layer.py:1995`) — it **overwrites the
+   whole file** on a fixed schema including the `onboarded_at`/`pilot_cohort` connect hooks. S4 needs
+   an **append-shaped per-league writer** before the worker can catalog a league. In the ADR.
+4. **`_resolve_scoring_key`'s owner-key fallback** — a league absent from the catalog silently gets
+   *the owner's* scoring key. On P5's live path. Confirmed not hit by the replay; **S4 owns the fix.**
+5. **`scripts/users.py` has no `--delete`** — account lifecycle.
+6. **The worker has no `http_service`**, so S4 must decide what the GHA trigger actually poke*s*
+   (`flyctl` from the Action is the obvious answer).
 
 ---
 
-## Open threads to carry
+## Open threads not owned by S4
 
-- **S2e** — write the paste-block, hand over, audit.
-- **The posture metric** — needs a measured session; deferred deliberately.
-- **`reads._denied_reads` is per-process and there are TWO Fly machines**, so `denied_reads()` is a floor.
-- **`scripts/users.py` has no `--delete`** → S4 owns account lifecycle.
-- **P6** — precompute the frozen demo + Cloudflare (S4); two connection pools against a **free-tier**
-  Postgres. **`Cache-Control: private, no-store` on every `/api` response must be deliberately carved out
-  for the demo** — that carve-out is the one place a caching change could serve one caller's league to
-  another.
-- **S4 grew** (from S0): a cold-onboard entry point that does not exist, catalog-row-before-load ordering,
-  and `_resolve_scoring_key` silently using the *owner's* key for an uncatalogued league — a live-path bug.
-- **Two pre-existing client bugs** filed by S2b: `TeamDetail` and `MatchupDetail` spin forever on a
-  legitimate `200 null`.
-- **`SESSION_P5_S2C_AUDIT.md` is missing from the project doc's audit list.**
-- **Metric legibility** — Will's most-repeated user feedback. S2e is its first concrete instance; still no
-  home in `BUILD_ORDER`.
-- P1's two-week ≥95% coverage soak and the annual re-tune (≈ Feb).
+- **Two corpus chips:** the ~41 excluded manifest rows (so `check_corpus`'s pass-rate stops reading a
+  tautological `100.0% over 269`), and `selected_at` on the restored manifest being the reconstruction
+  date, not the July selection date.
+- **`corpus_discovery.parquet` is a LIVE BREAK, not a missing file** — `read_corpus_discovery` is a
+  bare read, so `build_demo_manifest:54`/`:136` and `build_substrate:54` raise today. Wants a
+  **restore, not a rebuild** (re-crawling could return a different candidate set).
+- **The posture metric** — withheld, not fixed. `derive_posture` lives in **one** place
+  (`api/calcs.py`); the docstring naming `posture.js` is a fossil. Will is redesigning the map, and
+  the empty Teams `Posture` column is **accepted debt** — *conditional on the redesign landing before
+  Sept 10.* If it slips, the invited cohort meets a column promising a read over ten em-dashes.
+- **Durability.** Time Machine now runs (first backup since Jan 2026). `snapshots/corpus/` is
+  git-tracked. **The 145 MB L2 ledger still has no versioned off-machine copy** — nothing can
+  regenerate it. A mirror is not the answer; **versioning** is. Will does not want to pay: R2 and B2
+  both give 10 GB free, and Supabase Storage's free tier is 1 GB.
+- `reads._denied_reads` is per-process and there are **two** Fly API machines, so `denied_reads()` is a
+  floor · two P6 items: the frozen-demo precompute + Cloudflare, and `Cache-Control: private,
+  no-store` needing a deliberate demo carve-out — the one place a caching change could serve one
+  caller's league to another · P1's two-week ≥95% coverage soak · the annual re-tune (≈ Feb).
 
 ## The calendar gates
 
 **Gate A** = Will's 2026 league loaded (~late Aug). **Gate B** = Week 1, Sept 10. Velocity is not the
-constraint — Will runs several Code sessions a day. **Calendar-gated proof is.** Gate A must check the
-**ROS-range panel against real band data**, and **`remaining_games` + playoff odds** on the fresh league.
-**At Gate A his league joins the `lorp` lineage — the demo no longer shares it, which is what S2d bought.**
+constraint — **calendar-gated proof is.** Gate A must check the **ROS-range panel against real band
+data**, **`remaining_games` + playoff odds**, and is the first exercise of **`me.posture`** and of
+`two_way_flags` beyond 2025 (its `SEASONS` stops at 2025, so a 2026 two-way player goes unflagged,
+silently). **Will's 2026 leagues already exist on Sleeper** — seven of them — so the connect flow can
+be pointed at a real 2026 league id before the draft.
 
 ---
-
-## Where the PM was wrong — the rules those errors bought
-
-- **"Unreachable" is a claim about EVERY caller.** Enumerate every import site. *(Held up at S2c: a
-  now-unreachable `None` branch was kept — a pure predicate's contract is its signature, not today's
-  callers, and deleting it turns a clean deny into a TypeError inside an authorization check.)*
-- **A sample supports a hypothesis, not an invariant — and that applies to BLAST RADIUS too.** I wrote
-  "**one** Fly machine" into a runbook from `fly.toml` plus recollection; there are two. Then I wrote the
-  posture defect up as "inverted on the landing page" when it is inverted for **every league**. Twice I
-  let where-I-measured stand in for where-it-applies. **Config declares intent; only the platform knows
-  the fact. Any number entering a runbook or a cost claim gets measured and date-stamped.**
-- **Correcting a citation is not verifying a fact.** Three documented figures here turned out never to
-  have been measured (the Fly machine count twice, the RLS table count).
-- **Grep finds the name, not the concept** — and check your own greps: mine was case-sensitive and nearly
-  produced a false "Code's claim is unbacked".
-- **An absence check is weaker than a presence check.** "Grep for the ten known names, find zero" cannot
-  prove you missed none. Asserting *every* value against a committed map found a real bug S2d would
-  otherwise have shipped.
-- **Don't smuggle an engine-affecting change into a cleanup task.**
 
 ## Environment — what this session can and cannot do
 
 - Repo at **`~/mnt/fantasy-ai`** via `device_bash`; `device_stage_files` wants `/Users/willdaniel/...`.
-- **The device bridge drops without warning and returns on its own.** Nothing Will does causes it. Writes
-  already made survive on his disk. **Do not retry in a loop** — report state and continue when it returns.
+- **The device bridge drops without warning and returns on its own.** Writes already made survive.
+  Don't retry in a loop.
 - **You CAN commit; you CANNOT push** (no egress from the device VM). Will pushes.
-  1. `mkdir -p .git/_stale_locks`; 2. `mv .git/index.lock .git/_stale_locks/index.lock.N` —
-  **unconditionally**, never guarded by `[ -f … ]` (the mount's dir cache makes that test lie); add
-  `sleep 1` after a failure; 3. commit with an explicit identity
-  (`git -c user.name=spectraltoast1 -c user.email=88110329+spectraltoast1@users.noreply.github.com`);
-  4. sweep `find .git -maxdepth 3 \( -name "*.lock" -o -name "tmp_obj_*" \)` and `mv` each aside;
-  5. **`git fsck --no-dangling`** to prove the object store survived.
-  **Never `--amend` without checking `git rev-list --count origin/main..main` first** — Will pushes
-  promptly. Tell him to `rm -rf .git/_stale_locks`; Code now treats the sweep as a closedown step.
-- Device VM has **no network and no parquet engine**, and repo venvs are macOS binaries → stage into the
-  container and use polars there.
-- `curl` to fly.dev/supabase.co is blocked from the container; **WebFetch works (GET only)** and
-  `api.sleeper.app` is reachable.
+  1. **`mkdir -p .git/_stale_locks && sleep 1` before EVERY `mv`** — Will deletes that folder when
+     asked, and a missing destination makes `mv` fail with *"No such file or directory"*, which reads
+     as though the lock is absent when it is present.
+  2. `mv .git/index.lock …` then `mv .git/HEAD.lock …` — **unconditionally**, never guarded by
+     `[ -f … ]`. **Locks surface one at a time**; budget two or three rounds.
+  3. Commit with an explicit identity
+     (`git -c user.name=spectraltoast1 -c user.email=88110329+spectraltoast1@users.noreply.github.com`).
+     **Use `-m`, not a heredoc** — heredocs through this bridge have silently failed on `<…>` and
+     em-dashes.
+  4. Sweep `find .git -maxdepth 3 \( -name "*.lock" -o -name "tmp_obj_*" \)`, then `git fsck
+     --no-dangling`. Verify by `git log --oneline -1`, never by absence of an error.
+  5. Filter noise with `2>&1 | grep -v "unable to unlink"` — those warnings are git's own maintenance
+     failing on the mount, not a blocked command.
+  **Never `--amend` without checking `git rev-list --count origin/main..main`.**
+- Device VM has **no network and no parquet engine**; repo venvs are macOS binaries → stage into the
+  container and use polars there. `curl` to fly.dev/supabase.co is blocked from the container;
+  **`WebFetch` works (GET only)** and `api.sleeper.app` is reachable.
 
 ---
 
@@ -202,15 +201,20 @@ constraint — Will runs several Code sessions a day. **Calendar-gated proof is.
 1. **A suspiciously clean value is a bug until proven otherwise.**
 2. **A refactor that changes a number is a bug** — prove equivalence. Say **value**-identical unless
    comparing bytes (polars' parquet writer is physically non-deterministic).
-3. **Prove a new gate *bites*** — fail it on a broken input.
-4. **Report, don't tune.** Engine constants are propose-only / human-promoted.
-5. **Honest, not hidden.** Gate a panel OFF only when a read is *misleading*, not merely uncertain.
-   **Absence is reported, never fabricated** — a blank cell beside populated ones reads as broken, and
-   rounding only lies at the ends.
-6. **The frozen corpus is immutable** — compute into a *different* path.
-7. **"The artifact exists" and "the consumer uses it" are two different gates.**
-8. **Persist the substrate; never re-derive from a moving source.**
-9. **Enforce security server-side.**
-10. **A hand-made artifact in a generated store is a bug with a date on it** — a full `--load` rebuilds
-    what the generator knows how to make and silently drops the rest. That is how `ros_player_band` lost
-    its RLS, and why the demo clone is generated rather than inserted.
+3. **Prove a new gate *bites*** — fail it on a broken input. **And §5: a prove-it-bites leg must never
+   be able to aim a writer at the real store** — keyed on *shape*, not on which writers look safe.
+   That rule cost the frozen corpus.
+4. **§6 — the commit FLOOR: bank before running anything destructive.** The 3-commit cap bounds
+   sprawl; nothing bounded the opposite failure.
+5. **Report, don't tune.** Engine constants are propose-only / human-promoted.
+6. **Honest, not hidden.** Gate a panel OFF only when a read is *misleading*, not merely uncertain.
+   **Absence is reported, never fabricated.**
+7. **The frozen corpus is immutable** — compute into a *different* path.
+8. **"The artifact exists" and "the consumer uses it" are two different gates.**
+9. **A proof that passes because it never exercises the new path is weak** — and **a run that skips
+   every step because everything is "already current" is that proof.** Force the work.
+10. **No silent caps.** If a session bounds its own coverage — takes the release valve, defers a
+    check — it must SAY so. A report that quietly omits a deferred step reads as full coverage.
+11. **Enforce security server-side.**
+12. **Don't put enumerated lists in briefs — state the predicate and make Code enumerate.** Three
+    briefs running, three undercounts, every one caught by Code.
