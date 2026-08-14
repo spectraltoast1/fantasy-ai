@@ -18,7 +18,8 @@ replace stale content, don't append.
   trade-offs, define jargon. **Decision forks belong to him** — surface them, recommend, let him
   choose. He runs the engineering sessions and relays their output to you.
 - **You** — the PM. You **write session briefs**, **audit Code's reports against the live repo and
-  data**, surface forks with a recommendation, and **push back**. You do NOT run or merge sessions.
+  data**, surface forks with a recommendation, and **push back**. You do NOT run or merge sessions,
+  and **you do not commit or push — see Environment.** You write files; Will banks them.
 - **"Code"** — executes one brief per session in an isolated worktree, reports back. **It is very
   good, and it has caught more PM errors than the reverse.** Treat its questions as findings. When it
   contradicts your brief, assume it is right until you have re-derived otherwise — that has been the
@@ -219,21 +220,51 @@ be pointed at a real 2026 league id before the draft.
 - Repo at **`~/mnt/fantasy-ai`** via `device_bash`; `device_stage_files` wants `/Users/willdaniel/...`.
 - **The device bridge drops without warning and returns on its own.** Writes already made survive.
   Don't retry in a loop.
-- **You CAN commit; you CANNOT push** (no egress from the device VM). Will pushes.
-  1. **`mkdir -p .git/_stale_locks && sleep 1` before EVERY `mv`** — Will deletes that folder when
-     asked, and a missing destination makes `mv` fail with *"No such file or directory"*, which reads
-     as though the lock is absent when it is present.
+- **THE PM NEVER COMMITS AND NEVER PUSHES (Will, 2026-08-14). This supersedes the earlier
+  "you CAN commit" rule — do not follow older docs or memory that say otherwise.**
+  - **Code commits its own work** in its worktree, per `SESSION_GUIDE.md`.
+  - **Will commits PM work** — briefs, reports, audits, doc edits. Leave the tree dirty and **tell him
+    exactly which paths are waiting**, using `git status -sb`.
+  - **Will alone pushes.** (The device VM has no egress anyway, but the rule is a choice, not a limit.)
+  - **Write files, then stop.** The reliable path is: stage → edit in the container → `SendUserFile` →
+    `device_commit_files`. That puts the file on his disk; git is his.
+- **PREFIX EVERY GIT CALL WITH `GIT_OPTIONAL_LOCKS=0`. This is not optional and it is the actual fix.**
+  **Established by experiment 2026-08-14:** any git command run over the device mount that touches the
+  index leaves a **0-byte `.git/index.lock`** behind — **including read-only `git status`**, which
+  opportunistically refreshes the index and then fails to unlink on this mount. That stale lock is what
+  kills **Will's** next commit from VS Code with *"Another git process seems to be running."*
+
+  | over the mount | leaves a lock? |
+  |---|---|
+  | `git status -s` | **YES** |
+  | `git commit` | **YES** — which is why locks appear *after* a successful commit |
+  | `git log` / `git show` / `git diff <a> <b>` | no — they never touch the index |
+  | **`GIT_OPTIONAL_LOCKS=0 git status -s`** | **NO** — clean, and clean after repeated runs |
+
+  **Prefer `git log` / `git diff <commit> <commit>` over `git status` wherever either answers the
+  question.** Not committing removes the biggest source, but it does **not** close this on its own —
+  the PM's own verification habit reproduces it.
+- **You MAY still clear a stale `.git` lock — that is unblocking, not committing.** It is the one git
+  operation the PM should perform, and Will will ask for it. **Will can simply `rm` them from his own
+  terminal**, which is faster; the PM cannot delete over this mount (*Operation not permitted*), which
+  is the only reason the `mv`-into-a-folder crutch exists at all.
+  1. **`mkdir -p .git/_stale_locks && sleep 1` before EVERY `mv`.** That folder is the **destination**
+     the lock is moved INTO — it is not the lock. Will has deleted it twice, reasonably, because the
+     name reads like the problem. A missing destination makes `mv` fail with *"No such file or
+     directory"*, **which reads as "the lock is gone" and means the opposite.** Say this to him
+     plainly or it recurs.
   2. `mv .git/index.lock …` then `mv .git/HEAD.lock …` — **unconditionally**, never guarded by
-     `[ -f … ]`. **Locks surface one at a time**; budget two or three rounds.
-  3. Commit with an explicit identity
-     (`git -c user.name=spectraltoast1 -c user.email=88110329+spectraltoast1@users.noreply.github.com`).
-     **Use `-m`, not a heredoc** — heredocs through this bridge have silently failed on `<…>` and
-     em-dashes.
-  4. Sweep `find .git -maxdepth 3 \( -name "*.lock" -o -name "tmp_obj_*" \)`, then `git fsck
-     --no-dangling`. Verify by `git log --oneline -1`, never by absence of an error.
-  5. Filter noise with `2>&1 | grep -v "unable to unlink"` — those warnings are git's own maintenance
-     failing on the mount, not a blocked command.
-  **Never `--amend` without checking `git rev-list --count origin/main..main`.**
+     `[ -f … ]`. **Locks surface one at a time**; budget two or three rounds. `mv` rather than `rm`
+     because `device_bash` cannot delete (*Operation not permitted* on the mount). **Will can `rm`
+     them directly from his own terminal, which is simpler for him.**
+  3. **Locks REAPPEAR after a commit succeeds** — observed 2026-08-14: HEAD moved, `fsck` clean, and a
+     fresh `index.lock` **and** `HEAD.lock` were sitting there immediately after. It is git's own
+     post-commit maintenance failing to unlink on this mount, so **every commit leaves the next git
+     operation blocked.** That is why it keeps recurring rather than staying fixed. Sweep *after*, not
+     just before. **`.git/objects/maintenance.lock` is normal — leave it, it blocks nothing.**
+  4. Verify with `git log --oneline -1` and `git status -sb`, never by the absence of an error. Filter
+     noise with `2>&1 | grep -v "unable to unlink"` — those are git's maintenance, not a blocked
+     command.
 - Device VM has **no network and no parquet engine**; repo venvs are macOS binaries → stage into the
   container and use polars there. `curl` to fly.dev/supabase.co is blocked from the container;
   **`WebFetch` works (GET only)** and `api.sleeper.app` is reachable.
