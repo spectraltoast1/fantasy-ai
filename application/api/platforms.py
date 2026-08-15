@@ -73,6 +73,46 @@ _SUPPORTED_REC = {1.0: "PPR", 0.5: "half-PPR"}
 _REC_TOL = 1e-6
 
 
+# Sleeper's league `status`: the lifecycle, not the format. `pre_draft` and `drafting` mean NO
+# ROSTERS EXIST YET; `in_season` / `post_season` / `complete` all mean the league is playable.
+# Absence is treated as playable rather than refused — unlike `settings.type`, where absence is
+# refused — because a missing lifecycle field is a Sleeper-side omission about a league that
+# demonstrably exists, while a missing type genuinely does not tell us whether it is redraft.
+_NOT_STARTED = {"pre_draft": "the draft hasn't happened yet",
+                "drafting": "the draft is still in progress"}
+
+
+def league_has_started(league: dict) -> tuple[bool, str | None]:
+    """``(started, reason)`` — has this league drafted, i.e. do rosters exist? (P5/S4d)
+
+    **ONE predicate, two callers, deliberately.** It lives here, beside `classify`, because
+    `application/api/` is the half BOTH images have: the API serves it, and the worker imports it
+    (`worker_loop.py` already does `from application.api import jobs, platforms`, and reads
+    `platforms.IMPLEMENTED` for exactly this kind of scope refusal). The reverse import is
+    forbidden and gated — `check_connect`'s ONE IMAGE leg fails on any `application.data` import
+    under `api/` — so a shared rule has to travel in this direction. Same move as `jobs.enqueue`.
+
+    - On the **API** it is advisory: `classify` greys the league out with the reason.
+    - On the **WORKER** it is authoritative: `onboard_league.assert_in_scope` refuses. That is the
+      one that has to be right, because `POST /api/connect` with a pasted league id runs no
+      classification at all.
+
+    **It costs nothing to call.** `sleeper.league_summary()` already returns `status` and `onboard()`
+    already calls it immediately before `assert_in_scope`, so the worker is reading a key on a dict
+    it is holding. Discovery likewise gets it in the same response that carries `scoring_settings`.
+
+    **Do NOT confuse this with "zero completed weeks."** Before Week 1 every league has zero
+    completed weeks, so refusing on that would refuse the entire cohort; a DRAFTED preseason league
+    is the designed path (rosters + projections, actuals zero-filled). This asks only whether
+    rosters exist at all — see `onboard_league.run_chain`'s zero-week refusal for the other question.
+
+    **P5/S4f replaces the BRANCH, not this predicate**: it holds a not-yet-started league as
+    `pending` instead of refusing it. Keep this pure so that swap stays a one-line change.
+    """
+    reason = _NOT_STARTED.get((league.get("status") or "").strip().lower())
+    return (reason is None), reason
+
+
 class PlatformUnsupported(Exception):
     """Asked for a platform with no implementation behind it."""
 
@@ -141,6 +181,10 @@ def classify(league: dict, *, season: int, current_season: int) -> tuple[bool, s
       league on its scoring key and `run_chain` refuses it in as many words.
     - **not the current season** → `reads.visible`'s owned term. A prior-season league would build
       and then be invisible to the person who linked it, which is the worst kind of success.
+    - **not drafted yet** → `league_has_started`, the SAME function `assert_in_scope` refuses on.
+      Checked LAST, because it is the only one of the four that is temporary: a `pre_draft` league
+      becomes linkable on its own, while a dynasty league never does, and the more durable reason
+      is the more useful one to show. (P5/S4f turns this branch into a *pending* hold.)
 
     **Deliberately NOT judged here: roster shape.** 1QB and superflex are both in scope, K/DEF/IDP
     slots are ignored by a skill-positions-only engine rather than fatal to it, and greying out a
@@ -167,6 +211,10 @@ def classify(league: dict, *, season: int, current_season: int) -> tuple[bool, s
     if rec_val is None or not any(abs(rec_val - v) < _REC_TOL for v in _SUPPORTED_REC):
         label = "standard scoring (no PPR)" if rec_val == 0.0 else "custom scoring"
         return False, f"{label} — this build supports PPR and half-PPR"
+
+    started, why = league_has_started(league)
+    if not started:
+        return False, f"{why} — link it once your season is under way"
     return True, None
 
 

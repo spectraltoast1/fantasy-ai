@@ -347,6 +347,18 @@ def check_scope_marker() -> None:
         ("rec absent (= standard)", _lg(scoring_settings={}), _CUR, False),
         ("custom rec", _lg(scoring_settings={"rec": 1.5}), _CUR, False),
         ("prior season", _lg(), _CUR - 1, False),
+        # P5/S4d — the LIFECYCLE rule. Both halves, because a rule that only ever refuses would
+        # pass a refusal-only test while greying out the entire cohort. `in_season` is the half
+        # that matters on 10 Sept; `pre_draft` is the league Will actually clicked.
+        ("pre_draft", _lg(status="pre_draft"), _CUR, False),
+        ("drafting", _lg(status="drafting"), _CUR, False),
+        ("in_season", _lg(status="in_season"), _CUR, True),
+        ("post_season", _lg(status="post_season"), _CUR, True),
+        ("complete", _lg(status="complete"), _CUR, True),
+        # Absence is PLAYABLE here — the opposite of `settings.type`, and deliberately so: a missing
+        # lifecycle field is a Sleeper omission about a league that demonstrably exists, while a
+        # missing type genuinely does not say whether it is redraft.
+        ("status absent", _lg(), _CUR, True),
     ]
     for label, lg, season, want in cases:
         got, reason = platforms.classify(lg, season=season, current_season=_CUR)
@@ -367,6 +379,26 @@ def check_scope_marker() -> None:
         _ok("the dual-mode input discriminates by the store's own 18-19-digit rule")
     else:
         _fail("is_league_id disagrees with data_layer's snowflake rule")
+
+    # ONE PREDICATE, not two agreeing copies (P5/S4d). The advisory grey-out and the authoritative
+    # worker refusal must be the SAME function, or they drift and the button starts disagreeing
+    # with what the worker does. Read from the AST, never imported: `onboard_league` needs polars
+    # and this gate runs in the API venv, which deliberately has none.
+    #
+    # Asserted on the CALL, not on the name appearing in the file — `check_connect` has been burnt
+    # twice by assertions that matched a docstring describing the code rather than the code.
+    _authority = _REPO / "application/data/serve/onboard_league.py"
+    _fn = next((n for n in ast.walk(ast.parse(_authority.read_text()))
+                if isinstance(n, ast.FunctionDef) and n.name == "assert_in_scope"), None)
+    _calls = {ast.unparse(n.func) for n in ast.walk(_fn) if isinstance(n, ast.Call)} if _fn else set()
+    if "platforms.league_has_started" in _calls:
+        _ok("assert_in_scope (the AUTHORITY) calls the same platforms.league_has_started the "
+            "advisory marker uses — one predicate, two callers")
+    else:
+        _fail("onboard_league.assert_in_scope does not call platforms.league_has_started — the "
+              "worker refusal and the greyed button are now two rules that can disagree. A pasted "
+              "league id reaches the worker with no classification at all, so the worker is the "
+              "half that must be right.")
 
 
 # --- prove it bites ---------------------------------------------------------------------------

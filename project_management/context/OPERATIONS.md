@@ -126,10 +126,42 @@ bundle can survive a deploy (see `PM_SESSION_STARTUP.md`); trust `/api/*` JSON a
   back by itself: measured 2026-08-14, 130s from a SIGKILL to the retry starting** (the 120s lease
   plus up to the 60s idle wake), with Fly restarting the process on its own. After `attempts` hits
   **3** the job is reaped into `failed` with the reason in `error`. `rejected` means a deliberate
-  refusal — out of scope, wrong season, unknown `kind` — and **retrying will not help**; the reason
-  is in `error`. The worker's failure mode is still "leagues stop being built", never "the site is
-  off". **A half-built league is not a failure mode this can produce:** `load_league` is one
-  transaction and runs last, so Postgres holds the whole league or the previous state, never a gap.
+  refusal — out of scope, wrong season, not yet drafted, played no weeks, unknown `kind` — and
+  **retrying will not help**; the reason is in `error`. The worker's failure mode is still "leagues
+  stop being built", never "the site is off". **A half-built league is not a failure mode this can
+  produce:** `load_league` is one transaction and runs last, so Postgres holds the whole league or
+  the previous state, never a gap.
+
+- **The weekly cadence (P5/S4d) — Tue + Wed 15:00 UTC, GitHub Actions.** The Action no longer runs
+  the pipeline; it runs `python -m application.api.enqueue_refresh`, which puts one
+  `kind='refresh'` job per connected league on the queue and lets the worker execute it. Run it by
+  hand from the Actions tab (`workflow_dispatch`), and **`dry_run` enumerates against the real
+  database and enqueues nothing** — the safe way to ask "what would tonight do?".
+
+  **Reading a week's cadence from the `jobs` table alone** — the point being that you never have to
+  open the worker's logs to know what happened:
+
+  | what you see | what it means |
+  |---|---|
+  | a `kind='refresh'` row in `ready` with `finished_at` | it ran and succeeded |
+  | **no row at all for that cycle** | **it did not run** — check the Actions tab, not the worker |
+  | `failed` | it crashed and exhausted its retries; the reason is in `error` |
+  | `rejected` | a deliberate refusal; retrying will not help |
+
+  **A no-op is the CORRECT outcome for the Wednesday run**, and it is not the same thing as a
+  failure: `enqueue_refresh` skips any league that already has a non-terminal job and prints that
+  count *separately*, exiting 0. A catch-up cron that alarmed on its own success would email every
+  week for ever. It exits non-zero only when a league that **was** due could not be enqueued.
+
+  **What the table deliberately does not tell you** is whether a `ready` refresh actually *advanced*
+  a week or found the league already current — both are a clean `ready`, because `weekly_refresh` is
+  idempotent by design. For that, read `max(as_of_week)` for the league. Adding a `result` column to
+  `jobs` would close it and was **not** done.
+
+- **`MY_USERNAME` / `LEAGUE_ID` are gone** from `weekly_refresh.yml` **and** from `fly.worker.toml`
+  (P5/S4d). Every job carries its own `league_id`, so the is_mine resolver is unreachable from any
+  automated path. If you `fly ssh` in and run a fetcher CLI without naming a league, it will now
+  refuse instead of quietly targeting the owner's league — that is the intended behaviour.
 
   **There is no `pkill`, `pgrep` or `ps` on the worker** — `python:3.13-slim` ships no procps, and a
   `pkill` there **exits 0 having done nothing**, which is how the first kill drill "passed" without

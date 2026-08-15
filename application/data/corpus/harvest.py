@@ -97,12 +97,20 @@ def _raw_present(lid: str, season: int) -> bool:
 
 def _pull_raw(lid: str, season: int) -> None:
     """Fetch the raw layer for one league-season (throttled, league-keyed). Overwrites — only called when
-    the league is not already raw-present, so it is not re-pulled on a resumed run."""
+    the league is not already raw-present, so it is not re-pulled on a resumed run.
+
+    `backfill` stops at the last COMPLETED week; `fetch_current_week` adds the one in progress
+    (P5/S4d). Without the second call a league linked during Week 1 has no matchups at all — the
+    first completed week does not land until roughly a week after kickoff — and the spine then dies
+    on a join parquet that was never written. In the preseason the second call is a no-op, because
+    there is no in-progress week to fetch.
+    """
     sleeper.fetch_league_config(lid, season)     # league_settings (scoring + playoff config)
     sleeper.fetch_roster_positions(lid, season)  # roster_positions
     derive_lineup_slots.run(season, league_id=lid)   # lineup_slots (derived from roster_positions)
     sleeper.fetch_teams(lid, season)             # teams (+ rosters, transiently)
     sleeper.backfill(lid, season, pace=0.0)      # all completed weeks' matchups + transactions (throttled by _http)
+    sleeper.fetch_current_week(lid, season)      # the in-progress week backfill will not touch
 
 
 # --- join + two-way flag ------------------------------------------------------------------------------

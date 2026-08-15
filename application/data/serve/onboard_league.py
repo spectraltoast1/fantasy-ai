@@ -39,6 +39,7 @@ from pathlib import Path
 import polars as pl
 import psycopg
 
+from application.api import platforms
 from application.api.db import database_url
 from application.data import data_layer as dl
 from application.data.corpus import compute_spine, harvest
@@ -280,6 +281,34 @@ def run_chain(lid: str, season: int, *, to_week: int | None, report: dict,
         report["weeks_joined"] = joined
         report["weeks_already_joined"] = done
 
+    # 2b · THE ZERO-WEEK REFUSAL — a league that has played nothing cannot be built (P5/S4d).
+    #
+    # This is where Will's live link test died, and the failure was the ugliest kind: the join
+    # writes NO FILE when it joins no weeks, and `compute_production_vor` reads that parquet with
+    # no existence guard, so the chain raised a bare `FileNotFoundError` carrying an internal
+    # filesystem path — which the connect banner then rendered to the user verbatim.
+    #
+    # Three of the five spine reads already carry well-worded diagnoses for exactly this state
+    # (`compute_production_vor:325`, `compute_bracket_sim:388`, `compute_player_signal:530`) and
+    # ALL THREE ARE UNREACHABLE, because each one's unguarded `read_join_season` raises first. So
+    # the fix is to refuse BEFORE the spine rather than to guard five reads: one refusal, in the
+    # chain that knows why, instead of five guards in transforms that only know a file is missing.
+    #
+    # `SystemExit` on purpose — an AUTHORED refusal, so `worker_loop` lands it `rejected`
+    # (terminal) rather than `failed` (retried three times). No retry can make a game happen.
+    # Terminal is right and it is not a dead end: `jobs_active_league_idx` is partial on NON-
+    # terminal states, so the moment their season starts the same person can link again and get a
+    # fresh job. The refusal is terminal; the league is not.
+    #
+    # P5/S4f replaces this branch with a PENDING hold, so the user links once and the weekly
+    # cadence picks the league up by itself. The predicate does not change — the branch does.
+    if done + joined == 0:
+        raise SystemExit(
+            "this league has not played a week yet, so there is nothing to build from — no games "
+            "means no rosters in motion, no results, and no projections to anchor.\n"
+            "  Nothing is wrong with the league or with your account. Link it again once its "
+            "first week is under way and it will build in about ten seconds.")
+
     # 3 · BAND — scoring-keyed and shared, and bounded by the honest-band season exactly as the
     # weekly refresh bounds it. Below 2026 it is a deliberate no-op, not a missing step. On a
     # worker `write_ros_player_band` VERIFIES rather than writes (P5/S3), so this can raise here.
@@ -468,6 +497,13 @@ def assert_in_scope(lid: str, summary: dict) -> None:
     already raises on, and 1QB/superflex are both in scope.
 
     This is the loud stop, not the product's answer. S5 owns the graceful user-facing rejection.
+
+    **The lifecycle rule is THE SAME FUNCTION the API greys the button with** (P5/S4d):
+    `platforms.league_has_started`. It is authoritative *here* rather than there, because
+    `platforms.classify` is advisory by its own docstring and `POST /api/connect` runs no
+    classification at all on a pasted league id — so the worker is the only place that has to be
+    right. It costs no extra Sleeper call: `status` is already on the `summary` dict the caller
+    fetched one line above. P5/S4f swaps this refusal for a `pending` hold, reusing the predicate.
     """
     t = summary.get("league_type")
     if t != "redraft":
@@ -476,6 +512,13 @@ def assert_in_scope(lid: str, summary: dict) -> None:
             f"— V1 supports REDRAFT only.\n"
             "  Absence of the key is NOT treated as redraft: known keeper/dynasty leagues omit it, "
             "and guessing here would mis-score somebody's season.")
+
+    started, why = platforms.league_has_started(summary)
+    if not started:
+        raise SystemExit(
+            f"{why}, so this league has no rosters yet and there is nothing to build from.\n"
+            "  Nothing is wrong with the league or with your account. Link it again once your "
+            "draft is done and the season is under way.")
 
 
 def onboard(lid: str, season: int, *, to_week: int | None = None, do_load: bool = True,

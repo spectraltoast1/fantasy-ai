@@ -39,6 +39,21 @@ on:
 
 # Shared storage-backend config for every job. The SUPABASE_* values come from repo secrets.
 env:
+  # The store boundary (P5/S3, context/appendices/store-boundary.md) — added P5/S4d, which found
+  # this file was never covered. The ADR's claim is "STORE_ROLE=worker is set on the Fly worker AND
+  # the GitHub Actions runner", and S3's audit cited weekly_refresh.yml as the evidence — but
+  # collectors.yml is a SECOND workflow on that same third machine and it set nothing. The claim
+  # counted machines; the enforcement is per-workflow.
+  #
+  # Honest scope: this closes no live hole. The three entrypoints below reach exactly five writers
+  # (leaguelogs market + its metadata, team_news_raw + its metadata, the news prune) and NONE is in
+  # LAPTOP_OWNED_WRITERS. It is defence in depth, and it is one line — the same reasoning
+  # weekly_refresh.yml carried before S4d retired its pipeline.
+  #
+  # It matters more than it looks, because this runner FLUSHES to the shared Supabase bucket
+  # (`data_layer.flush_snapshots()` at the end of every collector run). Anything a future collector
+  # wrote to a laptop-owned path would land in the substrate every league reads, not on a scratch disk.
+  STORE_ROLE: worker
   SNAPSHOT_BACKEND: supabase
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
   SUPABASE_S3_ENDPOINT: ${{ secrets.SUPABASE_S3_ENDPOINT }}

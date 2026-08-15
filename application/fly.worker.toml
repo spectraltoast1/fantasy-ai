@@ -18,11 +18,18 @@ primary_region = "iad"          # same region as the API and the Supabase projec
   # be missing — a worker without it can author the shared substrate silently — so it is asserted in
   # BOTH places rather than relying on either.
   STORE_ROLE = "worker"
-  # Non-secret identifiers the league resolver needs where config.py is absent, mirroring the
-  # GitHub Actions job that already runs this pipeline off-laptop. NOT secrets: the is_mine Sleeper
-  # handle and league id are public identifiers and appear in demo_manifest and the docs.
-  MY_USERNAME = "spectraltoast1"
-  LEAGUE_ID = "1182101676608823296"
+  # MY_USERNAME / LEAGUE_ID were here and are GONE (P5/S4d). They fed
+  # `league_resolver.resolve_league_id`, the is_mine resolver — and every job now carries its own
+  # league_id, so nothing on this machine's automated paths reaches it: `_execute_onboard` and
+  # `_execute_refresh` both pass `lid` explicitly, which `check_queue` asserts from the AST.
+  #
+  # Retiring them rather than relocating them is the point. While they were set, a code path that
+  # forgot its league_id would quietly fall back to the OPERATOR'S league and produce a perfectly
+  # healthy-looking job row for the wrong league. With them gone that same path fails loudly.
+  # The only reachable consumers left are interactive CLIs (`python -m ...fetchers.sleeper refresh`)
+  # run over `fly ssh`, where being told to name a league is the correct outcome.
+  #
+  # Neither is read at startup — `_startup_problems` requires STORE_ROLE and DATABASE_URL only.
 
 # THE MOUNT PATH IS NOT A CHOICE. data_layer.py computes _SNAPSHOT_DIR from the source file's own
 # location (`Path(__file__).resolve().parent / "snapshots"`) and it is not configurable, so the
