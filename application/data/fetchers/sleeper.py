@@ -152,6 +152,32 @@ def _determine_completed_weeks(state: dict, year: int) -> int:
     return 18
 
 
+def _determine_current_week(state: dict, year: int) -> int:
+    """The regular-season week that is IN PROGRESS right now, or 0 when there is none.
+
+    The deliberate complement of `_determine_completed_weeks`, and it lives beside it so the two
+    rules cannot drift: during the regular season completed is `leg - 1` and this is `leg`, i.e.
+    exactly the one week the backfill refuses to fetch because it is not finished yet.
+
+    **Why this exists (P5/S4d).** `backfill` writes only COMPLETED weeks, so a league linked during
+    Week 1 gets no matchups at all — the first completed week does not land until ~a week after
+    kickoff. Pulling the in-progress week is what makes linking work AT Week 1 rather than after it.
+    The join zero-fills actuals for a week with no results yet, so nothing is fabricated, and
+    P2/S4a's thin-data window reports the sample honestly (it counts weeks with real RESULTS, not
+    weeks merely loaded).
+
+    Returns 0 in the preseason — `leg` is 0 before kickoff, so there is genuinely nothing in
+    progress and this does nothing at all until Week 1. It is not a fix for the preseason window;
+    holding a not-yet-playable league is P5/S4f's job.
+    """
+    current_season = int(state["season"])
+    if year != current_season:
+        return 0                               # a past season has no in-progress week; nor a future one
+    if state.get("season_type", "") != "regular":
+        return 0                               # "pre" (not started) / "post" / "offseason" (finished)
+    return min(max(int(state.get("leg", 0)), 0), 18)
+
+
 def _write_json(data, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2))
@@ -691,6 +717,41 @@ def backfill(league_id: str, year: int, *, pace: float = 0.5) -> None:
             time.sleep(pace)
 
     print(f"Backfill complete for league {league_id} ({year}).")
+
+
+def fetch_current_week(league_id: str, year: int) -> int:
+    """Snapshot the IN-PROGRESS week's matchups + transactions. Returns the week, or 0 if none.
+
+    The cold onboard's companion to `backfill` (P5/S4d). `backfill` stops at the last COMPLETED
+    week, so on its own a league linked during Week 1 has no matchups file, no join file, and the
+    spine crashes on a parquet that was never written. This adds exactly the missing week.
+
+    **Why this is not `refresh()`, which already fetches the current week.** `refresh` is
+    is-mine-shaped: it also writes five `CACHE_DIR` JSON blobs (`league.json`, `users.json`,
+    `rosters.json`, both brackets) that are NOT league-keyed, so pointing it at a stranger's league
+    would overwrite the owner's cache with somebody else's league. This writes only the two
+    league-keyed snapshot series and touches no shared cache.
+
+    **This is a POINT IN TIME, and that is the division of labour.** `harvest._raw_present` is
+    satisfied by config + teams + week one, and `onboard_league._missing_raw_weeks` is bounded by
+    COMPLETED weeks — so on a re-onboard neither notices that the in-progress week snapshot has
+    gone stale, and it is not re-pulled. Keeping it current is the WEEKLY CADENCE's job, not the
+    onboarder's: `weekly_refresh` re-fetches the current week every run.
+    """
+    week = _determine_current_week(_get_nfl_state(), year)
+    if week == 0:
+        print(f"  No in-progress week for {year} (preseason, or the season is over) — "
+              f"nothing to fetch beyond the completed weeks.")
+        return 0
+
+    print(f"  In-progress week {week} — fetching (actuals will be zero-filled by the join).")
+    _snapshot_list(_get_json(f"{_SLEEPER_BASE}/league/{league_id}/matchups/{week}"),
+                   data_layer.write_sleeper_matchups, year, week, f"matchups week {week}",
+                   league_id=league_id)
+    _snapshot_list(_get_json(f"{_SLEEPER_BASE}/league/{league_id}/transactions/{week}"),
+                   data_layer.write_sleeper_transactions, year, week, f"transactions week {week}",
+                   league_id=league_id)
+    return week
 
 
 def refresh(league_id: str) -> None:
