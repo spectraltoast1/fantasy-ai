@@ -37,6 +37,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from application.api import db
+from application.data import data_layer as dl
 from application.data.serve import job_queue as q
 from application.data.serve import onboard_league
 from application.data.serve import worker_loop as wl
@@ -414,6 +415,42 @@ def check_classification() -> None:
     else:
         _fail(f"a RuntimeError landed {state!r} err={err!r}")
 
+    # THE LEAK, as an executable assertion (P5/S4d). On 2026-08-14 a real link attempt put
+    # `FileNotFoundError: /…/snapshots/nfl_sleeper_weekly_joined/league/…/season_2026.parquet` on a
+    # user's screen, because `_job_payload` passes `error` through unchanged and `App.jsx` renders
+    # it raw. An UNHANDLED exception's text has not been written for anyone to read; an authored
+    # refusal's has. So the crash branch keeps the CLASS NAME (a Python identifier — useful triage,
+    # never a path) and drops the message.
+    _leak = "/Users/somebody/repo/application/data/snapshots/league/123/season_2026.parquet"
+    state, err = _drive("onboard", FileNotFoundError(_leak))
+    if state == "failed" and err and _leak not in err and "snapshots" not in err \
+            and "FileNotFoundError" in err:
+        _ok("a CRASH leaks no internal path — the class name survives for triage, the message does not")
+    else:
+        _fail(f"a crash landed {state!r} err={err!r} — the exception message reaches the connect "
+              "banner verbatim, so anything in it is on somebody's screen")
+
+    # Both halves: sanitising must not have silently swallowed the AUTHORED refusal's words too.
+    # A guard that blanked every message would pass the leak test above and make every refusal
+    # unreadable, which is the failure S4c's rule exists to prevent.
+    _, err = _drive("onboard", SystemExit("your draft hasn't happened yet — link it afterwards"))
+    if err and "draft" in err:
+        _ok("an AUTHORED refusal still reaches the screen in its own words — both halves")
+    else:
+        _fail(f"an authored refusal was sanitised too (err={err!r}) — the user now gets nothing")
+
+    # A STALE SHARED BAND is neither: deterministic like a refusal (attempts 2 and 3 recompute the
+    # identical frame and refuse identically), but written for the OPERATOR, naming a laptop command
+    # line and OPERATIONS.md. So: terminal like a refusal, sanitised like a crash.
+    state, err = _drive("onboard", dl.StoreBoundaryError(
+        "write_ros_player_band() is refused: STORE_ROLE=worker.\n  Remedy: on the LAPTOP run "
+        "`application/venv/bin/python -m application.data.transforms.compute_ros_player_band`"))
+    if state == "rejected" and err and "LAPTOP" not in err and "venv" not in err:
+        _ok("a stale shared band is TERMINAL (not retried to the cap) and shows no operator command")
+    else:
+        _fail(f"StoreBoundaryError landed {state!r} err={err!r} — it is deterministic, so retrying "
+              "it three times burns the cap on an outcome that cannot change")
+
     state, _ = _drive("onboard", None)
     _ok("a clean run lands `ready`") if state == "ready" else _fail(f"a clean run landed {state!r}")
 
@@ -435,12 +472,41 @@ def check_classification() -> None:
     _ok("an explicit platform='sleeper' still runs") if state == "ready" else _fail(
         f"platform='sleeper' landed {state!r} — the guard is refusing the one platform it has")
 
-    state, err = _drive("weekly_refresh", None)
+    # Deliberately a kind nothing will ever implement. This fixture used to be "weekly_refresh",
+    # which S4d turned into a REAL executor — the assertion still held (`_drive` swaps `_EXECUTORS`
+    # for a fixture), but a reader would have had to prove that to themselves before believing it.
+    state, err = _drive("__no_such_kind__", None)
     if state == "rejected" and err and "unknown job kind" in err:
         _ok("an UNKNOWN kind lands `rejected` cleanly — the loop survives a job it cannot run")
     else:
         _fail(f"an unknown kind landed {state!r} err={err!r} — one bad row would be an outage for "
               "every other user's league")
+
+    # The REAL executor table, which the fixture above deliberately does not exercise. `kind` was
+    # built in S4b with one entry and a comment promising a second; this is that promise as an
+    # assertion, so the cadence cannot be half-wired (a `refresh` row enqueued with no executor
+    # would be rejected as "unknown kind" every Tuesday, for ever, silently).
+    missing = sorted({"onboard", "refresh"} - set(wl._EXECUTORS))
+    if missing:
+        _fail(f"worker_loop._EXECUTORS is missing {missing} — a job of that kind would be REJECTED "
+              "as unknown rather than run")
+    else:
+        _ok(f"the real _EXECUTORS implements both job classes {sorted(wl._EXECUTORS)}")
+
+    # The refresh executor must pass `lid` POSITIONALLY-OR-EXPLICITLY, never let it default.
+    # `weekly_refresh.refresh_league` opens `lid = lid or league_resolver.resolve_league_id(season)`,
+    # and that resolver reads MY_USERNAME/LEAGUE_ID — so an executor that forgot the argument would
+    # refresh THE OPERATOR'S league under every job row, and the jobs table would look perfect.
+    _src = textwrap.dedent(inspect.getsource(wl._execute_refresh))
+    _call = next((n for n in ast.walk(ast.parse(_src))
+                  if isinstance(n, ast.Call) and ast.unparse(n.func).endswith("refresh_league")), None)
+    if _call is not None and _call.args and "job[" in ast.unparse(_call.args[0]):
+        _ok("the refresh executor passes the job's OWN league_id — the is_mine resolver, and with it "
+            "MY_USERNAME/LEAGUE_ID, is unreachable from the cadence")
+    else:
+        _fail("_execute_refresh does not pass the job's league_id as the first argument to "
+              "refresh_league — it would fall through to league_resolver and refresh the operator's "
+              "own league for every job, with nothing in the table to show for it")
 
     # Every stage the chain actually emits must map to a state. Driven off the SOURCE, so a stage
     # added to run_chain without a mapping fails here instead of silently leaving the row behind.

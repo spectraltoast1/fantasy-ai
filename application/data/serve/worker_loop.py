@@ -42,8 +42,9 @@ import traceback
 
 from application.api import jobs, platforms
 from application.data import data_layer as dl
+from application.data.fetchers import sleeper
 from application.data.serve import job_queue as q
-from application.data.serve import onboard_league
+from application.data.serve import onboard_league, weekly_refresh
 
 # How long to block waiting for a NOTIFY before waking up anyway. The wakeup is a SAFETY NET, not
 # the mechanism: NOTIFY is fire-and-forget, so one sent while this process was reconnecting is LOST,
@@ -149,10 +150,54 @@ def _execute_onboard(conn, job, worker: str) -> int | None:
                                        job.get("platform_user_id"))
 
 
-# One entry per job class. `kind` exists because S4d enqueues the weekly refresh; the Manager
-# Dossier fan-out is a deferred class and belongs to S4e. An unknown kind is REJECTED, not a crash —
-# which is also how the column earns its keep before a second executor exists.
-_EXECUTORS = {"onboard": _execute_onboard}
+def _execute_refresh(conn, job, worker: str) -> int | None:
+    """Advance one already-connected league to the current week. Grants nothing — it is already owned.
+
+    **`lid` is passed EXPLICITLY and that is the point of the whole job class.**
+    `weekly_refresh.refresh_league` opens with `lid = lid or league_resolver.resolve_league_id(season)`,
+    and that resolver is the is_mine one: with `lid=None` it reads `MY_USERNAME`/`LEAGUE_ID` and
+    refreshes THE OPERATOR'S OWN LEAGUE, whichever league the job was actually for. A job that
+    carries its own `league_id` never touches it — which is what RETIRES those two variables rather
+    than relocating them into a new machine's environment.
+
+    **The season is checked, not assumed.** `refresh_league(..., live=True)` OVERWRITES both season
+    and target week from Sleeper's NFL state, so it would ignore the job's own `season` entirely —
+    and a job enqueued before a season rollover would then be run against the new season under the
+    old season's league id. That is not hypothetical: the enumeration selects on the catalog's
+    season and Sleeper's flips in late August, so the two straddle a real boundary every year.
+
+    A stale job is REFUSED rather than retargeted. Terminal is right: a finished season has nothing
+    left to advance to, and next week's enumeration selects the current season's leagues on its own.
+    """
+    live_season = int(sleeper._get_nfl_state()["season"])
+    if int(job["season"]) != live_season:
+        raise SystemExit(
+            f"this job is for the {job['season']} season and the NFL is now in {live_season}, so "
+            f"there is nothing left to advance. The season rolled over after this job was queued; "
+            f"the next weekly run enumerates the current season by itself.")
+
+    weekly_refresh.refresh_league(job["league_id"], live_season, live=True,
+                                  stage=_stage_observer(conn, job, worker))
+    return None
+
+
+# One entry per job class. The Manager Dossier fan-out is a deferred class and belongs to S4e.
+# An unknown kind is REJECTED, not a crash.
+#
+# `refresh` (P5/S4d) is what stops the app being frozen in-season. It is the SAME queue, the same
+# lease, the same reaper and the same terminal states as `onboard` — the only thing that differs is
+# which function runs and that nobody is waiting on the result, so nothing about the worker had to
+# change to accept it. That is the column earning its keep exactly as it was built to.
+_EXECUTORS = {"onboard": _execute_onboard, "refresh": _execute_refresh}
+
+# What a job row says when the text it would otherwise carry is not fit for a human to read.
+# Two different situations, so two different sentences — "try again" is wrong for the first.
+_OPERATOR_HALT = ("This league could not be refreshed because the shared projection substrate on "
+                  "this machine is out of date. Nothing was changed. This needs an operator, not a "
+                  "retry — the details are in the worker log.")
+_CRASH_HALT = ("Something went wrong while building this league. Nothing about your account or "
+               "your league was changed, and the details have been logged. It is worth trying "
+               "again; if it keeps happening, this is ours to fix, not yours.")
 
 
 def _run_job(conn, job, worker: str) -> None:
@@ -188,19 +233,50 @@ def _run_job(conn, job, worker: str) -> None:
     except SystemExit as e:
         # THE TRAP. `SystemExit` is a BaseException, so this clause must come BEFORE `except
         # Exception` and cannot be folded into it. onboard_league raises it for every deliberate
-        # refusal — out of scope, wrong season, not cold, first on its scoring key — and every one
-        # of those is DETERMINISTIC: the same job would be refused identically for ever, so it is
-        # terminal on the first attempt rather than retried to the cap.
+        # refusal — out of scope, wrong season, not cold, not drafted yet, played no weeks, first on
+        # its scoring key — and every one of those is DETERMINISTIC: the same job would be refused
+        # identically for ever, so it is terminal on the first attempt rather than retried to the cap.
+        #
+        # THIS IS THE ONE BRANCH WHOSE TEXT REACHES A HUMAN VERBATIM, and that is deliberate
+        # (S4c: "end the screen with whatever words the refusal already carries"). It is safe
+        # because an authored refusal is WRITTEN to be read — see `assert_in_scope` and the
+        # zero-week refusal, which say what happened and what to do about it.
+        #
+        # `weekly_refresh` also raises SystemExit with OPERATOR-aimed text that names shell
+        # commands (`is_synthetic`, `_resolve_scoring_key`). Those cannot reach a user: a refresh
+        # job carries `requested_by = NULL`, and both `active_job_for_user` and
+        # `job_for_owner` filter on it, so no banner and no `GET /api/connect/{id}` can return one.
         q.finish(conn, job["id"], "rejected", error=str(e) or repr(e))
         _log(f"REJECTED {label}: {str(e).splitlines()[0] if str(e) else e!r}")
     except (_Shutdown, _LeaseLost):
         raise
+    except dl.StoreBoundaryError as e:
+        # TERMINAL, BUT NOT USER-FACING — the one case that is neither of the other two (P5/S4d).
+        # A stale or missing shared band is DETERMINISTIC (attempts 2 and 3 recompute the identical
+        # frame and refuse identically), so retrying it to the cap was wrong; it belongs with the
+        # refusals. But its message is written for the OPERATOR — it names a laptop command line and
+        # OPERATIONS.md — so it is sanitised like a crash rather than shown like a refusal.
+        q.finish(conn, job["id"], "rejected", error=_OPERATOR_HALT)
+        _log(f"REJECTED {label}: StoreBoundaryError (terminal — the shared band needs the laptop)")
+        traceback.print_exc()
+        return
     except Exception as e:                                     # noqa: BLE001 — see the docstring
-        # Everything else is a FAILURE, and failures are retryable: Sleeper timing out, the network,
-        # a stale shared band (StoreBoundaryError), a bug. `reap` turns the last attempt into a
-        # terminal `failed` so nothing sits in a running-looking state for ever.
-        q.finish(conn, job["id"], "failed",
-                 error=f"{type(e).__name__}: {e}"[:4000])
+        # Everything else is a CRASH, and crashes are retryable: Sleeper timing out, the network, a
+        # bug. `reap` turns the last attempt into a terminal `failed` so nothing sits in a
+        # running-looking state for ever.
+        #
+        # THE EXCEPTION TEXT DOES NOT GO IN THE JOB ROW. `routes._job_payload` passes `error`
+        # through unchanged and `App.jsx` renders it raw, so whatever lands here is on somebody's
+        # screen — and on 2026-08-14 that was a `FileNotFoundError` carrying an absolute path into
+        # this repo's snapshot store. An UNHANDLED exception has not been written for anyone to
+        # read; only an authored refusal has. So the row gets a sentence somebody can act on and
+        # the logs keep everything, which is what `traceback.print_exc()` below is for.
+        #
+        # The class name is the one internal kept, deliberately: it is a Python identifier, never a
+        # path, an id or user data, and it is the single most useful triage token for whoever reads
+        # the `jobs` table instead of the worker's logs — which §6 of this session's brief requires
+        # to be possible.
+        q.finish(conn, job["id"], "failed", error=f"{_CRASH_HALT} ({type(e).__name__})")
         _log(f"FAILED {label}: {type(e).__name__}: {e}")
         traceback.print_exc()
         return

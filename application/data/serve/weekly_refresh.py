@@ -25,6 +25,7 @@ Usage:
 """
 
 import argparse
+import contextlib
 import sys
 from collections import defaultdict
 
@@ -106,9 +107,24 @@ def _has_actuals(season: int, week: int) -> bool:
     return week in set(data_layer.read_nfl_stats(season)["week"].to_list())
 
 
+@contextlib.contextmanager
+def _no_stage(name: str):
+    """The default observer — does nothing. Keeps the CLI path identical to what it always was."""
+    yield
+
+
 def refresh_league(lid: str | None = None, season: int | None = None, *,
-                   target_week: int | None = None, live: bool = False, do_load: bool = True) -> dict:
-    """Advance one league to `target_week` (or the live current week). Returns a report of actions taken."""
+                   target_week: int | None = None, live: bool = False, do_load: bool = True,
+                   stage=_no_stage) -> dict:
+    """Advance one league to `target_week` (or the live current week). Returns a report of actions taken.
+
+    `stage` is the same observer `onboard_league.run_chain` takes, and on the queue it is not
+    optional decoration (P5/S4d). `job_queue.advance` is what RENEWS THE LEASE — the renewal is a
+    side effect of a stage transition — so a refresh that reported no stages would hold a 120s lease
+    for its whole run, and any run longer than that would have its job reclaimed and executed a
+    second time while the first was still going. The stage names are the ones already in
+    `worker_loop._STATE_BY_STAGE`, so a refresh job's states read the same as an onboard's.
+    """
     if live:
         state = sleeper._get_nfl_state()
         season = int(state["season"])
@@ -147,39 +163,56 @@ def refresh_league(lid: str | None = None, season: int | None = None, *,
         return report
 
     # 1. FETCH (idempotent, skip-if-present) --------------------------------------------------------------
-    if not data_layer._sleeper_matchups_path(season, target_week, lid).exists():
-        if live:
-            sleeper.refresh(lid); act("fetched current Sleeper state (refresh)")
+    with stage("fetch"):
+        if not data_layer._sleeper_matchups_path(season, target_week, lid).exists():
+            if live:
+                # NOT `sleeper.refresh(lid)`, which this used to call (P5/S4d). `refresh` is
+                # is-mine-shaped: besides the current week it writes five CACHE_DIR JSON blobs
+                # (league/users/rosters/both brackets) that are NOT league-keyed. Nothing reads them
+                # today — they are write-only — but S4d puts this function on the queue for EVERY
+                # connected league, so it would have overwritten one shared cache with each league's
+                # data in turn, every Tuesday, at five wasted Sleeper GETs apiece. `fetch_current_week`
+                # writes only the two league-keyed series, which is all the join below needs.
+                sleeper.fetch_players()   # the shared player registry — genuinely global, 24h-cached
+                sleeper.fetch_current_week(lid, season)
+                act(f"fetched current Sleeper week for {lid} (league-keyed)")
+            else:
+                sleeper.backfill(lid, season); act(f"backfilled Sleeper matchups/transactions for {season}")
         else:
-            sleeper.backfill(lid, season); act(f"backfilled Sleeper matchups/transactions for {season}")
-    else:
-        act(f"matchups wk{target_week} already banked — Sleeper fetch skipped")
+            act(f"matchups wk{target_week} already banked — Sleeper fetch skipped")
 
-    if data_layer.read_projections(season, week=target_week).is_empty():
-        act(f"fetched projections wk{target_week}" if sleeper.fetch_projections(season, target_week)
-            else f"no projections available for wk{target_week} (source empty)")
-    else:
-        act(f"projections wk{target_week} present — skipped")
+        # `projections_exist` before `read_projections`, because the read is a bare `pl.read_parquet`
+        # with no guard — a season with no projections file raised FileNotFoundError here, naming an
+        # absolute path (P5/S4d). Same class of defect as the join read the onboarder died on, and
+        # the same fix: the `_exists` helper already existed and was simply not called.
+        if not data_layer.projections_exist(season):
+            act(f"no {season} projections banked at all — nothing to advance on")
+        elif data_layer.read_projections(season, week=target_week).is_empty():
+            act(f"fetched projections wk{target_week}" if sleeper.fetch_projections(season, target_week)
+                else f"no projections available for wk{target_week} (source empty)")
+        else:
+            act(f"projections wk{target_week} present — skipped")
 
-    if not _has_actuals(season, target_week):
-        if live:
-            nfl_stats.refresh()
         if not _has_actuals(season, target_week):
-            act(f"no realized nfl_stats for wk{target_week} yet — advancing on projections-only "
-                "(join zero-fills actuals; nothing fabricated)")
+            if live:
+                nfl_stats.refresh()
+            if not _has_actuals(season, target_week):
+                act(f"no realized nfl_stats for wk{target_week} yet — advancing on projections-only "
+                    "(join zero-fills actuals; nothing fabricated)")
 
     # 2. JOIN (the advance) -------------------------------------------------------------------------------
-    if not data_layer._sleeper_matchups_path(season, target_week, lid).exists():
-        act(f"no matchups snapshot for wk{target_week} — cannot advance the join; stopping (nothing realized)")
-        return report
-    cur = _joined_max_week(lid, season)
-    if cur >= target_week:
-        act(f"join already covers wk{target_week} (max joined = {cur})")
-    else:
-        for wk in range(cur + 1, target_week + 1):
-            if data_layer._sleeper_matchups_path(season, wk, lid).exists():
-                join_nfl_sleeper_weekly.run(season, wk, league_id=lid)
-                act(f"joined week {wk} → season_{season}.parquet")
+    with stage("join"):
+        if not data_layer._sleeper_matchups_path(season, target_week, lid).exists():
+            act(f"no matchups snapshot for wk{target_week} — cannot advance the join; stopping (nothing realized)")
+            return report
+        cur = _joined_max_week(lid, season)
+        if cur >= target_week:
+            act(f"join already covers wk{target_week} (max joined = {cur})")
+        else:
+            for wk in range(cur + 1, target_week + 1):
+                if data_layer._sleeper_matchups_path(season, wk, lid).exists():
+                    join_nfl_sleeper_weekly.run(season, wk, league_id=lid)
+                    act(f"joined week {wk} → season_{season}.parquet")
 
     # 2b. TWO-WAY FLAG — re-apply after any advance, or the column silently rots.
     # `join_nfl_sleeper_weekly` does not emit `is_two_way`; it is a corpus-era column that
@@ -214,32 +247,35 @@ def refresh_league(lid: str | None = None, season: int | None = None, *,
     # recomputed band against the seeded one and raises if they differ. So the same call means
     # "rebuilt" on the laptop and "checked" on the worker, and the log has to say which, or a reader
     # cannot tell an authored substrate from a borrowed one.
-    if season >= build_db.FIRST_HONEST_BAND_SEASON:
-        compute_ros_player_band.run(season, scoring_key=scoring_key)
-        if data_layer.store_role() == "worker":
-            act(f"band verified identical ({scoring_key} {season}) — no rebuild needed; the laptop "
-                f"owns this substrate")
+    with stage("band"):
+        if season >= build_db.FIRST_HONEST_BAND_SEASON:
+            compute_ros_player_band.run(season, scoring_key=scoring_key)
+            if data_layer.store_role() == "worker":
+                act(f"band verified identical ({scoring_key} {season}) — no rebuild needed; the laptop "
+                    f"owns this substrate")
+            else:
+                act(f"rebuilt ros_player_band ({scoring_key} {season}) under the live constants")
         else:
-            act(f"rebuilt ros_player_band ({scoring_key} {season}) under the live constants")
-    else:
-        act(f"season {season} < {build_db.FIRST_HONEST_BAND_SEASON} — frozen-corpus band left untouched")
+            act(f"season {season} < {build_db.FIRST_HONEST_BAND_SEASON} — frozen-corpus band left untouched")
 
     # 3. SPINE (recompute — the join is mutable, so on-disk spine reads are stale) -------------------------
-    if _spine_covers(lid, season, target_week):
-        act(f"spine already covers as_of {target_week} — recompute skipped")
-    else:
-        timing: dict = defaultdict(float)
-        compute_spine._compute_league(lid, season, scoring_key, timing)
-        act(f"recomputed spine (production_vor/true_rank/positional_depth/bracket_odds/player_signal) → as_of 1..{target_week}")
+    with stage("spine"):
+        if _spine_covers(lid, season, target_week):
+            act(f"spine already covers as_of {target_week} — recompute skipped")
+        else:
+            timing: dict = defaultdict(float)
+            compute_spine._compute_league(lid, season, scoring_key, timing)
+            act(f"recomputed spine (production_vor/true_rank/positional_depth/bracket_odds/player_signal) → as_of 1..{target_week}")
 
     # 4. LOAD (per-league scoped reload → Postgres) -------------------------------------------------------
     if do_load:
-        db_max = _db_max_as_of(lid)
-        if db_max is not None and db_max >= target_week:
-            act(f"Postgres already at as_of {db_max} (≥ {target_week}) — scoped reload skipped (no-op)")
-        else:
-            build_db.reload_league(lid)
-            act(f"scoped-reloaded league to Postgres → as_of advanced to {target_week} (others untouched)")
+        with stage("loading"):
+            db_max = _db_max_as_of(lid)
+            if db_max is not None and db_max >= target_week:
+                act(f"Postgres already at as_of {db_max} (≥ {target_week}) — scoped reload skipped (no-op)")
+            else:
+                build_db.reload_league(lid)
+                act(f"scoped-reloaded league to Postgres → as_of advanced to {target_week} (others untouched)")
     else:
         act("--no-load: derived store advanced; Postgres not written")
 
