@@ -25,12 +25,44 @@ machines. There are **three** that run this pipeline — the laptop, the Fly wor
 Actions runner — so the rule is stated by role, not by hostname. Anything that is not the authoring
 laptop sets `STORE_ROLE=worker` and gets the shared substrate read-only.
 
+**Corrected again in P5/S4d: the count was of MACHINES, and the enforcement is per-WORKFLOW.**
+S3's audit cited `weekly_refresh.yml` as the evidence that the GHA runner was covered — but
+`collectors.yml` is a **second workflow on that same third machine** and set no `STORE_ROLE` at all.
+Nothing reachable from it is laptop-owned (its three entrypoints reach five writers, none in
+`LAPTOP_OWNED_WRITERS`), so no hole was open — but it flushes to the **shared Supabase bucket**, so a
+future collector touching a laptop-owned path would have landed in the substrate every league reads.
+It is set there now.
+
+**And after S4d, two machines run this pipeline, not three.** `weekly_refresh.yml` stopped being a
+pipeline machine: it enqueues a job per connected league and the Fly worker executes. Its
+`STORE_ROLE` went *with* the pipeline logic rather than being kept as belt-and-braces, and the
+reason is structural rather than a judgement call — the enqueuer imports only from
+`application/api/`, which **may not import `application/data/`**, enforced by `check_connect`'s ONE
+IMAGE leg across all 21 api modules. Verified at runtime as well: no `application.data` module loads
+on that path, and in the api-tier venv `data_layer` is not importable at all (no polars). **If
+anything on that path ever imports `data_layer`, the flag comes back.**
+
 **The classification is now complete.** The three rows below described a store with eleven
 destinations; the rest were unclassified, which is how the guard would have been written with holes
-in it. Enforced as an **allow-list** in `data_layer` — the worker may write only what it is granted,
-so a destination nobody has thought about, and any writer added later, refuses by default.
-**P5/S4a added the twelfth** (`connected_catalog.parquet`) and the allow-list made that additive:
-nothing had to be re-classified, because the default was already deny.
+in it. Enforced in `data_layer` over the 16 writers those destinations correspond to.
+**P5/S4a added the twelfth** (`connected_catalog.parquet`) additively — nothing had to be
+re-classified.
+
+> **CORRECTION (P5/S4d): this said "allow-list … refuses by default", and that is not what was
+> built.** The claim was that *"a destination nobody has thought about, and any writer added later,
+> refuses by default."* Enforcement is in fact an explicit `_require_laptop(...)` call **inside each
+> of the 16 writers**, so the default is PERMIT: `data_layer` defines **50** `write_*` functions and
+> the other **34 are unguarded**. `check_store_boundary`'s REFUSES leg iterates
+> `LAPTOP_OWNED_WRITERS` itself, which is why it catches a *listed* writer whose guard was deleted
+> and structurally cannot catch an *unlisted* writer that never had one.
+>
+> **The 16 are the right 16 — this is a wrong claim, not a live hole.** But it is the second time
+> this ADR has been confidently wrong in a way a future session would have relied on (the first was
+> naming `write_leagues` as the S4 wall), and the shape is the same: an intended property recorded
+> as a built one. **What would make it true** is a leg that enumerates `data_layer`'s `write_*`
+> functions and fails on any that is neither in `LAPTOP_OWNED_WRITERS` nor in an explicit
+> worker-owned list — deliberately NOT built in S4d, which had no mandate to touch this file's
+> guard. Recorded, not done.
 
 | destination | owner | why |
 |---|---|---|

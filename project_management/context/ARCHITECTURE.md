@@ -27,10 +27,17 @@ in `sessions/` and `_deprecated/`; deep mechanism rationale lives in `context/ap
   pool** — intended for an invited cohort; the recorded exit is the Supabase bucket backend.
   → *see appendix: store-boundary.*
 - **The store boundary (P5/S3)** — **one writer: the authoring laptop; every other machine reads.**
-  `STORE_ROLE=worker` makes `data_layer` refuse the 16 laptop-owned writers (an allow-list, so anything
-  unclassified refuses by default) and makes the shared ROS band **verify** rather than rebuild. It is
-  set on the Fly worker and the GitHub Actions runner. This is why the worker's volume can be treated as
-  a disposable cache: it can never author anything the laptop owns. → *see appendix: store-boundary.*
+  `STORE_ROLE=worker` makes `data_layer` refuse the **16 named** laptop-owned writers and makes the
+  shared ROS band **verify** rather than rebuild. It is set on the Fly worker and on **both** GitHub
+  Actions workflows (`collectors.yml` was never covered until P5/S4d; `weekly_refresh.yml` no longer
+  needs it — it stopped being a pipeline machine). This is why the worker's volume can be treated as a
+  disposable cache: it can never author anything the laptop owns.
+  **Correction (P5/S4d): it is a DENY-list, not an allow-list.** This line, the ADR and `data_layer`'s
+  own header all claimed anything unclassified refuses by default. It does not: enforcement is an
+  explicit `_require_laptop(...)` call inside each of the 16, so of `data_layer`'s **50** `write_*`
+  functions the other **34 are permitted**. `check_store_boundary`'s first leg iterates the constant,
+  so it catches *listed-but-unguarded* and structurally cannot catch *unlisted-and-unguarded*. The 16
+  are the right 16 — the gap is the claim, not the coverage. → *see appendix: store-boundary.*
 - **Data / compute** — **polars only** (no pandas); numpy for the Monte-Carlo simulation; nflreadpy for NFL
   stats; `math.erf` for the normal CDF.
 - **Analytics** — GA4 (`G-J1F0BE5ZW4`): the gtag tag in the SPA's single `index.html`, with

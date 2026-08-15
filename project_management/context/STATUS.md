@@ -343,6 +343,52 @@ its throwaway rows (measured, leased **0.12s** after the INSERT). Those legs are
 not failed — unknown is not pass, and it is not failure either.
 → `sessions/v1/P5-Self_Serve/SESSION_P5_S4C_REPORT.md`.
 
+**P5/S4d — a league can be linked AT Week 1, a crash no longer leaks a path, and the app has a
+cadence.** Deployed 2026-08-15 (API + worker). Will's live link test had returned a raw
+`FileNotFoundError` **carrying an internal filesystem path** straight into the connect banner, and
+the cause was not the draft: **`backfill` writes only COMPLETED weeks and completed is `leg - 1`**,
+so the first completed week lands ~17 Sept — **a week after kickoff**. `fetch_current_week` is
+`backfill`'s exact complement (`leg`, the week it refuses), proven on the boundary that matters:
+at Week 1 completed is 0 and current is 1. It is a **no-op before 10 Sept** (`leg` is 0 in the
+preseason) and does not fix the preseason window — **S4f's pending hold is what does**.
+
+**The join writes NO FILE when it joins no weeks**, and three of the five spine reads already carried
+well-worded diagnoses for exactly that state — **all three unreachable**, because each one's
+unguarded `read_join_season` raised first. So the chain now refuses *before* the spine rather than
+guarding five transforms. Honest finding carried forward: **`player_signal` cannot produce on zero
+realized results and `bracket_odds` would simulate a 0-0 slate** — at Week 1 both get one zero-filled
+week, which is precisely what P2/S4a's thin-data window exists to state.
+
+**Three outcomes now, where there were two.** `SystemExit` = an authored refusal, its own words reach
+the screen (S4c's rule, still right). `StoreBoundaryError` = deterministic, so **terminal** rather
+than retried to the cap — but written for an operator, so sanitised. Everything else = a crash:
+**sanitised, keeping only the exception class name** (a Python identifier, never a path) because
+reading the `jobs` table has to be enough. **`platforms.league_has_started` is ONE predicate with two
+callers** — advisory in `classify`, authoritative in `assert_in_scope` — at **zero extra Sleeper
+calls**, since `league_summary` already returned `status` and nothing read it. S4f replaces the
+*branch*, not the predicate.
+
+**The cadence: `weekly_refresh.yml` stopped being a pipeline machine.** It enqueues
+`kind='refresh'` per connected league from `user_leagues ⋈ league_catalog`; the worker executes.
+`MY_USERNAME`/`LEAGUE_ID` are **retired, not relocated** — gone from the workflow *and* from
+`fly.worker.toml` — because every job carries its own `league_id`. The producer is Python calling
+`jobs.enqueue`, **not** an `INSERT … SELECT` in YAML: that would forget the NOTIFY, re-derive the
+season, and — the reason that settles it — be **invisible to `check_connect`'s one-seam scan, which
+reads `application/**/*.py`**, so the gate would have stayed green.
+**Proven live 2026-08-15:** the same league that produced the `FileNotFoundError` now lands
+`rejected` at **attempt 1** with *"the draft hasn't happened yet…"* and no path; live prod discovery
+greys it with a reason; enumeration collapsed **3 owner rows to 1 job** (`DISTINCT`); an already-active
+league is **skipped, counted separately from an error**; `league_catalog` 33 → 33, zero grants written.
+→ `sessions/v1/P5-Self_Serve/SESSION_P5_S4D_REPORT.md`.
+
+**The honest gap S4d could not close: no 2026 league is linkable today, so the *advance* itself is
+unproven.** Every one of Will's ten leagues is now correctly greyed — seven dynasty, one pre-draft,
+two prior-season — so the enumeration returns **0 connected leagues for 2026** and the cadence has
+nothing to advance until a league drafts. The plumbing is proven end to end on the deployed worker
+(enumerate → INSERT+NOTIFY → lease in **0.09s** → the `refresh` executor → terminal state); what is
+untested is a real week-advance through the queue. **That is Gate A's, and it is the strongest
+argument for S4f.**
+
 **Gate A is unblocked, and S4c narrowed what it still owns.** Loading the first real 2026 league at
 Will's draft (~late Aug) is now a **job row** a user creates themselves. It data-proves S2's refresh,
 S3b's band panel and S4a's regimes at once, and **must verify the ROS-range panel against real band

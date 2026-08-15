@@ -1,102 +1,89 @@
-# Weekly in-season refresh — advance connected leagues to the current week (V1 · P2 · S2).
+# Weekly in-season cadence — enqueue a refresh job per connected league (V1 · P5 · S4d).
 #
-# The live cadence that un-freezes the app. Invokes the single-league orchestrator
-# `python -m application.data.serve.weekly_refresh` (fetch current Sleeper state + weekly nfl_stats +
-# Sleeper projections -> join -> recompute the spine -> per-league SCOPED RELOAD into Postgres). The
-# serve seam (reads._as_of_slice defaults to max(as_of_week) per league) then surfaces the new week with
-# no app/Fly change. The scoped reload is proven byte-parity-identical to a full reload for a league and
-# atomic (application/data/serve/check_scoped_reload.py), so advancing one league never disturbs another.
+# THIS RUNNER NO LONGER RUNS THE PIPELINE. It enqueues, and the Fly worker executes. Before S4d this
+# file was the pipeline: checkout, the full application/requirements.txt (polars + numpy), and
+# `python -m application.data.serve.weekly_refresh --live` against ONE hardcoded LEAGUE_ID. It had
+# never worked — since the Aug 1 season rollover it died at shared/league_resolver.py, because that
+# id is a 2025 league and the resolver asks Sleeper for 2026.
 #
-# This is a NEW cadence class, distinct from the daily collectors (collectors.yml): Sleeper is an
-# on-demand source, not a metered daily collector, and this job WRITES Postgres (not just the storage
-# bucket). It therefore needs, in addition to the SUPABASE_* storage secrets, a **DATABASE_URL** repo
-# Actions secret = the Supabase Postgres connection string (repo Settings -> Secrets -> Actions). That is
-# a REPO secret, NOT a Fly secret — Fly runs the API reader; this job is the writer, exactly like the
-# local loader. Until DATABASE_URL is set, the job fails fast at the load step (harmless — nothing else
-# is written). The proven run is the local one against prod; this wiring lets it run unattended.
+# What replaced it: `python -m application.api.enqueue_refresh`, which enumerates
+# `user_leagues JOIN league_catalog` at the current season and calls `jobs.enqueue(kind='refresh')`
+# for each. Three things follow, and they are the point rather than side effects:
 #
-# Idempotent + safe to double-fire: re-running a league that is already at the current week is a no-op
-# (the orchestrator skips fetch/join/spine when covered and the scoped reload when Postgres is current).
-# Preseason (leg=0, 2026 before Week 1) is a projections-only no-op — no games to advance to.
+#   * MY_USERNAME and LEAGUE_ID are RETIRED, not relocated. Every job carries its own league_id, so
+#     the is_mine resolver is never reached. One hardcoded league becomes every connected league.
+#   * api/requirements.txt, NOT application/requirements.txt. This process enqueues rows; it does
+#     not join, compute a spine or write a store. Deliberately the API image's own pin file rather
+#     than a third hand-maintained slim list — collectors.yml has one of those and it is already a
+#     second thing to keep in step.
+#   * STORE_ROLE IS GONE, and not for convenience. It guarded this runner against authoring the
+#     shared substrate. `application/api/` may not import `application/data/` — enforced, not
+#     observed: check_connect's ONE IMAGE leg fails on any such import across all 21 api modules.
+#     Verified at runtime too: the enqueue path loads no application.data module, and in the
+#     api-tier venv data_layer is not importable at all (no polars). The flag is dropped because
+#     what it guards is unreachable. If anything on this path ever imports data_layer, IT COMES BACK.
+#     -> context/appendices/store-boundary.md
 #
-# Schedules are UTC. Tue + Wed midday runs land after Monday-night games and the multi-day stat
-# corrections settle (freshness vs stability); the Wed run is an idempotent catch-up for a missed/failed
-# Tue (the collectors' primary+catch-up reliability pattern).
+# SNAPSHOT_BACKEND and the six SUPABASE_* storage secrets went with the pipeline for the same
+# reason: this job touches no snapshot store. DATABASE_URL is the only secret it still needs.
+#
+# Idempotent, and a no-op is the CORRECT outcome here. `enqueue_refresh` skips any league that
+# already has a non-terminal job (jobs_active_league_idx is UNIQUE PARTIAL on (league_id, season)
+# over non-terminal states), so Wednesday does nothing when Tuesday worked — and that is counted
+# and printed separately from an error, because a catch-up cron that alarmed on its own success
+# would email every week for ever. The exit code is non-zero only when a league that WAS due could
+# not be enqueued.
+#
+# Telling the three apart WITHOUT reading worker logs (this session's requirement) is the `jobs`
+# table: a `kind='refresh'` row in `ready` with a finished_at RAN AND SUCCEEDED; no row for the
+# cycle means IT DID NOT RUN; `failed`/`rejected` carries the reason in `error`. What the table
+# deliberately does NOT distinguish is "advanced a week" from "was already current" — both are a
+# clean `ready`, because weekly_refresh is idempotent by design.
+#
+# Schedules are UTC. Tue + Wed midday land after Monday-night games and the multi-day stat
+# corrections settle (freshness vs stability); Wed is the idempotent catch-up for a missed/failed
+# Tue — the collectors' primary+catch-up reliability pattern.
 
 name: Weekly Refresh
 
 on:
   workflow_dispatch:
     inputs:
-      mode:
-        description: "live (current week from /state/nfl) or replay (needs season+week)"
-        type: choice
-        options: [live, replay]
-        default: live
-      league_id:
-        description: "league_id (blank = the is_mine default for the season)"
-        default: ""
+      dry_run:
+        description: "enumerate and print, enqueue nothing (runs the REAL query)"
+        type: boolean
+        default: false
       season:
-        description: "season (replay only)"
-        default: ""
-      week:
-        description: "target week (replay only)"
+        description: "override the derived current season (testing; the cron never passes it)"
         default: ""
   schedule:
     - cron: "0 15 * * 2"   # Tue 15:00 UTC (~11:00 ET) — primary, after Mon-night + stat corrections
-    - cron: "0 15 * * 3"   # Wed 15:00 UTC — idempotent catch-up (no-op if Tue already advanced)
+    - cron: "0 15 * * 3"   # Wed 15:00 UTC — idempotent catch-up (no-op if Tue already enqueued)
 
 env:
-  # The store boundary (P5/S3, context/appendices/store-boundary.md). The rule is NOT
-  # "laptop vs the Fly worker" — it is ONE WRITER, everything else reads, and this runner is one of
-  # the everything-else. Without this flag it is a third machine that could author the shared
-  # scoring substrate and the ledger, unattended, on a cron.
-  #
-  # Honest scope: this is defence in depth, not a hole being closed. The `--live` path has never
-  # worked and currently dies at shared/league_resolver.py before any pipeline step, because the
-  # hardcoded LEAGUE_ID is a 2025 league and the resolver now asks Sleeper for 2026. But a manual
-  # workflow_dispatch in `replay` mode with an explicit league bypasses the resolver entirely and
-  # WOULD reach the band rebuild, so the flag earns its line. P5/S4 guts this file to a pure
-  # trigger and retires MY_USERNAME/LEAGUE_ID, at which point this goes with them.
-  STORE_ROLE: worker
-  SNAPSHOT_BACKEND: supabase
-  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-  SUPABASE_S3_ENDPOINT: ${{ secrets.SUPABASE_S3_ENDPOINT }}
-  SUPABASE_STORAGE_BUCKET: ${{ secrets.SUPABASE_STORAGE_BUCKET }}
-  SUPABASE_S3_ACCESS_KEY_ID: ${{ secrets.SUPABASE_S3_ACCESS_KEY_ID }}
-  SUPABASE_S3_SECRET_ACCESS_KEY: ${{ secrets.SUPABASE_S3_SECRET_ACCESS_KEY }}
-  SUPABASE_S3_REGION: ${{ secrets.SUPABASE_S3_REGION }}
-  DATABASE_URL: ${{ secrets.DATABASE_URL }}   # the Supabase Postgres URL — a REPO secret, not a Fly secret
-  # Non-secret identifiers the league resolver needs where config.py is absent (CI checkout has none).
-  # NOT secrets — the is_mine Sleeper handle + league id (also in demo_manifest/docs). Change here to
-  # target a different league.
-  MY_USERNAME: spectraltoast1
-  LEAGUE_ID: "1182101676608823296"
+  # The Supabase Postgres URL — a REPO secret, not a Fly secret. It is the only credential an
+  # enqueuer needs: it writes one row per due league to public.jobs and NOTIFYs.
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
 jobs:
-  refresh:
+  enqueue:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Install deps (application/requirements.txt — includes numpy for the spine + psycopg for the load)
-        run: pip install -r application/requirements.txt
-      - name: Weekly refresh (advance connected leagues to the current week)
+      - name: Install API-tier deps (no polars, no numpy — this enqueues, it does not compute)
+        run: pip install -r application/api/requirements.txt
+      - name: Enqueue a refresh job per connected league
         env:
-          MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'live' }}
-          LEAGUE: ${{ inputs.league_id }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
           SEASON: ${{ inputs.season }}
-          WEEK: ${{ inputs.week }}
         run: |
           set -euo pipefail
-          if [ "$MODE" = "replay" ]; then
-            args="--season $SEASON --week $WEEK"
-            [ -n "$LEAGUE" ] && args="--league $LEAGUE $args"
-          else
-            args="--live"
-          fi
-          echo "running: weekly_refresh $args"
-          python -m application.data.serve.weekly_refresh $args
+          args=""
+          [ "$DRY_RUN" = "true" ] && args="$args --dry-run"
+          [ -n "${SEASON:-}" ] && args="$args --season $SEASON"
+          echo "running: enqueue_refresh $args"
+          python -m application.api.enqueue_refresh $args
