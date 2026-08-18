@@ -1,217 +1,167 @@
-# PM Session Startup — V1 Go-Live (P5: S0–S3 + **S4a** built; **S4b is next**)
+# PM Session Startup — V1 Go-Live
 
 **Paste this into a new session to pick up as Product Manager for the V1 build.**
 
-**Current as of: 2026-08-14.** NFL Week 1 = **Thu 10 Sept 2026 (~4 weeks)**. Will's draft ≈ **late Aug
-(~2 weeks) = Gate A**.
-**Immediate task:** **draft S4b** (jobs table + lease + `POST /api/connect` + progress screen +
-identity acquisition). **S4a shipped, audited and ENDORSED 2026-08-14** — the worker created a league
-that had never existed anywhere. **S4b's FIRST item is a guard, not a feature — see the hazard below.**
-Per `CODING_BIBLE` §7, **re-stamp this date whenever you change this file, and keep it from growing** —
-replace stale content, don't append.
+**Current as of: 2026-08-18.** **NFL Week 1 = Thu 10 Sept 2026 — 23 days.**
+**Immediate task: draft S4e** (`projects/v1/P5_ACCOUNTS_SELF_SERVE_ONBOARDING.md`, the S4e row), then
+S4f. Nothing is blocked and nothing is half-done: **S0–S3 and S4a–S4d are all shipped, audited and
+endorsed.**
+Per `CODING_BIBLE` §7, **update this file only at PM handover** — not every turn — and **keep it from
+growing**: replace stale content, don't append.
 
 ---
 
 ## Who you are
 
-- **Will (the user)** — CEO/CFO and product owner. NOT a code-level engineer; talk product and
-  trade-offs, define jargon. **Decision forks belong to him** — surface them, recommend, let him
-  choose. He runs the engineering sessions and relays their output to you.
 - **You** — the PM. You **write session briefs**, **audit Code's reports against the live repo and
   data**, surface forks with a recommendation, and **push back**. You do NOT run or merge sessions,
-  and **you do not commit or push — see Environment.** You write files; Will banks them.
-- **"Code"** — executes one brief per session in an isolated worktree, reports back. **It is very
-  good, and it has caught more PM errors than the reverse.** Treat its questions as findings. When it
-  contradicts your brief, assume it is right until you have re-derived otherwise — that has been the
-  outcome nearly every time.
+  and **you do not commit or push** (see Environment). You write files; Will banks them.
+- **Code** — Claude Code, one session per brief, in a worktree, ≤3 commits, per `SESSION_GUIDE.md`.
+- **Will** — product owner. CEO/CFO background, **not a code-level engineer**: lead with the concept
+  and the implication, define the jargon, and don't bury a decision in mechanism.
 
-Will's stated preference: **be a sparring partner — push back constructively.** **Expect to lose
-arguments.**
-
----
-
-## The two core habits
-
-### 1. Verify — and verify the INSTRUMENT, not just the reading
-
-This is the lesson of 2026-08-13, when the PM made four wrong calls in one day, **every one of them a
-correct reading taken against the wrong reference.** Before reporting a finding, ask *what am I
-comparing to, and can that thing lie to me?*
-
-**The specific traps, all measured:**
-
-| trap | the rule |
-|---|---|
-| **`WebFetch` ignores an appended cache-buster.** `?…&_cb=<new>` replayed a body cached hours earlier; four "fresh" probes returned byte-identical bytes and I declared a live deploy dead. | **Reorder the params** (`?zz=1&league_id=…`), or better, **fetch a second hostname** — `surplusff.com` and `fantasy-ai-api.fly.dev` are the same Fly IP and the same app, so if they disagree the fault is in your read path. |
-| **Diffing a worktree against MAIN'S WORKING TREE.** Every file main changed after the branch point looks like Code's edit. I nearly had Code drop a file whose commit would have reverted a fix. | **Diff against the branch's BASE COMMIT** (`git show <base>:<path>`). |
-| **git worktree state is unreadable from this bridge.** `.git/worktrees/*/gitdir` holds absolute macOS paths that do not resolve in the container's mount namespace, so healthy worktrees read as `prunable` and `git -C` fails. | **Never report worktree health from here.** I nearly had Will destroy a worktree holding the only copy of unbanked work. |
-| **Case-sensitive greps.** Twice produced a false "the claim is unbacked". | `grep -i`, and confirm a negative two ways. |
-
-**Identical repeat readings are evidence of a cache at least as much as of a stable system.**
-
-The strongest tools that DO work: **recompute, don't read** (stage parquet into the container, run
-polars, re-derive the number yourself — this settled the corpus reconciliation and the S2e gate);
-**`WebFetch` the live `/api/*` JSON** (not the rendered SPA — cached bundles); **check the report's
-strongest verb** (*demonstrated / identical / proven / shipped / live*) and ask what artifact backs
-it. **"Shipped" is a claim about production; "merged" is a claim about git.** Ask *live where?*
-
-**Deploy is a separate gate from merge.** S2e merged, pushed and was reported "live in the browser" —
-that browser was local, and production ran the previous release for hours.
-
-### 2. A decision is not made until it is in the document
-
-Write it into the file **in the same turn it is made**, then **read it back**. Use an **assertion**
-(`assert s.count(old) == 1`) before any scripted replacement — an anchor that silently matches zero
-is how a "successful" edit changes nothing. Fix the doc that **governs**, not just STATUS.
+**Expect your brief to be wrong.** It has contained a material error in **every** session of S4, and
+Code caught every one. That is the system working — write briefs that invite it (see standing
+instruction 12) and record your errors in the audit so the next brief is better.
 
 ---
 
-## Read these first (current SOT — not chat history)
+## THE CALENDAR — read this before anything else
 
-- `context/STATUS.md` — **start here** · `context/OPERATIONS.md` — the 2am runbook (now carries the
-  worker, the seed/recovery procedure, and the store-boundary remedy).
-- `context/ARCHITECTURE.md` · `CODING_BIBLE.md` (**§5 prove-it-bites, §6 the commit FLOOR, §7
-  anti-bloat**) · `SESSION_GUIDE.md` · `PRODUCT.md` · `ROADMAP.md` · `SEASON_CALENDAR.md`.
-- **`context/appendices/store-boundary.md`** — the ADR. ACCEPTED and BUILT. Read before touching
-  anything that writes the store.
-- `projects/v1/BUILD_ORDER.md` · **`projects/v1/P5_ACCOUNTS_SELF_SERVE_ONBOARDING.md`** (active).
-- `sessions/v1/P5-Self_Serve/` — one brief per session (Will's rule; do not re-bundle). Each shipped
-  session has a `_REPORT` and an `_AUDIT`. `SESSION_P5_S3_AUDIT.md` is the current house style.
+**Verified against Sleeper 2026-08-17: `season_type: "pre"`, `leg: 0`.**
+
+`_determine_completed_weeks` returns 0 while the season is `"pre"`, and `leg - 1` in the regular
+season. `_determine_current_week` returns `leg`. So today **both are zero**, and:
+
+| when | completed | current | what works |
+|---|---|---|---|
+| **now → 9 Sept** | 0 | 0 | **nothing 2026 can be built at all** |
+| **Thu 10 Sept — Week 1** | 0 | **1** | linking works, on projections-only + a zero-filled week |
+| **~17 Sept** | 1 | 2 | the first *completed* week |
+
+**Consequences you must not re-derive:**
+
+- **The product's current answer to any 2026 league is "come back later."** All ten of Will's leagues
+  are correctly greyed: seven dynasty, one pre-draft, two prior-season. The refresh enumeration
+  returns **0 connected 2026 leagues**. **That is the argument for S4f.**
+- **Gate A was redefined (2026-08-15).** It was *"Will's 2026 league loaded at his draft, verifying the
+  ROS-range panel against real band data."* **Not achievable** — there is no data until Week 1. Gate A
+  now verifies **linking, the refusal, and (once S4f lands) the pending state**; **the band
+  verification moves to Week 1.** The draft still triggers *linking*, not *building*.
+- **Gate B = Week 1, 10 Sept.** Velocity is not the constraint; **calendar-gated proof is.**
+
+**⏰ The weekly cron fires Tue 15:00 UTC (11:00 ET) — and the first fire ever is 18 Aug 2026.** With 0
+connected leagues it should enumerate nothing and exit. **The workflow FILE has never run** (S4d proved
+the enqueue *module* and the worker image, not the GitHub Action). **A green Actions run is the missing
+half of S4d's DoD — check it.**
 
 ---
 
 ## Where the project stands
 
-**P0, P1, P2 done.** **SurplusFF**, live at **surplusff.com**. *(UI still says "Gridiron" — cosmetic.)*
+**SurplusFF**, live at **surplusff.com** (UI still says "Gridiron" — cosmetic, undecided).
+**P0–P2 done.** P4 ahead of P3. **P5 is the critical-path long pole and is 4 sessions from complete.**
 
-**P5 — S0, S1, S1b, S2a–S2e, S3 all built.** Per-user isolation is closed (discovery *and* access).
-The League screen no longer overstates the model. **The laptop is no longer the only machine that can
-build a league.**
+**What a person can do today:** sign up behind a shared access code, sign in by magic link, open
+"Manage Leagues" from the league switcher, type a Sleeper handle, see their leagues with unsupported
+ones greyed **and labelled**, link one, watch a progress banner, and land on their own league with
+their own roster highlighted — **no operator step, no `--grant`.** Two accounts can hold the same
+league with different seats. Signed-out sees exactly the demo.
 
-### S3 closed 2026-08-14 — the worker writes production
+**What runs it:** a **separate Fly worker** (`fantasy-ai-worker`, 1 GB + a 1 GB volume, ~$7/mo, no
+HTTP) leasing jobs from `public.jobs` over `LISTEN`/`NOTIFY` with a 60s safety poll. The API cannot
+run the pipeline (**no polars, and the image contains no `application/data/` at all**) and the worker
+has no HTTP surface — **the two machines meet only in Postgres.** That constraint has shaped three
+sessions; expect it to shape more.
 
-`build_db --reload-league` on `fantasy-ai-worker` reloaded LoRP 2025: **14,624 rows / 12 tables**,
-counts matching prior state exactly, every other league and `league_catalog` untouched. The `--verify`
-runs from the *laptop* against rows the *worker* wrote from its own volume, so it is a **cross-machine
-parity proof** — the 244 MB seed is verified faithful, not merely measured. Detail: `SESSION_P5_S3_*`
-+ the ADR. **Note S3 reloaded a league that ALREADY EXISTED; creating one is S4a and has never been
-done.**
+**Session records:** `sessions/v1/P5-Self_Serve/SESSION_P5_S4{A,B,C,D}_{REPORT,AUDIT}.md`. Read the
+audits before the reports if you are short of time — they carry the corrections.
 
-**THREE machines, one writer.** The ADR's laptop-vs-worker model was wrong: **ONE WRITER — the
-authoring laptop — everything else reads.** `STORE_ROLE=worker` is on the Fly worker **and** the GHA
-runner. On a stale band the worker raises with a remedy rather than rebuilding — that substrate is
-shared by every league on a scoring key and built under human-promoted constants.
+## Next: S4e, then S4f — and do NOT re-order them
 
-**The trap worth carrying:** `weekly_refresh.py:207` calls `_db_max_as_of()`, which exists *"to no-op
-an up-to-date load"* — the obvious re-run would have **skipped the write and reported success**.
-**A run that skips everything as "already current" is not a proof.** That has now fired twice.
+**Settled by Will 2026-08-15:** *"keep going with S4e as planned and then we'll hit option B as a
+Session S4f."* A PM restated this as "S4f is next" on 2026-08-17 and Will caught it. **Changing a
+recorded order is a fork to raise, not a conclusion to state.**
+
+- **S4e — the Manager Dossier deferred job.** The dossier executor as a second job `kind` (the column
+  exists), then flip `panels_manager` **in the same session that makes it true**. S0 measured the
+  fan-out at **80s / 248 Sleeper calls** and made it a deferred class, so `panels_manager: false` today
+  is *designed*, not a gap. **It is also the only piece of P5 left that can be exercised end to end
+  right now** — Rex Lumber 2025 is connected, has real data and three owners.
+- **S4f — the pending lifecycle.** A league that cannot yet be built is **held**, not refused, and the
+  cadence picks it up when it becomes buildable. Reuses S4d's `platforms.league_has_started` — **same
+  predicate, different branch.** Inherits the stale live isolation fixtures (below). **Not a
+  nice-to-have: it is the only behaviour that works in the window we launch into.**
+- Then **S5** (authoritative preflight + rejection copy) and **S6** (end-to-end + failure drills).
+
+## Open threads, with owners
+
+- **The workflow file has never run** → check the Actions tab after 18 Aug. *(S4d audit, finding 1.)*
+- **The refresh executor's SUCCESS path has never run** — `_execute_refresh` hardcodes `live=True` and
+  no job column carries a target week, so the queue cannot reach a replay. Its first success would be
+  in production, at Week 1, on a real user's league. **Cheapest fix: one hand-run on the worker against
+  Rex Lumber 2025 before 10 Sept.** *(S4d audit, finding 2.)*
+- **`jobs` cannot distinguish "advanced" from "was already current"** — both are a clean `ready`. A
+  nullable `result` column closes it. → whoever next touches the queue.
+- **The live isolation fixtures are stale since S2d** — `check_ownership`/`check_isolation` hardcode
+  `DEMO = "1182101676608823296"`, the id S2d replaced. 55 live failures, **all** in the
+  *refused-what-the-fixture-expected-readable* direction, **zero leaking** (the leak direction was
+  verified live). Bigger than two constants: `DEMO` is threaded through *every* call of the function
+  under test. → **S4f.**
+- **The store boundary is not default-deny, and three docs said it was.** Recounted 2026-08-17:
+  `data_layer` has **50** `write_*` defs and **15** `_require_laptop(` sites (+1 bespoke guard on
+  `write_ros_player_band`). `check_store_boundary`'s REFUSES leg iterates `LAPTOP_OWNED_WRITERS`
+  itself, so it **structurally cannot** catch an unlisted writer. Docs corrected by S4d; the gate leg
+  that would make it true is **recorded, not built**. → **P6** (cheap, and it guards the class the
+  corpus overwrite came from).
+- **`reload_manifest()` refuses on BOTH machines** — the worker by `STORE_ROLE`, the laptop by
+  `assert_catalog_covers_postgres`. Use `upsert_catalog_row(conn, lid)` for any per-league catalog
+  write. The clean fix, when something needs it: the set-comparison guard **subsumes** the role guard.
+- **An account created unconfirmed can be permanently unable to sign in** (GoTrue reads the magic-link
+  redemption as a signup while platform signup is off). Not reachable via `signup.py`.
+- **The value of an account changed** — a token now buys the ability to enqueue work onto a
+  single-machine worker. Strengthens the case for rotating the access code if it spreads. **Will's
+  call.**
+- **The posture metric** — withheld, not fixed; `derive_posture` lives once (`api/calcs.py`). The empty
+  Teams `Posture` column is **accepted debt, conditional on Will's redesign landing before 10 Sept.**
+- **Durability.** The 145 MB L2 ledger still has no versioned off-machine copy and nothing can
+  regenerate it. A mirror is not the answer — **versioning** is. → P6.
+- **`corpus_discovery.parquet` is a live break** — a bare read, so `build_demo_manifest:54`/`:136` and
+  `build_substrate:54` raise today. Wants a **restore, not a rebuild**.
+- Two corpus chips (~41 excluded rows; `selected_at` is the reconstruction date) · `reads._denied_reads`
+  is per-process across two API machines, so `denied_reads()` is a floor · P6: frozen-demo precompute +
+  Cloudflare, and the `Cache-Control: private, no-store` demo carve-out · P1's two-week ≥95% soak ·
+  the annual re-tune (≈ Feb).
 
 ---
 
-## S4 was SPLIT into S4a / S4b / S4c (Will, 2026-08-14)
+## How to audit here
 
-S4 as written was a queue **plus** a connect endpoint **plus** a progress screen **plus** identity
-acquisition **plus** the catalog wall **plus** the weekly cadence **plus** two carried fixes — three
-sessions against the 3-commit cap. Same shape as S2 becoming S2a–S2e. **Do not re-bundle them.**
+**Recompute; do not read.** The report is the claim, not the evidence.
 
-### S4a — SHIPPED + ENDORSED 2026-08-14
-
-`connected_catalog.parquet` — a third catalog source, **append-shaped and WORKER-owned** (ADR
-classification 11 → 12). **The worker onboarded a league that existed nowhere:** `1258181662160719872`
-"Rex Lumber 2025" — cold → catalogued → **14,999 rows / 10 tables** committed to production Postgres
-from the worker's own volume, `league_catalog` 32 → 33. All five DoD clauses proven, **release valve
-not taken**. The onboard chain now lives once, in `serve/onboard_league.py::run_chain`;
-`bench_cold_league` measures it rather than duplicating it. `_resolve_scoring_key` no longer falls back
-to **the owner's** key — catalog → the league's own Sleeper settings → **raise**.
-→ `SESSION_P5_S4A_REPORT.md` + `SESSION_P5_S4A_AUDIT.md`.
-
-**The ADR was wrong and is corrected:** `write_leagues` was never on the connected-league path (every
-reader filters `is_mine` first; `application/api/` does not import `data_layer` at all). **The wall was
-the catalog.** `write_leagues` untouched.
-
-### THE HAZARD S4a CREATED — S4b's first item, read before touching the laptop
-
-**The worker is now an AUTHOR and the laptop holds the stale copy.** `connected_catalog.parquet` exists
-only on the worker's volume, and `read_connected_catalog()` returns an **empty frame** when it is
-absent — silently, by design. Recomputed 2026-08-14: laptop `_catalog()` = **32**, production
-`league_catalog` = **33**.
-
-- **`reload_manifest()` on the laptop deletes the connected league's catalog row**; `--load` drops its
-  data rows too. The guard that exists points the *other* way (it refuses on the worker).
-- **The documented remedy for an un-emitted column (`--emit` + `--load`) IS this failure.**
-- **The alarm is pre-disarmed:** the laptop's `build_db --verify` now legitimately reports **VERIFY
-  FAILED** (S4a finding B), so an operator reconciling it with `--load` walks straight into the loss.
-- **The ADR's *"reconstructible cache — lose the host and re-seed"* is now CONDITIONAL:** reconstructible
-  from **Postgres + Sleeper**, not from the laptop, and never measured.
-
-Both written into `OPERATIONS.md` and the ADR on 2026-08-14. **Guard for S4b:** `reload_manifest` and
-`load` refuse when Postgres holds `league_id`s absent from the local `_catalog()`, naming them.
-
-### S4b — the guard (above), then the job queue + connect flow + identity
-
-Postgres `jobs` table; the worker leases one job at a time; states
-`queued → validating → fetching → building → loading → ready | rejected | failed`; `POST /api/connect`
-+ a progress screen. **Plus identity ACQUISITION:** S2 settled the *model* (`user_leagues.roster_id`),
-not how the row gets written — `api/routes.py:102` says ownership is *"written by an operator rather
-than inferred from a sign-in"*, so **a self-serve user signs up and reaches nothing until Will types a
-row.** Plus `scripts/users.py --delete` (account lifecycle). Also carried (S4a findings): **the null-seat
-collision** — `reads.resolve_viewer` falls back to matching `MY_USERNAME` against `teams.owner_name`,
-so if the owner's handle *is* an `owner_name` in a connected league that roster is silently highlighted
-as "you", and nothing checks it belongs to the caller. Measured: 0 of 211 flagged, so today it degrades
-to no highlight. **A display-integrity defect inside a league the caller may already read — NOT a
-cross-user leak.** Do not over-scope it. Also **`panels_manager` flips True** once S4b's deferred
-dossier job runs (the append writer supports it, proven in `check_onboard`).
-
-### S4c — the weekly cadence (**Week-1 critical**)
-
-Enumerate connected leagues from the ownership table instead of one hardcoded `LEAGUE_ID`, and **take
-the queue's lease** so two machines never work the same league. **Then gut
-`.github/workflows/weekly_refresh.yml` to a pure trigger** — keep the Tue+Wed crons and the catch-up
-idempotency (GitHub is the better scheduler: free, reliable, already trusted for the collectors), lose
-all pipeline logic plus `MY_USERNAME`/`LEAGUE_ID`, which **retires** the hardcoded-identity bug rather
-than relocating it. **The worker has no `http_service`**, so decide what the Action pokes (`flyctl`
-from the Action is the obvious answer). The workflow has **NEVER worked** — since the Aug 1 rollover it
-dies at `shared/league_resolver.py:59` because its hardcoded `LEAGUE_ID` is a 2025 league. Retire it
-only once S4c's version is proven. **This is what stops the app being frozen in-season.**
-
-### Two hazards S4a must DETERMINE and report (neither is a claim yet)
-
-1. **`build_db.reload_manifest()` does `TRUNCATE league_catalog` + re-COPY `_catalog()` from the local
-   store.** On the worker those parquets are seeded, read-only and can be **stale** — so the worker
-   calling it could erase catalog rows the laptop knows about. The whole-file-overwrite shape
-   reappearing at the Postgres layer.
-2. **The union-superset schema may lack a column a stranger's league carries** (`division` is the known
-   case). `_copy_slice_tx` issues `COPY "table" (its own columns)`. If that fails the COPY it is a real
-   onboarding failure mode — and the remedy (`--emit` + `--load`) **DROPs every table on the production
-   database**, which is why S2c moved it out and S2d only ran it off a planned 145s outage.
-
-## Open threads not owned by S4a/b/c
-
-- **Two corpus chips:** the ~41 excluded manifest rows (`check_corpus`'s pass-rate reads a tautological
-  `100.0% over 269`) and `selected_at` being the reconstruction date. → `SESSION_CORPUS_RECOVERY_*`.
-- **`corpus_discovery.parquet` is a LIVE BREAK, not a missing file** — `read_corpus_discovery` is a
-  bare read, so `build_demo_manifest:54`/`:136` and `build_substrate:54` raise today. Wants a
-  **restore, not a rebuild** (re-crawling could return a different candidate set).
-- **The posture metric** — withheld, not fixed. `derive_posture` lives in **one** place
-  (`api/calcs.py`); the docstring naming `posture.js` is a fossil. Will is redesigning the map, and
-  the empty Teams `Posture` column is **accepted debt** — *conditional on the redesign landing before
-  Sept 10.* If it slips, the invited cohort meets a column promising a read over ten em-dashes.
-- **Durability.** Time Machine runs; `snapshots/corpus/` is git-tracked. **The 145 MB L2 ledger still
-  has no versioned off-machine copy** and nothing can regenerate it — a mirror is not the answer,
-  **versioning** is. Free tiers cover it (R2/B2 10 GB, Supabase Storage 1 GB).
-- `reads._denied_reads` is per-process and there are **two** Fly API machines, so `denied_reads()` is a
-  floor · two P6 items: the frozen-demo precompute + Cloudflare, and `Cache-Control: private,
-  no-store` needing a deliberate demo carve-out — the one place a caching change could serve one
-  caller's league to another · P1's two-week ≥95% coverage soak · the annual re-tune (≈ Feb).
-
-## The calendar gates
-
-**Gate A** = Will's 2026 league loaded (~late Aug) — **UNBLOCKED by S4a**: the first 2026 load is `onboard_league`, not a manual admin load. Gate A owns the two things S4a could not cover — a **cold 2026** league whose scoring key's substrate must already be on the volume, and the deployed-API arm of DoD clause 3 (prod derives 2026, so it has never served a connected league to anyone). **Gate B** = Week 1, Sept 10. Velocity is not the
-constraint — **calendar-gated proof is.** Gate A must check the **ROS-range panel against real band
-data**, **`remaining_games` + playoff odds**, and is the first exercise of **`me.posture`** and of
-`two_way_flags` beyond 2025 (its `SEASONS` stops at 2025, so a 2026 two-way player goes unflagged,
-silently). **Will's 2026 leagues already exist on Sleeper** — seven of them — so the connect flow can
-be pointed at a real 2026 league id before the draft.
+- **Diff against the branch's BASE commit**, never against main's working tree.
+  `git merge-base` the merge's parents; the base is usually Will's doc commit before the branch.
+- **Verify the instrument, not just the reading.** A run that passes by doing nothing, or a gate that
+  measures nothing, has been caught **seven times** — `_db_max_as_of`; the parity run's seven "already
+  banked" skips; `check_onboard`'s first prove-bites; `pkill` not existing on `python:3.13-slim` (a
+  kill drill that killed nothing and "passed"); and **three separate assertions that matched a
+  docstring or a comment instead of the statement**. Ask what would have to be true for this proof to
+  pass while the thing is broken.
+- **A grep counts documentation.** `INSERT INTO public.jobs` appears twice in `api/jobs.py`, one of
+  them the docstring. **Assert from the AST.**
+- **"Merged" is not "deployed" — and there is a way to check.** A route or behaviour returning the
+  *expected* status on the live host proves the image shipped; S4c's `/api/platforms/...` returning
+  **401 not 404** is the pattern. S2e once merged, reported "live", and ran the previous release for
+  hours.
+- **WebFetch caches for 15 minutes and `?_cb=` does NOT bust it.** Reorder the params, or fetch the
+  **second hostname** — `surplusff.com` and `fantasy-ai-api.fly.dev` serve the same API, so agreement
+  across both also proves you are not reading one cache.
+- **The checks you can always run from this seat:** signed-out `GET /api/leagues` (must be exactly the
+  demo — the leak direction), `GET /health` (must say `season_source: derived`; `env` means an override
+  leaked into production), and `api.sleeper.app` for ground truth.
+- **What you can never verify:** the worker (no HTTP surface) and every Postgres count. Say so, and
+  hand those to Will as checks rather than implying you confirmed them.
+- **Read `wrong_reference_traps` in project memory before reporting any finding.**
 
 ---
 
@@ -220,54 +170,45 @@ be pointed at a real 2026 league id before the draft.
 - Repo at **`~/mnt/fantasy-ai`** via `device_bash`; `device_stage_files` wants `/Users/willdaniel/...`.
 - **The device bridge drops without warning and returns on its own.** Writes already made survive.
   Don't retry in a loop.
-- **THE PM NEVER COMMITS AND NEVER PUSHES (Will, 2026-08-14). This supersedes the earlier
-  "you CAN commit" rule — do not follow older docs or memory that say otherwise.**
-  - **Code commits its own work** in its worktree, per `SESSION_GUIDE.md`.
-  - **Will commits PM work** — briefs, reports, audits, doc edits. Leave the tree dirty and **tell him
-    exactly which paths are waiting**, using `git status -sb`.
-  - **Will alone pushes.** (The device VM has no egress anyway, but the rule is a choice, not a limit.)
-  - **Write files, then stop.** The reliable path is: stage → edit in the container → `SendUserFile` →
+- **THE PM NEVER COMMITS AND NEVER PUSHES (Will, 2026-08-14).**
+  - **Code commits its own work.** **Will commits PM work** — briefs, reports, audits, doc edits.
+    Leave the tree dirty and **tell him exactly which paths are waiting.** **Will alone pushes.**
+  - **Write files, then stop.** The reliable path is stage → edit in the container → `SendUserFile` →
     `device_commit_files`. That puts the file on his disk; git is his.
-- **PREFIX EVERY GIT CALL WITH `GIT_OPTIONAL_LOCKS=0`. This is not optional and it is the actual fix.**
-  **Established by experiment 2026-08-14:** any git command run over the device mount that touches the
-  index leaves a **0-byte `.git/index.lock`** behind — **including read-only `git status`**, which
-  opportunistically refreshes the index and then fails to unlink on this mount. That stale lock is what
-  kills **Will's** next commit from VS Code with *"Another git process seems to be running."*
+  - **Re-stage before editing.** `/mnt/user-data/uploads/` is a point-in-time snapshot; editing a stale
+    copy silently reverts someone else's work.
+- **PREFIX EVERY GIT CALL WITH `GIT_OPTIONAL_LOCKS=0`.** Established by experiment 2026-08-14: any git
+  command over this mount that touches the index leaves a **0-byte `.git/index.lock`** — **including
+  read-only `git status`** — and that stale lock is what kills **Will's** next commit from VS Code
+  with *"Another git process seems to be running."*
 
   | over the mount | leaves a lock? |
   |---|---|
-  | `git status -s` | **YES** |
-  | `git commit` | **YES** — which is why locks appear *after* a successful commit |
+  | `git status -s` · `git commit` | **YES** (which is why locks appear *after* a successful commit) |
   | `git log` / `git show` / `git diff <a> <b>` | no — they never touch the index |
-  | **`GIT_OPTIONAL_LOCKS=0 git status -s`** | **NO** — clean, and clean after repeated runs |
+  | **`GIT_OPTIONAL_LOCKS=0 git status -s`** | **NO**, and still clean after repeated runs |
 
   **Prefer `git log` / `git diff <commit> <commit>` over `git status` wherever either answers the
-  question.** Not committing removes the biggest source, but it does **not** close this on its own —
-  the PM's own verification habit reproduces it.
-- **You MAY still clear a stale `.git` lock — that is unblocking, not committing.** It is the one git
-  operation the PM should perform, and Will will ask for it. **Will can simply `rm` them from his own
-  terminal**, which is faster; the PM cannot delete over this mount (*Operation not permitted*), which
-  is the only reason the `mv`-into-a-folder crutch exists at all.
+  question.**
+- **Clearing a stale lock is unblocking, not committing — it is the one git operation the PM should
+  perform**, and Will will ask for it. **He can just `rm` them from his own terminal**, which is
+  faster; the PM cannot delete over this mount (*Operation not permitted*), which is the only reason
+  the `mv`-into-a-folder crutch exists.
   1. **`mkdir -p .git/_stale_locks && sleep 1` before EVERY `mv`.** That folder is the **destination**
-     the lock is moved INTO — it is not the lock. Will has deleted it twice, reasonably, because the
-     name reads like the problem. A missing destination makes `mv` fail with *"No such file or
-     directory"*, **which reads as "the lock is gone" and means the opposite.** Say this to him
-     plainly or it recurs.
-  2. `mv .git/index.lock …` then `mv .git/HEAD.lock …` — **unconditionally**, never guarded by
-     `[ -f … ]`. **Locks surface one at a time**; budget two or three rounds. `mv` rather than `rm`
-     because `device_bash` cannot delete (*Operation not permitted* on the mount). **Will can `rm`
-     them directly from his own terminal, which is simpler for him.**
-  3. **Locks REAPPEAR after a commit succeeds** — observed 2026-08-14: HEAD moved, `fsck` clean, and a
-     fresh `index.lock` **and** `HEAD.lock` were sitting there immediately after. It is git's own
-     post-commit maintenance failing to unlink on this mount, so **every commit leaves the next git
-     operation blocked.** That is why it keeps recurring rather than staying fixed. Sweep *after*, not
-     just before. **`.git/objects/maintenance.lock` is normal — leave it, it blocks nothing.**
-  4. Verify with `git log --oneline -1` and `git status -sb`, never by the absence of an error. Filter
-     noise with `2>&1 | grep -v "unable to unlink"` — those are git's maintenance, not a blocked
-     command.
-- Device VM has **no network and no parquet engine**; repo venvs are macOS binaries → stage into the
-  container and use polars there. `curl` to fly.dev/supabase.co is blocked from the container;
+     the lock moves INTO — **it is not the lock.** Will has deleted it twice, reasonably, because the
+     name reads like the problem; a missing destination makes `mv` fail with *"No such file or
+     directory"*, **which reads as "the lock is gone" and means the opposite.** Say so plainly.
+  2. `mv .git/index.lock …` then `mv .git/HEAD.lock …`, **unconditionally** — locks surface one at a
+     time. Two together can leave a **merge staged with HEAD unmoved**; recover with
+     `rm .git/HEAD.lock && git commit --no-edit`, which preserves a dirty working-tree edit.
+  3. **`.git/objects/maintenance.lock` is normal — leave it, it blocks nothing.**
+  4. Verify with `git log --oneline -1`, never by the absence of an error. Filter noise with
+     `2>&1 | grep -v "unable to unlink"`.
+- Device VM has **no network and no parquet engine**; repo venvs are macOS binaries → **stage into the
+  container and use polars there.** `curl` to fly.dev/supabase.co is blocked from the container;
   **`WebFetch` works (GET only)** and `api.sleeper.app` is reachable.
+- **Heredoc commit messages are unreliable through this bridge** (em-dashes, `<…>`). Moot for the PM
+  now; relevant if Code ever runs here.
 
 ---
 
@@ -279,17 +220,24 @@ be pointed at a real 2026 league id before the draft.
 3. **Prove a new gate *bites*** — fail it on a broken input. **And §5: a prove-it-bites leg must never
    be able to aim a writer at the real store** — keyed on *shape*, not on which writers look safe.
    That rule cost the frozen corpus.
-4. **§6 — the commit FLOOR: bank before running anything destructive.** The 3-commit cap bounds
-   sprawl; nothing bounded the opposite failure.
+4. **§6 — the commit FLOOR: bank before running anything destructive.**
 5. **Report, don't tune.** Engine constants are propose-only / human-promoted.
 6. **Honest, not hidden.** Gate a panel OFF only when a read is *misleading*, not merely uncertain.
    **Absence is reported, never fabricated.**
-7. **The frozen corpus is immutable** — compute into a *different* path.
+7. **The frozen corpus is immutable** — compute into a *different* path. **Never re-run the corpus
+   discovery crawl**; `discover.py` writes `corpus_discovery`, one of the three writers that wiped it.
 8. **"The artifact exists" and "the consumer uses it" are two different gates.**
 9. **A proof that passes because it never exercises the new path is weak** — and **a run that skips
-   every step because everything is "already current" is that proof.** Force the work.
-10. **No silent caps.** If a session bounds its own coverage — takes the release valve, defers a
-    check — it must SAY so. A report that quietly omits a deferred step reads as full coverage.
-11. **Enforce security server-side.**
-12. **Don't put enumerated lists in briefs — state the predicate and make Code enumerate.** Three
-    briefs running, three undercounts, every one caught by Code.
+   every step as "already current" is that proof.** Force the work. **But check which way the rule
+   points:** for a *catch-up* cron a no-op is the correct outcome, and the real requirement is that
+   "already current" be distinguishable from "did not run" and from "failed".
+10. **No silent caps.** If a session bounds its own coverage — takes the release valve, defers a check
+    — it must SAY so. A report that quietly omits a deferred step reads as full coverage.
+11. **Enforce security server-side.** A disabled button in a React app is a suggestion.
+12. **Don't put enumerated lists in briefs — state the predicate and make Code enumerate.** Four briefs
+    running, four undercounts, every one caught by Code.
+13. **Trace to the data source, not to the first gate.** "A drafted league builds fine" was wrong
+    because the trace stopped at the join gate and never reached `backfill`'s completed-weeks limiter.
+    Will's live test disproved it within the hour.
+14. **A decision is not made until it is in the document — and a decision already in the document is
+    not yours to change in prose.** Raise the fork; let Will decide.
